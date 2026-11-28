@@ -223,3 +223,25 @@ Measured: Remote access through the relay, first start 25s (the certificate),
 a client admitted and an event delivered, off and on again the same address.
 `dray-serve` restarted came back on the same address in 1s. A share link
 reached a Host-echoing server as `localhost:<port>` 0.5s after attach.
+
+## Stage 9: a relay of our own (#1669)
+
+**opentunnel kept dropping phones for reasons outside Dray**, so Remote access
+can go through [apps/relay](../relay/README.md) instead, a blind relay on the
+same model: TLS ends in `dray-serve` ([relay.rs](src-tauri/src/relay.rs)), the
+relay routes raw bytes by SNI and never holds a token or a key. It is opt-in
+while opentunnel stays the default: `DRAY_RELAY`, or the URL as the first line
+of `<home>/relay-url`, read on each start of Remote access. Share links stay
+on opentunnel for now.
+
+- **The address carries a port**, `wss://<route>.<id>.relay.drayhq.com:<port>`:
+  Railway's TCP proxy is the only door there that passes TLS through. Clients
+  already take one, so none changed. Switching a server over is a new address,
+  so the phone pairs again.
+- **The bridge is ours to tune**: pings every 10s, dead after 30s silent,
+  backoff 250ms to 8s, a ping that must answer within 5s after a network
+  change (netwatch), and a relay restart that tells every server to reconnect
+  at once while refusing them itself.
+- **A visitor arriving mid-reconnect is held** up to 10s, so a phone's retry
+  lands as the bridge returns rather than reading as Can't reach.
+

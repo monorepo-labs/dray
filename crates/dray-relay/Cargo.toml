@@ -1,0 +1,17 @@
+[package]
+name = "dray-relay"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Wire types and stream pump shared by the Dray relay and dray-serve."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "io-util", "time", "macros", "rt"] }
+bytes = "1"
+sha2 = "0.11"
+data-encoding = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

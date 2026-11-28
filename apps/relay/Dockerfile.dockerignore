@@ -1,0 +1,5 @@
+# The context is the whole repo; the relay needs two directories of it.
+*
+!crates/dray-relay
+!apps/relay
+**/target

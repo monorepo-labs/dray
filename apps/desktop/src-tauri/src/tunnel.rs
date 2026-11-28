@@ -249,9 +249,9 @@ fn relay(mut from: watch::Receiver<Status>, to: std::sync::Arc<watch::Sender<Sta
     })
 }
 
-/// Reconnects the tunnels whenever the network moves, for the life of the
-/// process. Started with the first tunnel.
-fn follow_network() {
+/// Reconnects the tunnels, and the relay's bridge, whenever the network
+/// moves, for the life of the process. Started with the first of them.
+pub(crate) fn follow_network() {
     static STARTED: std::sync::Once = std::sync::Once::new();
     STARTED.call_once(|| {
         let mut changes = crate::netwatch::changes();
@@ -260,6 +260,8 @@ fn follow_network() {
                 for profile in [REMOTE, SHARE] {
                     reconnect(profile, change).await;
                 }
+                #[cfg(any(feature = "serve", feature = "desktop"))]
+                crate::relay::network_changed(change).await;
             }
         });
     });

@@ -541,7 +541,122 @@ function IPhoneQuestion() {
   );
 }
 
+/// The colours every relay take shares: a white card on the pale panel, or
+/// a dark one on the black.
+function relayInk() {
+  const light = WHITE;
+  return {
+    light,
+    card: light ? "bg-white shadow-[0_0_0_1px_#0000001A]" : "bg-[#141414]",
+    dim: light ? "text-[#71717A]" : "text-[#8A8A8A]",
+    ink: light ? "text-[#0A0A0A]" : "text-white",
+    line: light ? "#D4D4D8" : "#3F3F46",
+  };
+}
+
+/// A device as a square block: a glyph drawn in two rectangles, its name.
+function DeviceBlock({ name, kind }: { name: string; kind: "laptop" | "phone" }) {
+  const { card, ink, line } = relayInk();
+  return (
+    <div className={cn("flex w-[92px] shrink-0 flex-col items-center gap-2.5 py-4", card)}>
+      {kind === "laptop" ? (
+        <svg width="40" height="28" viewBox="0 0 40 28" aria-hidden>
+          <rect x="6" y="2" width="28" height="19" fill="none" stroke={line} strokeWidth="2.5" />
+          <rect x="1" y="23" width="38" height="3" fill={line} />
+        </svg>
+      ) : (
+        <svg width="20" height="32" viewBox="0 0 20 32" aria-hidden>
+          <rect x="1.5" y="1.5" width="17" height="29" fill="none" stroke={line} strokeWidth="2.5" />
+          <rect x="7" y="25" width="6" height="2" fill={line} />
+        </svg>
+      )}
+      <span className={cn(MONO, "text-[10px] leading-3", ink)}>{name}</span>
+    </div>
+  );
+}
+
+/// The link itself. The server and the phone, the old link broken in
+/// grey and the new one, through the relay, in blue: the one thing that
+/// changed, and what reconnecting makes.
+function RelayLink() {
+  const { light, dim, line } = relayInk();
+  return (
+    <div aria-hidden className={cn("flex w-[320px] items-stretch gap-[2px] p-2", PANEL(light))}>
+      <DeviceBlock name="MacBook" kind="laptop" />
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-5 px-3">
+        <div className="flex flex-col gap-1.5">
+          <svg width="100%" height="10" aria-hidden>
+            <line x1="0" y1="5" x2="40%" y2="5" stroke={line} strokeWidth="2" strokeDasharray="4 3" />
+            <line x1="60%" y1="5" x2="100%" y2="5" stroke={line} strokeWidth="2" strokeDasharray="4 3" />
+            <svg x="50%" y="0" width="10" height="10" viewBox="0 0 10 10" overflow="visible">
+              <path d="M-4 1 4 9M4 1-4 9" stroke={WHITE ? "#71717A" : "#8A8A8A"} strokeWidth="1.8" />
+            </svg>
+          </svg>
+          <span className={cn(MONO, "text-center text-[9px] leading-3", dim)}>Old address</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <div className="h-[3px] w-full" style={{ background: BLUE }} />
+          <span className={cn(MONO, "text-center text-[9px] leading-3", light ? "text-[#0A0A0A]" : "text-white")}>Reconnected</span>
+        </div>
+      </div>
+      <DeviceBlock name="iPhone" kind="phone" />
+    </div>
+  );
+}
+
+/// The page's own stripes (`Stripes`: 2px every 6px on screen), at the scale
+/// a 400-wide tile is drawn on What's New's cards.
+const stripes = (ink: string) => `repeating-linear-gradient(90deg, ${ink} 0 1.5px, transparent 1.5px 4.5px)`;
+
+/// For a reader with nothing to reconnect: how long the link takes to come
+/// back once the network returns, opentunnel against the relay, the short
+/// blue bar the news. The times are #1669's silent-drop test, one run each on
+/// one box: 11.8s and 4.0s, shown as about 12 and 4.
+function RelayComeback() {
+  const { light, card, dim, ink, line } = relayInk();
+  const bar = (label: string, seconds: number, now: boolean) => (
+    <div className="flex items-center gap-3">
+      <span className={cn(MONO, "w-11 shrink-0 text-[10px] leading-3", now ? ink : dim)}>{label}</span>
+      <div className="relative h-6 flex-1">
+        <div
+          className="absolute inset-y-0 left-0"
+          style={{
+            width: `${(seconds / 12) * 100}%`,
+            background: `${stripes(now ? "#0000001F" : "#0000000F")}, ${now ? BLUE : line}`,
+          }}
+        />
+      </div>
+      <span className={cn(MONO, "w-8 shrink-0 text-right text-[11px] leading-[14px]", now ? ink : dim)}>~{seconds}s</span>
+    </div>
+  );
+  return (
+    <div aria-hidden className={cn("flex w-[320px] flex-col gap-[2px] p-2", PANEL(light))}>
+      <div className={cn("flex items-center justify-between px-3 py-2.5", card)}>
+        <span className={cn(MONO, "text-[11px] leading-[14px]", ink)}>Back online after a network drop</span>
+      </div>
+      <div className={cn("flex flex-col gap-3 px-3 pt-4 pb-3", card)}>
+        {bar("Before", 12, false)}
+        {bar("Now", 4, true)}
+        <div className="ml-14 mr-11 flex justify-between">
+          {["0s", "4s", "8s", "12s"].map((t) => (
+            <span key={t} className={cn(MONO, "text-[8px] leading-[10px]", dim)}>
+              {t}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const ROWS: { title: string; takes: Record<string, { name: string; Art: () => ReactNode }> }[] = [
+  {
+    title: "Reconnect your servers (the relay)",
+    takes: {
+      "relay-link": { name: "Remote access on: the link, broken and made again", Art: RelayLink },
+      "relay-comeback": { name: "Remote access off: back online after a drop", Art: RelayComeback },
+    },
+  },
   {
     title: "Switch a task's harness mid-session",
     takes: {

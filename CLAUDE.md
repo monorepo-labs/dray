@@ -67,7 +67,7 @@ It answers JSON whose `url` is the public link. PNG, JPEG, GIF, WebP up to 20 MB
 
 ## Repo layout
 
-pnpm workspace, four apps, no shared JS package yet — plus two native Swift apps, the Android app, the Linux island, the `dray` CLI and one shared Rust crate outside the workspace.
+pnpm workspace, four apps, no shared JS package yet — plus two native Swift apps, the Android app, the Linux island, the `dray` CLI, the relay and two shared Rust crates outside the workspace.
 
 ```
 apps/desktop/       the Tauri app — everything below this section describe it
@@ -80,7 +80,9 @@ apps/island/        Dray Island, the Mac companion panel: SwiftUI, XcodeGen — 
 apps/island-linux/  Dray Island on Linux and Windows: Rust + GPUI, own crate — read apps/island-linux/PLAN.md
 apps/cli/           the `dray` CLI: own crate, own `cli-v*` release tag
 apps/upload-worker/ `dray upload`'s endpoint: a Cloudflare Worker writing to R2, deployed by hand with wrangler
+apps/relay/         Remote access's blind relay in place of opentunnel (#1669), own crate, Railway — read apps/relay/README.md
 crates/dray-proto/  the CLI's socket protocol, compiled into the CLI and the app
+crates/dray-relay/  the relay's wire and stream pump, compiled into the relay and dray-serve
 charts/             standalone benchmark chart pages, built by nothing
 ```
 

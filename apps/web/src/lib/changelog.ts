@@ -16,8 +16,22 @@ export type App = "desktop" | "ios" | "android";
 /// An item that gets a page of its own, in the apps it names, after an update.
 /// `target` is the app's to read — `new-task`, `settings/<tab>`, an `https:`
 /// URL — and one an app does not know draws no button there, so a newer
-/// target never breaks an older build.
-export type Highlight = { apps: App[]; action: { label: string; target: string } | null };
+/// target never breaks an older build. `required` is a highlight the reader
+/// must act on, drawn first and set apart: always, or only where the app finds
+/// a condition holds, the app showing `otherwise` as a plain title elsewhere,
+/// with `otherwiseMedia` in place of the item's picture where one is named.
+/// Both absent rather than empty, so the feed only grows where they are used.
+export type Highlight = {
+  apps: App[];
+  action: { label: string; target: string } | null;
+  required?: true | Condition;
+  otherwise?: string;
+  otherwiseMedia?: Media;
+};
+/// What an app can find out about its reader: `remote-access`, Remote access
+/// on for this machine.
+export type Condition = "remote-access";
+const CONDITIONS: readonly string[] = ["remote-access"];
 export type SectionKind = "new" | "improved" | "fixed";
 export type Section = { kind: SectionKind; items: Item[] };
 export type Release = {
@@ -47,16 +61,41 @@ const HIGHLIGHT_LINE = /^\s*<!--\s*highlight\b(.*?)-->\s*$/;
 const APPS: readonly string[] = ["desktop", "ios", "android"];
 const TARGET = /^(https:\/\/\S+|[a-z][a-z0-9-]*(\/[a-z0-9-]+)*)$/;
 
-/// What follows `highlight` in `<!-- highlight: desktop, ios · action: Label →
-/// target -->`. Throws on anything it cannot read, which fails the site's
+/// What follows `highlight` in `<!-- highlight: desktop, ios · required ·
+/// action: Label → target -->`, `required` also as `required if <condition> ·
+/// otherwise: Title · otherwise image: path`. Throws on anything it cannot read, which fails the site's
 /// build: a highlight dropped quietly is an announcement nobody sees.
-export function parseHighlight(spec: string, where: string): Highlight {
+export function parseHighlight(spec: string, where: string, mediaBase = MEDIA_BASE): Highlight {
   const fail = (why: string): never => {
     throw new Error(`CHANGELOG.md, ${where}: ${why} in "<!-- highlight${spec}-->"`);
   };
   const apps: App[] = [];
   let action: Highlight["action"] = null;
+  let required: Highlight["required"];
+  let otherwise: string | undefined;
+  let otherwiseMedia: Media | undefined;
   for (const part of spec.replace(/^\s*:/, "").split("·").map((p) => p.trim())) {
+    if (part === "required") {
+      required = true;
+      continue;
+    }
+    const when = /^required\s+if\s+(\S+)$/.exec(part);
+    if (when) {
+      if (!CONDITIONS.includes(when[1])) fail(`unknown condition "${when[1]}"`);
+      required = when[1] as Condition;
+      continue;
+    }
+    const picture = /^otherwise\s+image\s*:\s*(\S+)$/.exec(part);
+    if (picture) {
+      otherwiseMedia = toMedia(picture[1], "", mediaBase);
+      continue;
+    }
+    const plain = /^otherwise\s*:\s*(.+)$/.exec(part);
+    if (plain) {
+      // As an item's bold title is read: its closing stop dropped.
+      otherwise = plain[1].replace(/[.!?]$/, "");
+      continue;
+    }
     if (/^action\b/.test(part)) {
       const act = /^action\s*:\s*(.+?)\s*(?:→|->)\s*(\S+)$/.exec(part);
       if (!act) fail("an action reads `action: Label → target`");
@@ -70,7 +109,14 @@ export function parseHighlight(spec: string, where: string): Highlight {
     }
   }
   if (apps.length === 0) fail("no app named");
-  return { apps, action };
+  if ((otherwise || otherwiseMedia) && typeof required !== "string") fail("`otherwise` goes with `required if`");
+  return {
+    apps,
+    action,
+    ...(required && { required }),
+    ...(otherwise && { otherwise }),
+    ...(otherwiseMedia && { otherwiseMedia }),
+  };
 }
 
 function toItem(lines: string[], media: Media[], highlight: Highlight | null): Item {
@@ -87,6 +133,14 @@ function toItem(lines: string[], media: Media[], highlight: Highlight | null): I
 }
 
 /// Pure, so it is testable without the file.
+function toMedia(path: string, alt: string, mediaBase: string): Media {
+  return {
+    kind: VIDEO.test(path) ? "video" : "image",
+    url: /^https?:/.test(path) ? path : `${mediaBase}/${path.replace(/^\.?\//, "")}`,
+    alt,
+  };
+}
+
 export function parseChangelog(md: string, mediaBase = MEDIA_BASE): Release[] {
   const releases: Release[] = [];
   let section: Section | null = null;
@@ -127,14 +181,10 @@ export function parseChangelog(md: string, mediaBase = MEDIA_BASE): Release[] {
     } else if (lines) {
       const h = HIGHLIGHT_LINE.exec(line);
       const m = MEDIA_LINE.exec(line);
-      if (h) highlight = parseHighlight(h[1], `${releases.at(-1)!.version} "${lines[0].slice(0, 40)}"`);
+      if (h) highlight = parseHighlight(h[1], `${releases.at(-1)!.version} "${lines[0].slice(0, 40)}"`, mediaBase);
       else if (!m) lines.push(line);
       else
-        media.push({
-          kind: VIDEO.test(m[2]) ? "video" : "image",
-          url: /^https?:/.test(m[2]) ? m[2] : `${mediaBase}/${m[2].replace(/^\.?\//, "")}`,
-          alt: m[1],
-        });
+        media.push(toMedia(m[2], m[1], mediaBase));
     }
   }
   flush();
