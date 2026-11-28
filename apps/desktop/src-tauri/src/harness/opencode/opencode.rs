@@ -30,6 +30,7 @@ pub mod mapper;
 pub mod models;
 pub mod parser;
 pub mod questions;
+pub mod service;
 
 use crate::attachments::PreparedImage;
 use crate::events::{AgentEventPayload, ApprovalPolicy};
@@ -109,6 +110,7 @@ pub async fn init(
     };
     let rules = write_rules(session_id, session_cwd).await?;
 
+    service::touch();
     let bin = crate::binpath::opencode().await;
     let v2 = crate::binpath::opencode_v2().await;
     let agents = agents_refusing_edits(&bin, v2, permission_mode, cwd, session_cwd).await;
@@ -687,6 +689,7 @@ async fn read_stdout(
                         for agent_event in mapper.map(done) {
                             crate::session::ingest(&ingest, agent_event, &handles.app).await;
                         }
+                        service::settled();
                     }
                     continue;
                 }
@@ -804,8 +807,12 @@ async fn read_stdout(
             flush_seq: &seq,
             flush_transport: transport,
         };
+        let turn_over = matches!(event, parser::OpenCodeEvent::PromptDone(_) | parser::OpenCodeEvent::PromptFailed { .. });
         for agent_event in mapper.map(event) {
             crate::session::ingest(&ingest, agent_event, &handles.app).await;
+        }
+        if turn_over {
+            service::settled();
         }
     }
 
@@ -846,6 +853,7 @@ async fn read_stdout(
         &handles.app,
     )
     .await;
+    service::settled();
     Ok(())
 }
 

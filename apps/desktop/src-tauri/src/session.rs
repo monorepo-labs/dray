@@ -1112,6 +1112,23 @@ impl SessionManager {
         })
     }
 
+    /// Whether a `harness` child here is mid-turn, or waits on a card or a
+    /// queued prompt. A slot locked now, or a first send not in the map yet,
+    /// could be that harness, so either counts.
+    pub async fn harness_busy(&self, harness: Harness) -> bool {
+        if SENDS.load(SeqCst) > 0 {
+            return true;
+        }
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        slots.iter().any(|slot| {
+            let Ok(guard) = slot.try_lock() else { return true };
+            let Some(session) = guard.as_ref().filter(|s| s.harness == harness) else { return false };
+            session.status.try_lock().map_or(true, |t| t.turn_in_flight())
+                || !session.pending_permissions.try_lock().is_ok_and(|p| p.is_empty())
+                || !session.queued.try_lock().is_ok_and(|q| q.is_empty())
+        })
+    }
+
     /// Stops every child idle past [`IDLE_LIMIT`]. Each holds ~250MB doing
     /// nothing, and the next send resumes it as it does after a restart. A slot
     /// or tracker locked right now is busy by definition, so it is skipped.
