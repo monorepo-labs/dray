@@ -94,11 +94,6 @@ async fn stop_if_idle() {
     if !crate::binpath::opencode_v2().await || crate::session::manager().harness_busy(crate::harness::Harness::OpenCode).await {
         return;
     }
-    let table = tokio::task::spawn_blocking(crate::local_servers::command_lines).await.unwrap_or_default();
-    if let Err(why) = judge(service.pid, &table) {
-        eprintln!("[opencode service] left running: {why}");
-        return;
-    }
     match active_sessions(&service).await {
         Ok(0) => {}
         Ok(running) => {
@@ -109,6 +104,11 @@ async fn stop_if_idle() {
             eprintln!("[opencode service] left running: couldn't ask it what runs: {why}");
             return;
         }
+    }
+    let table = tokio::task::spawn_blocking(crate::local_servers::command_lines).await.unwrap_or_default();
+    if let Err(why) = judge(service.pid, &table) {
+        eprintln!("[opencode service] left running: {why}");
+        return;
     }
     // Asking took time; a use or a new registration in it wins.
     if !unused_for_grace() || read_registration(&file).await.is_none_or(|now| now.pid != service.pid) {
