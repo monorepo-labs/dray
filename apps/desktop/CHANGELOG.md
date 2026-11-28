@@ -27,6 +27,18 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.36.4 · 2026-11-28
+
+### Improved
+
+- Click a routine in a bot's More tab to see it, and edit its name and
+  instructions there.
+
+### Fixed
+
+- A bot's chat shows the Messaged row for a message to a task on
+  another machine.
+
 ## 0.36.3 · 2026-11-28
 
 ### New
