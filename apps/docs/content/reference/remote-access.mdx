@@ -109,6 +109,15 @@ What to know:
 
 If the connection to the relay drops, the row says it is reconnecting and the same address comes back. Each connect, drop, reconnect and visitor is written, with the time, to the server log. See [Logs](/reference/troubleshooting#logs-and-parse-failures).
 
+### Over Tailscale
+
+Pick **Tailscale** under the This Mac row, instead of **Dray relay**, and this Mac is served on your own tailnet at `wss://<machine>.<tailnet>.ts.net`. Only your devices on that tailnet can connect. The relay is turned off, and nothing falls back to it.
+
+- **Setup.** Dray checks Tailscale on this Mac. If it is missing, signed out, not running, or your tailnet has HTTPS certificates off, the row says so, with a button where Dray can fix it (on Linux with sudo it installs Tailscale too). Otherwise it offers **Download**, a command to run, or **Prompt for your agent**, which copies a prompt that has your coding agent set Tailscale up.
+- **Every device needs Tailscale on.** A phone or Mac with Tailscale off cannot reach this Mac, and Dray says it is reachable only over Tailscale.
+- **Switching changes the address.** Pair your devices again after moving between the relay and Tailscale.
+- Dray uses `tailscale serve` on HTTPS port 443. If something else is already served there, Dray leaves it alone and says what it found.
+
 ### Pair your iPhone
 
 The [Dray app for iPhone](https://apps.apple.com/app/id6824145317) connects to this Mac through Remote access, or straight to a server's public address.

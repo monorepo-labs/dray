@@ -88,6 +88,8 @@ pub mod remote_access;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod relay;
 #[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod tailscale;
+#[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod stalls;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 #[path = "mcp/mcp.rs"]

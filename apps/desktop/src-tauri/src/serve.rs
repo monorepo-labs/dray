@@ -2100,7 +2100,8 @@ macro_rules! table {
 async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Answer {
     table! { cmd, args;
         get_remote_access() => ok(crate::remote_access::get_remote_access());
-        set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
+        set_remote_access(on: bool, tailscale: Option<bool>) => crate::remote_access::set_remote_access(sink, on, tailscale).await;
+        remote_access_fix() => crate::remote_access::remote_access_fix().await;
         remote_access_token() => crate::remote_access::remote_access_token().await;
         remote_access_qr() => crate::remote_access::remote_access_qr().await;
         restart_when_idle() => ok(restart_when_idle().await);
@@ -2122,6 +2123,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             | "set_remote_access"
             | "remote_access_token"
             | "remote_access_qr"
+            | "remote_access_fix"
             | "restart_when_idle"
             | "transcribe_upload"
     ) {

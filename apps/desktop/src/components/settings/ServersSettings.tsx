@@ -5,6 +5,8 @@ import CommandChip from "@/components/settings/CommandChip";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import SettingsHeaderAction from "@/components/settings/headerAction";
 import ServerSetupDialog from "@/components/settings/ServerSetupDialog";
+import TailscaleSetup from "@/components/settings/TailscaleSetup";
+import Segmented from "@/components/Segmented";
 import { ExtendBoat } from "@/components/BoatWarnings";
 import { SpaceNameField } from "@/components/settings/SpacesSettings";
 import { Button } from "@/components/ui/button";
@@ -486,13 +488,19 @@ function UpdateLine({
   return <div className="flex min-h-7 items-center gap-1.5 text-ui text-muted-foreground">{line}</div>;
 }
 
+const VIA = [
+  { value: "relay", label: "Dray relay" },
+  { value: "tailscale", label: "Tailscale" },
+] as const;
+
 /// This Mac's background server, and its remote access: on, the server
 /// serves this Mac's sessions at a public address, the same across restarts,
 /// for another Mac's Add server. A button rather than a switch, since a switch on this row reads as
-/// turning the Mac off.
+/// turning the Mac off. Through Dray's relay or the reader's tailnet, one or
+/// the other (#1712).
 function ThisMacRow() {
   const server = useLocalServer();
-  const [remote, setRemote] = useState<RemoteAccess>({ on: false, address: null, error: null });
+  const [remote, setRemote] = useState<RemoteAccess>({ on: false, tailscale: false, address: null, error: null, need: null });
   const [copied, copy] = useCopied<"address" | "token">();
   const [pairing, setPairing] = useState(false);
   const connected = server?.status === "connected";
@@ -516,7 +524,12 @@ function ThisMacRow() {
   }, []);
 
   const setOn = (on: boolean) => void invoke("set_remote_access", { on }, LOCAL).catch(console.error);
-  const starting = remote.on && !remote.address && !remote.error;
+  const setVia = (via: "relay" | "tailscale") =>
+    void invoke("set_remote_access", { on: remote.on, tailscale: via === "tailscale" }, LOCAL).catch(console.error);
+  // A server from before #1712 sends no `tailscale`, and is on the relay.
+  const tailscale = remote.tailscale ?? false;
+  const need = tailscale ? remote.need : null;
+  const starting = remote.on && !remote.address && !remote.error && !need;
   const down = server?.status === "disconnected";
   const detail = down ? (
     (server.error ?? `The server on this ${MACHINE} is not running.`)
@@ -525,8 +538,10 @@ function ThisMacRow() {
   ) : starting ? (
     <span className="inline-flex items-center gap-1.5">
       <Spinner className="size-3" />
-      Starting remote access. The first time takes about 30 seconds.
+      {tailscale ? "Starting remote access." : "Starting remote access. The first time takes about 30 seconds."}
     </span>
+  ) : tailscale ? (
+    (remote.error ?? (need ? "Not reachable yet." : `Your devices on Tailscale can reach it while this ${MACHINE} is awake.`))
   ) : (
     (remote.error ?? `Other ${MACHINE}s can reach it while this ${MACHINE} is awake, with Dray open or closed.`)
   );
@@ -564,6 +579,17 @@ function ThisMacRow() {
     >
       {pairing && <ConnectAssistantDialog server={LOCAL} name={serverName(LOCAL)} onClose={() => setPairing(false)} />}
       {connected && <LinkError link={link} />}
+      {connected && (
+        <Segmented
+          label="Reach it through"
+          className="self-start"
+          value={tailscale ? "tailscale" : "relay"}
+          options={VIA}
+          onPick={setVia}
+        />
+      )}
+      {/* Keyed by the need, so a press still waiting on the last one leaves no spinner on the next. */}
+      {remote.on && need && <TailscaleSetup key={need.kind} need={need} server={LOCAL} />}
       {remote.on && remote.address && (
         // Both halves of Add server's form. The token is fetched on Copy alone
         // and never held here.
@@ -582,7 +608,7 @@ function ThisMacRow() {
             }
           />
           <span aria-hidden className="h-full w-px bg-border dark:bg-input" />
-          <PairButton />
+          <PairButton tailscale={tailscale} />
         </div>
       )}
       {REMOTE_MCP && !down && <Assistants server={LOCAL} />}
@@ -604,7 +630,7 @@ function CopyIcon({ label, done, onClick }: { label: string; done: boolean; onCl
 /// The phone's way in: a QR of address, token and this Mac's name. It
 /// carries the token, so it is fetched on open and dropped on close, and
 /// never sits on screen unasked.
-function PairButton() {
+function PairButton({ tailscale }: { tailscale: boolean }) {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -638,7 +664,8 @@ function PairButton() {
           <DialogHeader>
             <DialogTitle>Pair a phone</DialogTitle>
             <DialogDescription>
-              Point the iPhone's Camera at this, or scan it from Dray's Add server. Anyone holding it can use this {MACHINE}.
+              Point the iPhone's Camera at this, or scan it from Dray's Add server.
+              {tailscale && " The phone needs Tailscale on."} Anyone holding it can use this {MACHINE}.
             </DialogDescription>
           </DialogHeader>
           {/* White under the code whatever the theme: a scanner reads dark on light. */}

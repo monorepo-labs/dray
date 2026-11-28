@@ -60,6 +60,10 @@ pub struct AppSettings {
     /// Rust starts it at launch, before any webview exists to ask.
     #[serde(default)]
     pub remote_access: bool,
+    /// Whether Remote access goes over the reader's tailnet rather than
+    /// Dray's relay (#1712). One or the other, never both.
+    #[serde(default)]
+    pub remote_tailscale: bool,
     /// Whether a client holding this server's token reaches the machines it
     /// lists through it (#847). Off by default: it hands that token every
     /// machine's reach, SSH logins included.
@@ -116,6 +120,7 @@ impl Default for AppSettings {
             linear_account: None,
             transcription: TranscriptionSettings::default(),
             remote_access: false,
+            remote_tailscale: false,
             share_machines: false,
             dray_cloud: false,
         }
@@ -283,6 +288,7 @@ mod tests {
             linear_account: None,
             transcription: TranscriptionSettings::default(),
             remote_access: true,
+            remote_tailscale: true,
             share_machines: true,
             dray_cloud: true,
         };

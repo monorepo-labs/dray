@@ -2112,13 +2112,22 @@ hidden?: boolean, };
  */
 export type RemoteAccess = { on: boolean, 
 /**
+ * Over Tailscale rather than Dray's relay. A server from before #1712
+ * sends none, which a client reads as the relay.
+ */
+tailscale: boolean, 
+/**
  * `wss://…`, once the relay has it attached.
  */
 address: string | null, 
 /**
  * Why this Mac is not answering, while on.
  */
-error: string | null, };
+error: string | null, 
+/**
+ * What Tailscale still wants on this machine, while on over it.
+ */
+need: TailscaleNeed | null, };
 
 export type ReviewerState = "requested" | "approved" | "changes_requested" | "commented";
 
@@ -2849,6 +2858,12 @@ distinctId: string,
  * work.
  */
 personProperties: Record<string, string | number | boolean>, };
+
+/**
+ * What stands between this machine and serving on its tailnet. `fix` is
+ * whether [`fix`] can see to it here; where it can't, the row shows a guide.
+ */
+export type TailscaleNeed = { "kind": "install", fix: boolean, } | { "kind": "start", fix: boolean, } | { "kind": "sign_in", fix: boolean, url: string | null, } | { "kind": "https", url: string | null, } | { "kind": "operator", user: string, } | { "kind": "taken", target: string, };
 
 /**
  * See [`SessionIndexItem::need`].

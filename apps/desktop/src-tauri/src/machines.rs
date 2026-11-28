@@ -312,7 +312,7 @@ pub async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), St
         // for the server's delayed ACK, ~40ms.
         let (mut ws, _) = tokio_tungstenite::connect_async_with_config(url, None, true)
             .await
-            .map_err(|e| format!("could not reach {url}: {e}"))?;
+            .map_err(|e| unreached(url, format!("could not reach {url}: {e}")))?;
         ws.send(Message::text(hello.to_string()))
             .await
             .map_err(|e| e.to_string())?;
@@ -333,7 +333,18 @@ pub async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), St
     };
     tokio::time::timeout(ADMIT, attempt)
         .await
-        .unwrap_or_else(|_| Err(format!("{url} did not answer in time")))
+        .unwrap_or_else(|_| Err(unreached(url, format!("{url} did not answer in time"))))
+}
+
+/// A tailnet address answers nobody off the tailnet, and its server has no
+/// other way in by choice (#1712), so that is the whole of what to say.
+fn unreached(url: &str, otherwise: String) -> String {
+    let host = url.split("://").nth(1).unwrap_or(url).split(['/', ':']).next().unwrap_or_default();
+    if host.ends_with(".ts.net") {
+        "Only reachable over Tailscale. Turn Tailscale on here and it connects.".into()
+    } else {
+        otherwise
+    }
 }
 
 /// SSH logins kept up between calls, by machine id. Dropping one kills `ssh`.
@@ -771,6 +782,13 @@ pub async fn set_on(name: &str, on: bool) -> Result<Row, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tailnet_address_says_tailscale() {
+        assert!(unreached("wss://box.tail1a2b.ts.net", "x".into()).contains("Tailscale"));
+        assert!(unreached("wss://box.tail1a2b.ts.net:443/", "x".into()).contains("Tailscale"));
+        assert_eq!(unreached("wss://a.relay.drayhq.com:4433", "x".into()), "x");
+    }
 
     /// Sharing off still relays a machine holding a bot's task (#1660), or
     /// that bot's Tasks tab reads empty on every client one hop away.

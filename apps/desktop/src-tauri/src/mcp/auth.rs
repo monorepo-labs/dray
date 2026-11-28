@@ -189,7 +189,7 @@ pub async fn pair(sink: Sink, read_only: bool, replaces: Option<String>) -> Resu
         memory().pairings.remove(&normalize(&old));
     }
     if !crate::remote_access::get_remote_access().on {
-        crate::remote_access::set_remote_access(sink, true).await?;
+        crate::remote_access::set_remote_access(sink, true, None).await?;
     }
     // A first start provisions a certificate, which has taken minutes.
     let deadline = Instant::now() + Duration::from_secs(150);

@@ -73,6 +73,8 @@ Gives the server a public address that stays the same across restarts, and waits
 
 `dray server tunnel off` takes the address down. The server is then reachable over SSH alone. The address is off until you turn it on.
 
+`--via tailscale` serves it on your tailnet instead, at `https://<machine>.<tailnet>.ts.net`, and `--via relay` goes back. The pick is remembered. Tailscale must be installed and signed in on the server, with HTTPS certificates on for the tailnet. See [Over Tailscale](/reference/remote-access#over-tailscale).
+
 Each connect, drop and reconnect of the address is written to the server's log, with the time. See [Logs](/reference/troubleshooting#logs-and-parse-failures).
 
 ### Pair an iPhone

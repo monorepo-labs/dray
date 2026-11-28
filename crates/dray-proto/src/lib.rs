@@ -55,8 +55,10 @@ pub mod login;
 /// v25 added `detach_session`, which an older app reads as a broken CLI, and
 /// v26 `attach_session`, v27 `issue_card`, v28 the secret verbs. v29 added
 /// `permission_mode` on a create or a draft: an older app ignores it and runs
-/// the session on its parent's stance, which answers like success.
-pub const PROTOCOL_VERSION: u32 = 29;
+/// the session on its parent's stance, which answers like success. v30 added
+/// `tailscale` on `set_remote_access`: an older app ignores it and turns the
+/// relay on, a public address where a tailnet-only one was asked for.
+pub const PROTOCOL_VERSION: u32 = 30;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -131,6 +133,7 @@ impl Request {
             | Request::SettleSession(_)
             | Request::SetAside(_)
             | Request::ListShares(_) => 10,
+            Request::SetRemoteAccess(set) if set.tailscale.is_some() => 30,
             Request::SetRemoteAccess(_) => 11,
             Request::OnMachine(_) => 12,
             Request::AddVideo(_) => 13,
@@ -553,6 +556,10 @@ pub struct OnMachine {
 #[serde(rename_all = "camelCase")]
 pub struct SetRemoteAccess {
     pub on: bool,
+    /// Over Tailscale rather than Dray's relay, or the relay again; absent
+    /// keeps the way it was picked last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<bool>,
 }
 
 /// The reader's own name for a session, locked against generated titles the
@@ -1574,6 +1581,10 @@ mod tests {
         for request in &stanced {
             assert_eq!(Envelope::new(request.clone()).v, 29, "{request:?}");
         }
+        // Only a switch naming its way: without one it is v11's and an older
+        // app keeps the way already picked, which is what was asked.
+        let tailnet = Request::SetRemoteAccess(SetRemoteAccess { on: true, tailscale: Some(true) });
+        assert_eq!(Envelope::new(tailnet.clone()).v, 30);
         let based = [
             Request::CreateSession(CreateSession { base: Some("main".into()), ..Default::default() }),
             Request::CreateDraft(CreateDraft { base: Some("main".into()), ..Default::default() }),
@@ -1673,6 +1684,7 @@ mod tests {
             .chain([&ask, &detach, &attach, &issues])
             .chain(&secrets)
             .chain(&stanced)
+            .chain([&tailnet])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

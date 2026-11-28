@@ -4,6 +4,10 @@
 //! On a Mac the server runs a listener of its own for it, apart from the
 //! app's, so a remote Mac is never handed the host calls; `dray-serve` fronts
 //! the listener it already has ([`fronts`]). See TUNNEL-PLAN.md.
+//!
+//! Or, where the reader picked it, over their own tailnet alone
+//! ([`crate::tailscale`], #1712): the relay and tunnel are taken down, and a
+//! phone with Tailscale off reaches nothing.
 
 use std::{future::Future, path::PathBuf, sync::LazyLock, sync::OnceLock, time::Duration};
 
@@ -15,15 +19,20 @@ use crate::{serve, sink::Sink, store, tunnel};
 
 /// What the This Mac row draws. No token: it is asked for on Copy, and never
 /// stored in the webview.
-#[derive(Debug, Clone, Default, Serialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteAccess {
     pub on: bool,
+    /// Over Tailscale rather than Dray's relay. A server from before #1712
+    /// sends none, which a client reads as the relay.
+    pub tailscale: bool,
     /// `wss://…`, once the relay has it attached.
     pub address: Option<String>,
     /// Why this Mac is not answering, while on.
     pub error: Option<String>,
+    /// What Tailscale still wants on this machine, while on over it.
+    pub need: Option<crate::tailscale::TailscaleNeed>,
 }
 
 static STATE: LazyLock<Mutex<(RemoteAccess, Option<tokio::task::JoinHandle<()>>)>> = LazyLock::new(Default::default);
@@ -58,6 +67,9 @@ static SWITCHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// launch serving from the saved setting is no new use, so it reports nothing.
 static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Wakes the tailnet loop to look again now, after a fix.
+static KICK: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 /// The address file while one is written, for [`stop_on_exit`].
 static WRITTEN: Mutex<Option<PathBuf>> = Mutex::new(None);
 
@@ -86,10 +98,24 @@ pub fn get_remote_access() -> RemoteAccess {
 ///
 /// Boxed behind a named type: it starts a listener whose connections
 /// dispatch back here, and an `async fn` would be a future containing itself.
-pub fn set_remote_access(sink: Sink, on: bool) -> std::pin::Pin<Box<dyn Future<Output = Result<RemoteAccess, String>> + Send>> {
+///
+/// `tailscale` picks the way in, kept where it is when absent; switching it
+/// changes the address, so every device pairs again.
+pub fn set_remote_access(
+    sink: Sink,
+    on: bool,
+    tailscale: Option<bool>,
+) -> std::pin::Pin<Box<dyn Future<Output = Result<RemoteAccess, String>> + Send>> {
     Box::pin(async move {
         let _held = SWITCHING.lock().await;
-        crate::settings::update(|s| s.remote_access = on).await.map_err(|e| format!("{e:#}"))?;
+        crate::settings::update(|s| {
+            s.remote_access = on;
+            if let Some(tailscale) = tailscale {
+                s.remote_tailscale = tailscale;
+            }
+        })
+        .await
+        .map_err(|e| format!("{e:#}"))?;
         ASKED.store(on, std::sync::atomic::Ordering::Relaxed);
         switch(&sink, on).await;
         Ok(get_remote_access())
@@ -101,6 +127,14 @@ pub fn set_remote_access(sink: Sink, on: bool) -> std::pin::Pin<Box<dyn Future<O
 pub async fn remote_access_token() -> Result<String, String> {
     let (token, _) = serve::mint_token().await.map_err(|e| format!("{e:#}"))?;
     Ok(token)
+}
+
+/// Sees to what Tailscale still wants here, where Dray can, then looks again
+/// at once. Answers a sign-in page for the reader to open.
+pub async fn remote_access_fix() -> Result<Option<String>, String> {
+    let page = crate::tailscale::fix().await;
+    KICK.notify_one();
+    page
 }
 
 /// The phone's pairing QR, as SVG: [`dray_proto::pair_link`] for this
@@ -118,9 +152,10 @@ pub async fn remote_access_qr() -> Result<String, String> {
 /// drops the listener and every connection it holds. Callers hold
 /// [`SWITCHING`].
 async fn switch(sink: &Sink, on: bool) {
+    let tailscale = crate::settings::read().await.remote_tailscale;
     let old = {
         let mut state = state();
-        state.0 = RemoteAccess { on, address: None, error: None };
+        state.0 = RemoteAccess { on, tailscale, ..Default::default() };
         state.1.take()
     };
     if let Some(task) = old {
@@ -130,15 +165,19 @@ async fn switch(sink: &Sink, on: bool) {
     }
     tunnel::withdraw(tunnel::REMOTE, ROUTE, None).await;
     crate::relay::withdraw().await;
+    crate::tailscale::unserve().await;
     WRITTEN.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Ok(file) = tunnel_file().await {
         let _ = tokio::fs::remove_file(file).await;
     }
     if on {
-        let task = tokio::spawn(serve_and_tunnel(sink.clone()));
+        let task = tokio::spawn(serve_and_tunnel(sink.clone(), tailscale));
         state().1 = Some(task);
         // A machine reachable remotely is one a phone may ask to share from.
-        tokio::spawn(tunnel::warm(tunnel::SHARE));
+        // Not one kept to a tailnet: a share is a public address.
+        if !tailscale {
+            tokio::spawn(tunnel::warm(tunnel::SHARE));
+        }
     }
     announce(sink);
 }
@@ -156,7 +195,83 @@ fn set(sink: &Sink, address: Option<String>, error: Option<String>) {
     announce(sink);
 }
 
-async fn serve_and_tunnel(sink: Sink) {
+/// [`set`] for the tailnet loop, which looks every few seconds: only a
+/// change is announced.
+fn set_tailnet(sink: &Sink, address: Option<String>, error: Option<String>, need: Option<crate::tailscale::TailscaleNeed>) {
+    let changed = {
+        let mut state = state();
+        let next = RemoteAccess { address, error, need, ..state.0.clone() };
+        std::mem::replace(&mut state.0, next.clone()) != next
+    };
+    if changed {
+        announce(sink);
+    }
+}
+
+/// Serves `port` on the tailnet and keeps it served: Tailscale signed out,
+/// stopped or reconfigured underneath is noticed within [`TAILNET_LOOK`] and
+/// put back once it can be.
+async fn tailnet(sink: &Sink, port: u16, file: &std::path::Path) {
+    use crate::tailscale::{self, TailscaleNeed};
+    let mut served: Option<String> = None;
+    // Tailscale's page to turn HTTPS on, asked of `serve` once: it waits on
+    // the reader for as long as it is let.
+    let mut https_page: Option<Option<String>> = None;
+    loop {
+        let now = match tailscale::check().await {
+            Ok(host) => tailscale::serve(&host, port).await.map(|()| host),
+            Err(TailscaleNeed::Https { url: None }) => {
+                if https_page.is_none() {
+                    let asked = match tailscale::host().await {
+                        Some(host) => tailscale::serve(&host, port).await,
+                        None => Err(Ok(TailscaleNeed::Https { url: None })),
+                    };
+                    https_page = Some(match asked {
+                        Err(Ok(TailscaleNeed::Https { url })) => url,
+                        _ => None,
+                    });
+                }
+                Err(Ok(TailscaleNeed::Https { url: https_page.clone().flatten() }))
+            }
+            Err(need) => Err(Ok(need)),
+        };
+        match now {
+            Ok(host) => {
+                let url = format!("https://{host}");
+                if served.as_deref() != Some(&url) {
+                    let _ = store::write_atomic(file, format!("{url}\n")).await;
+                    *WRITTEN.lock().unwrap_or_else(|e| e.into_inner()) = Some(file.to_path_buf());
+                    tunnel::log("tailscale", &format!("serving at {url}"));
+                    if ASKED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                        crate::analytics::feature_used("remote_access");
+                    }
+                    served = Some(url.clone());
+                }
+                set_tailnet(sink, Some(url.replacen("https://", "wss://", 1)), None, None);
+            }
+            Err(blocked) => {
+                if served.take().is_some() {
+                    let _ = tokio::fs::remove_file(file).await;
+                    tunnel::log("tailscale", "stopped serving");
+                }
+                match blocked {
+                    Ok(need) => set_tailnet(sink, None, None, Some(need)),
+                    Err(e) => set_tailnet(sink, None, Some(e), None),
+                }
+            }
+        }
+        let wait = if served.is_some() { TAILNET_LOOK } else { Duration::from_secs(4) };
+        tokio::select! {
+            () = tokio::time::sleep(wait) => {}
+            () = KICK.notified() => {}
+        }
+    }
+}
+
+/// How often a served tailnet address is looked at again.
+const TAILNET_LOOK: Duration = Duration::from_secs(15);
+
+async fn serve_and_tunnel(sink: Sink, tailscale: bool) {
     let prepared = async {
         let file = tunnel_file().await.map_err(|e| format!("{e:#}"))?;
         if let Some(&port) = FRONTED.get() {
@@ -173,6 +288,9 @@ async fn serve_and_tunnel(sink: Sink) {
         Err(e) => return set(&sink, None, Some(e)),
     };
     let tunnel = async {
+        if tailscale {
+            return tailnet(&sink, port, &file).await;
+        }
         let mut backoff = Duration::from_secs(2);
         loop {
             let target = format!("127.0.0.1:{port}");

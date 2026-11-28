@@ -42,6 +42,10 @@ pub enum ServerCommand {
     Tunnel {
         #[arg(value_enum)]
         state: OnOff,
+        /// Over Dray's relay, or over your tailnet alone. Kept from last time
+        /// when absent; changing it changes the address.
+        #[arg(long, value_enum)]
+        via: Option<Via>,
     },
     /// Show a QR code the Dray iPhone app scans to add this server.
     Pair,
@@ -73,7 +77,7 @@ pub fn server(command: ServerCommand) -> Result<(), String> {
         ServerCommand::Run(args) => serve(args),
         ServerCommand::Stop => service(ServiceCommand::Uninstall),
         ServerCommand::Status => service(ServiceCommand::Status),
-        ServerCommand::Tunnel { state } => service(ServiceCommand::Tunnel { state }),
+        ServerCommand::Tunnel { state, via } => service(ServiceCommand::Tunnel { state, via }),
         ServerCommand::Pair => pair(),
         ServerCommand::Assistant(command) => assistant(command),
     }
@@ -214,7 +218,17 @@ pub enum ServiceCommand {
     Tunnel {
         #[arg(value_enum)]
         state: OnOff,
+        /// Over Dray's relay, or over your tailnet alone. Kept from last time
+        /// when absent; changing it changes the address.
+        #[arg(long, value_enum)]
+        via: Option<Via>,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
+pub enum Via {
+    Relay,
+    Tailscale,
 }
 
 #[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
@@ -786,8 +800,8 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
                 println!("\n{}", connect_text(&url)?);
             }
         }
-        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
-        ServiceCommand::Tunnel { state: OnOff::Off } => {
+        ServiceCommand::Tunnel { state: OnOff::On, via } => tunnel_on(via)?,
+        ServiceCommand::Tunnel { state: OnOff::Off, .. } => {
             tunnel_off()?;
             println!("The tunnel is down; the server is reachable over SSH alone.");
         }
@@ -860,13 +874,15 @@ fn unit_env_path(bin: &Path) -> Result<String, String> {
 /// for the address. The server remembers it, so it serves again whenever it
 /// starts, boot included. Off until asked for: a public address is the
 /// reader's call.
-fn tunnel_on() -> Result<(), String> {
+fn tunnel_on(via: Option<Via>) -> Result<(), String> {
     remove_tunnel_unit()?;
     // Where the app runs this Mac's server, that server is the one asked.
     if may_serve().is_ok() {
         service_start()?;
     }
-    set_remote_access(true)?;
+    let tailscale = via.map(|v| v == Via::Tailscale);
+    // The switch takes the old address down before it answers.
+    set_remote_access(true, tailscale)?;
     // A first start provisions a certificate; measured well under a minute.
     for _ in 0..240 {
         if let Some(url) = tunnel_address()? {
@@ -875,20 +891,26 @@ fn tunnel_on() -> Result<(), String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
+    if tailscale == Some(true) {
+        return Err("Tailscale is not ready here after 2 minutes. Sign in (sudo tailscale up --operator=$USER), \
+                    turn on HTTPS certificates for your tailnet (https://login.tailscale.com/admin/dns), \
+                    and run this again."
+            .into());
+    }
     Err("the server has no public address after 2 minutes. See why: dray server status".into())
 }
 
 fn tunnel_off() -> Result<(), String> {
     remove_tunnel_unit()?;
-    set_remote_access(false)
+    set_remote_access(false, None)
 }
 
 /// Asks the server whose home this is — `DRAY_HOME`'s socket, the same home
 /// `tunnel-url` and `serve-token` are read from — unless `DRAY_ENDPOINT` names
 /// one outright.
-fn set_remote_access(on: bool) -> Result<(), String> {
+fn set_remote_access(on: bool, tailscale: Option<bool>) -> Result<(), String> {
     let endpoint = dray_proto::endpoint().ok_or("could not resolve your home directory")?;
-    let request = dray_proto::Request::SetRemoteAccess(dray_proto::SetRemoteAccess { on });
+    let request = dray_proto::Request::SetRemoteAccess(dray_proto::SetRemoteAccess { on, tailscale });
     match super::send_to(&endpoint, request)? {
         dray_proto::Response::RemoteAccess { .. } => Ok(()),
         dray_proto::Response::Error { message } => Err(message),
@@ -962,7 +984,7 @@ fn connect_text(url: &str) -> Result<String, String> {
 /// runs: asks the server to serve itself at its public address and exits.
 /// Hidden from `--help`.
 pub fn tunnel(_: Tunnel) -> Result<(), String> {
-    set_remote_access(true)
+    set_remote_access(true, None)
 }
 
 fn systemctl(quiet: bool, args: &[&str]) -> bool {
@@ -1063,8 +1085,8 @@ fn windows_service(command: ServiceCommand) -> Result<(), String> {
                 println!("\n{}", connect_text(&url)?);
             }
         }
-        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
-        ServiceCommand::Tunnel { state: OnOff::Off } => {
+        ServiceCommand::Tunnel { state: OnOff::On, via } => tunnel_on(via)?,
+        ServiceCommand::Tunnel { state: OnOff::Off, .. } => {
             tunnel_off()?;
             println!("The tunnel is down.");
         }
@@ -1363,8 +1385,8 @@ fn agent_service(command: ServiceCommand) -> Result<(), String> {
                 println!("\n{}", connect_text(&url)?);
             }
         }
-        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
-        ServiceCommand::Tunnel { state: OnOff::Off } => {
+        ServiceCommand::Tunnel { state: OnOff::On, via } => tunnel_on(via)?,
+        ServiceCommand::Tunnel { state: OnOff::Off, .. } => {
             tunnel_off()?;
             println!("The tunnel is down.");
         }
@@ -1500,8 +1522,8 @@ fn detached_service(command: ServiceCommand) -> Result<(), String> {
                 println!("\n{}", connect_text(&url)?);
             }
         }
-        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
-        ServiceCommand::Tunnel { state: OnOff::Off } => {
+        ServiceCommand::Tunnel { state: OnOff::On, via } => tunnel_on(via)?,
+        ServiceCommand::Tunnel { state: OnOff::Off, .. } => {
             tunnel_off()?;
             println!("The tunnel is down; the server is reachable over SSH alone.");
         }

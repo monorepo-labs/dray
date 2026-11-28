@@ -1372,7 +1372,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         }
         #[cfg(any(feature = "serve", feature = "desktop"))]
         Request::SetRemoteAccess(set) => {
-            let now = crate::remote_access::set_remote_access(app.clone(), set.on).await.map_err(anyhow::Error::msg)?;
+            let now = crate::remote_access::set_remote_access(app.clone(), set.on, set.tailscale).await.map_err(anyhow::Error::msg)?;
             Ok(Response::RemoteAccess { on: now.on })
         }
         #[cfg(any(feature = "serve", feature = "desktop"))]
