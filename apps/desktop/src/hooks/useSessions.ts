@@ -41,7 +41,7 @@ import { DEVICE, localNow } from "@/lib/platform";
 import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
 import { botStance, stanceFor, taskStance } from "@/lib/permission";
-import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
+import { carryImages, isProvisional, takeOver, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTranscripts";
@@ -795,7 +795,14 @@ const selectedSession = selectedSessionId ? sessions.find((s) => s.sessionId ===
 const mergeEvents = (into: SessionSnapshot, from: AgentEvent[]): SessionSnapshot => {
   const seen = new Set(into.events.map((e) => e.id));
   // A snapshot is read back from the log after the prompt landed, so it always
-  // carries the real prompt and the provisional one is retired here.
+  // carries the real prompt and the provisional one is retired here. Its real
+  // prompt is the first one numbered at or past it, since the provisional was
+  // numbered past everything already held.
+  for (const p of from) {
+    if (!isProvisional(p)) continue;
+    const real = into.events.find((e) => e.payload.type === "user_message" && !e.subagent && e.seq >= p.seq);
+    if (real) takeOver(p, real);
+  }
   const missing = from.filter((e) => !seen.has(e.id) && !isProvisional(e));
   if (!missing.length) return into;
 
@@ -2585,6 +2592,8 @@ useEffect(() => {
               setQueuedBySession((prev) => {
                 const cur = prev[agentEvent.sessionId];
                 if (!cur?.length) return prev;
+                // Idempotent, so React invoking this twice carries nothing twice.
+                carryImages(imagesOf(cur[0].attachments), agentEvent);
                 return { ...prev, [agentEvent.sessionId]: cur.slice(1) };
               });
             }

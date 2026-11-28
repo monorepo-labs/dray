@@ -1038,14 +1038,6 @@
   --reaction: color-mix(in srgb, var(--background), white 6%);
 }
 
-[data-bot-chat] .sent-image {
-  width: auto;
-  height: auto;
-  max-width: min(20rem, 100cqi);
-  max-height: 15rem;
-  object-fit: contain;
-}
-
 [data-theme="default"] {
   --break-card: #1612f8;
   --break-ink: #fff;
