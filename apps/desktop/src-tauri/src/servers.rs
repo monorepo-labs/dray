@@ -967,6 +967,28 @@ async fn is_twin(welcome: &Welcome) -> bool {
     false
 }
 
+/// Puts away the relayed copies of a server just added directly with `token`.
+/// `run_relayed` asks [`is_twin`] only as it connects, so one already shown
+/// would stay beside its twin, every task listed twice, until its socket dropped.
+fn retire_twins(list: &mut [Conn], token: &str) {
+    let identity = crate::serve::server_id(token);
+    let copies = list
+        .iter_mut()
+        .filter(|c| c.via.is_some() && c.met.as_ref().and_then(|w| w.identity.as_deref()) == Some(identity.as_str()));
+    for conn in copies {
+        if let Some(task) = conn.task.take() {
+            task.abort();
+        }
+        for (_, call) in conn.pending.drain() {
+            let _ = call.send(Err(json!(format!("lost the connection to {}", conn.saved.name))));
+        }
+        conn.outgoing = None;
+        conn.live = None;
+        conn.status = ServerStatus::Disconnected;
+        conn.twin = true;
+    }
+}
+
 /// What boat's word on a row that cannot connect leaves `run` to do.
 enum BoatStep {
     /// Not a sandbox, or boat cannot say. Carry on as for any other server.
@@ -2058,6 +2080,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>, ticket
             } else {
                 list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
             }
+            retire_twins(&mut list, &token);
         })
     };
     if let Err(e) = placed {
@@ -2102,7 +2125,9 @@ pub async fn set_server_address(id: String, url: String) -> Result<(), String> {
 /// share it. `except` is the server being renamed or re-added, which may keep
 /// its own.
 fn refuse_taken(list: &[Conn], name: &str, except: Option<&str>) -> Result<(), String> {
-    match list.iter().any(|c| c.saved.id != LOCAL && Some(c.saved.id.as_str()) != except && c.saved.name == name) {
+    // A relayed machine is named by its own server, and drawn in no list here.
+    let taken = |c: &Conn| c.saved.id != LOCAL && c.via.is_none() && Some(c.saved.id.as_str()) != except && c.saved.name == name;
+    match list.iter().any(taken) {
         true => Err(format!("another server is already named {name} — pick another name")),
         false => Ok(()),
     }
@@ -2230,19 +2255,19 @@ pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<S
             Ok((mut ws, _)) => drop(ws.close(None).await),
             Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
         }
-        Ok(())
+        Ok(tunnel.token.clone())
     };
-    tokio::select! {
+    let token = tokio::select! {
         connected = connect => connected?,
         _ = cancel.woken.notified() => return Err(failed(CANCELLED.into())),
-    }
+    };
 
     let id = {
         let mut list = conns();
         // Again under the lock, for the token form's reason.
         let existing = list.iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.id.clone());
         refuse_taken(&list, &name, existing.as_deref()).map_err(failed)?;
-        if let Some(conn) = list.iter_mut().find(|c| c.saved.ssh.as_ref() == Some(&target)) {
+        let id = if let Some(conn) = list.iter_mut().find(|c| c.saved.ssh.as_ref() == Some(&target)) {
             conn.saved.name = name;
             conn.saved.off = false;
             conn.restart();
@@ -2251,7 +2276,9 @@ pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<S
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
             list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
             id
-        }
+        };
+        retire_twins(&mut list, &token);
+        id
     };
     save().await.map_err(failed)?;
     announce();
@@ -3127,6 +3154,22 @@ mod tests {
         assert_eq!(id, relayed_id("4f2a", "3c749e49"));
         assert_ne!(id, relayed_id("4f2b", "3c749e49"));
         assert!(file_safe(&id) && !id.contains('/'));
+    }
+
+    /// A relayed machine is drawn in no list here, so it must not refuse a
+    /// name; and once its server is added directly, the copy goes at once.
+    #[tokio::test]
+    async fn a_relayed_machine_takes_no_name_and_gives_way_to_its_direct_twin() {
+        let mut relayed = Conn::relayed("parent", "machine", "vps");
+        relayed.met = Some(Welcome { identity: Some(crate::serve::server_id("its-token")), ..Default::default() });
+        relayed.status = ServerStatus::Connected;
+        let mut list = vec![relayed];
+        assert!(refuse_taken(&list, "vps", None).is_ok());
+        retire_twins(&mut list, "another-token");
+        assert!(list[0].shown());
+        retire_twins(&mut list, "its-token");
+        assert!(!list[0].shown());
+        assert_eq!(list[0].status, ServerStatus::Disconnected);
     }
 
     /// A listing parks and wakes rows, but never closes a resume: the waiter on
