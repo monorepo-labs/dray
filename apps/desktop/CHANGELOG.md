@@ -27,6 +27,31 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.36.3 · 2026-11-28
+
+### New
+
+- **Turn off usage analytics.** Settings → About has a Share usage
+  analytics switch. Off stops every event and error report from the
+  app and its server, and it stays off across restarts.
+
+### Improved
+
+- The in-app browser runs on Chromium 158, with its security fixes.
+- OpenCode lists every model you have, OpenCode Go included.
+- Adding a server over SSH works on a Linux box whose login has no
+  systemd user session. Where the box has no systemd at all, the server
+  still starts, and the dialog says it won't come back after a reboot.
+
+### Fixed
+
+- Browser recordings keep filming after the page navigates, instead of
+  stopping at the first navigation.
+- Machines added or removed with `dray machine` show up in the app, so a
+  bot's tasks on a new machine appear in its Tasks tab.
+- `dray session new --base origin/<branch>` works for a branch this
+  clone has not fetched yet.
+
 ## 0.36.2 · 2026-11-27
 
 ### Improved
