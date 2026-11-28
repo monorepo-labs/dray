@@ -2383,6 +2383,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         account_sign_in_cancel() => ok(crate::dray_account::cancel(sink).await);
         account_reachable() => ok(crate::dray_account::reachable().await);
         account_sign_out() => crate::dray_account::sign_out(sink).await;
+        canvas_load(cwd: String) => crate::canvas::canvas_load(cwd).await;
+        canvas_save(cwd: String, text: String) => crate::canvas::canvas_save(cwd, text).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {

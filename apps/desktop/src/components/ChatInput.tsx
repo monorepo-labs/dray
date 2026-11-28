@@ -12,6 +12,8 @@ import { CornerDownLeft, Paperclip, X } from "lucide-react";
 import SendButton from "@/components/composer/SendButton";
 
 import AttachmentTray from "@/components/composer/AttachmentTray";
+import CanvasPickTray from "@/components/composer/CanvasPickTray";
+import { clearCanvasPicks, useCanvasPicks, withCanvasPicks } from "@/lib/canvas";
 import BotMentionMenu from "@/components/composer/BotMentionMenu";
 import FileMentionMenu from "@/components/composer/FileMentionMenu";
 import IssueMentionMenu from "@/components/composer/IssueMentionMenu";
@@ -346,6 +348,7 @@ export default function ChatInput({
 
   const attachKey = attachmentKey(sessionId, cwd);
   const attachments = useAttachments(attachKey);
+  const canvasPicks = useCanvasPicks(attachKey);
   const server = serverOfPath(cwd ?? "");
   // A remote session cannot read a path on this Mac, so whatever is pinned
   // goes over at once, however it arrived — drop, paste, picker, a draft
@@ -777,7 +780,7 @@ export default function ChatInput({
   // A notice does gate it. Backend refuses the same send anyway, so this is not
   // the guard — it is what stops the reader finding that out by writing a
   // prompt and pressing a button that was never going to work.
-  const canSend = !notice && !held && (message.trim().length > 0 || attachments.length > 0);
+  const canSend = !notice && !held && (message.trim().length > 0 || attachments.length > 0 || canvasPicks.length > 0);
 
   /// Dictation and Send, drawn in exactly one of two places.
   ///
@@ -824,7 +827,7 @@ export default function ChatInput({
     const trimmed = message.trim();
     // An attachment on its own is a real prompt — dropping a screenshot and
     // pressing Enter is asking about the screenshot.
-    if (!trimmed && !attachments.length) return;
+    if (!trimmed && !attachments.length && !canvasPicks.length) return;
     // A file the server would refuse can only fail the send; its tile says so.
     if (server !== LOCAL && attachments.some((a) => a.size > MAX_UPLOAD_BYTES)) return;
 
@@ -834,7 +837,8 @@ export default function ChatInput({
     const command = parseSlashCommand(trimmed);
     if (command) recordCommand(command.name);
 
-    onSend(trimmed, attachments);
+    onSend(withCanvasPicks(trimmed, canvasPicks), attachments);
+    if (attachKey) clearCanvasPicks(attachKey);
     setMessage("");
     // The box is empty, so the caret has nowhere else to be — and left where it
     // was it would name a position past the end of whatever is typed next.
@@ -1063,6 +1067,11 @@ export default function ChatInput({
             {/* Inside the card and above the text, so an attachment reads as part
                 of the message being composed rather than as a separate control.
                 Padded on the same edges as the editor below it. */}
+            {canvasPicks.length > 0 && (
+              <div className={cn("pt-3", isNewTask ? "px-0" : "px-3")}>
+                <CanvasPickTray sessionId={attachKey} />
+              </div>
+            )}
             {attachments.length > 0 && (
               <div className={cn("pt-3", isNewTask ? "px-0" : "px-3")}>
                 <AttachmentTray

@@ -68,6 +68,10 @@ Create the sessions rather than proposing them.
 
 This session has its own browser in the app. Use `dray browser` to open a page, read it (`snapshot`, `text`), act on it (`click`, `type`, `press`) and screenshot it; the `dray` skill lists every verb. Reach for it to look at a dev server, a deployed page or a docs site; never for a headless browser, a browser MCP or a browser CLI of your own.
 
+# Design canvas
+
+This task has a Canvas tab: pages of live frames, routes and single components, from the project's own dev server. When the user asks for designs, variations, frames or pages, or talks about "the canvas", use `dray canvas` (`dray canvas --help` lists the verbs; the `dray` skill says more). Variations are new components in `src/canvas/`, never edits to the original.
+
 # Videos
 
 Every video you make must play in the chat. For a browser recording, put the path `dray browser record stop` prints in your reply. For any other video, such as a screen recording, run `dray video add <file>` and put the path it prints in your reply. It runs on the machine serving this session, so copy a video made on another machine here first.

@@ -11,6 +11,7 @@
 use clap::{Args, CommandFactory, Parser, Subcommand};
 
 mod bot;
+mod canvas;
 mod draft;
 mod machine;
 mod routine;
@@ -78,6 +79,9 @@ enum Command {
     Secret(secret::SecretCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
+    /// This task's design canvas: pages of live frames from the dev server.
+    #[command(subcommand, arg_required_else_help = true, long_about = canvas::ABOUT)]
+    Canvas(canvas::CanvasCommand),
     /// Put a video where this session's chat plays it.
     #[command(subcommand, arg_required_else_help = true)]
     Video(VideoCommand),
@@ -552,6 +556,7 @@ fn run() -> Result<(), String> {
         Command::Bot(command) => bot::run(command),
         Command::Secret(command) => secret::run(command),
         Command::Browser(args) => browser(args),
+        Command::Canvas(command) => canvas::run(command),
         Command::Video(VideoCommand::Add(args)) => add_media(args.file, args.name, args.session, false),
         Command::Image(ImageCommand::Add(args)) => add_media(args.file, args.name, args.session, true),
         Command::Share(args) => share(args),

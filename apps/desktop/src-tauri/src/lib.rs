@@ -49,6 +49,7 @@ pub mod headless;
 pub mod recording;
 mod local_servers;
 pub mod platform;
+pub mod canvas;
 pub mod docs;
 pub mod download;
 #[path = "events/events.rs"]
