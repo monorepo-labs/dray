@@ -233,7 +233,8 @@ private let sessionIdLike = /(?i)^[0-9a-f][0-9a-f-]{7,}$/
 private func regex(_ p: String, _ o: NSRegularExpression.Options = []) -> NSRegularExpression {
     try! NSRegularExpression(pattern: p, options: o)
 }
-private let sends = regex(#"\bdray\s+(?:(session|bot)\s+)?send\b"#)
+/// Where a `dray` command may start; the words after it say whether it sends.
+private let drayStart = regex(#"\bdray(?=[ \t])"#)
 private let heredoc = regex(#"<<-?[ \t]*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[ \t]*(?:\n|\)|$))"#)
 private let subshell = regex(#"\$\(\s*\w+\s+"#)
 private let opener = regex(#"(?<!<)<<(?!<)-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([^\s'"<>;&|()]+))"#)
@@ -309,33 +310,90 @@ func unquoted(_ cmd: String) -> String {
 /// A session send to anything but an id — a loop's `"$id"` — is skipped rather
 /// than drawn as a task that opens nothing. The message itself is never drawn.
 func sentMessages(_ cmd: String, _ plain: String) -> [(target: String, bot: Bool)] {
-    let s = cmd as NSString
-    let n = s.length
     var out: [(target: String, bot: Bool)] = []
-    for m in sends.matches(in: plain, range: NSRange(location: 0, length: (plain as NSString).length)) {
-        let bot = m.range(at: 1).location != NSNotFound && (plain as NSString).substring(with: m.range(at: 1)) == "bot"
-        var at = m.range.location + m.range.length
-        func skipSpace() {
-            while at < n, let u = Unicode.Scalar(s.character(at: at)), CharacterSet.whitespacesAndNewlines.contains(u) { at += 1 }
-        }
-        skipSpace()
-        guard at < n else { continue }
-        let rest = s.substring(from: at)
-        let target: (word: String, length: Int)
-        if let q = rest.first, q == "'" || q == "\"" {
-            guard let end = rest.dropFirst().firstIndex(of: q) else { continue }
-            let word = String(rest[rest.index(after: rest.startIndex)..<end])
-            target = (word, (word as NSString).length + 2)
+    for m in drayStart.matches(in: plain, range: NSRange(location: 0, length: (plain as NSString).length)) {
+        guard let words = drayWords(cmd, m.range.location + m.range.length) else { continue }
+        // `dray send` is `dray session send` spelled short.
+        let bot = words.first == "bot"
+        let path: Int
+        if words.first == "send" {
+            path = 1
+        } else if (bot || words.first == "session") && words.count > 1 && words[1] == "send" {
+            path = 2
         } else {
-            let word = String(rest.prefix { !$0.isWhitespace })
-            target = (word, (word as NSString).length)
+            continue
         }
-        if !bot && target.word.wholeMatch(of: sessionIdLike) == nil { continue }
-        at += target.length
-        skipSpace()
         // No message after the target is no send.
-        guard at < n else { continue }
-        out.append((target.word, bot))
+        guard words.count >= path + 2 else { continue }
+        let target = words[path]
+        if !bot && target.wholeMatch(of: sessionIdLike) == nil { continue }
+        out.append((target, bot))
     }
     return out
+}
+
+/// The words of the one `dray` command whose arguments start at `start` (a
+/// UTF-16 offset), with the send commands' options taken out wherever clap lets
+/// them sit: the global `--machine <name>` or `--machine=<name>`
+/// (apps/cli/src/main.rs), `bot send`'s `--ask` (apps/cli/src/bot.rs), and a
+/// `--` ending them. Stops at the command's end or once it holds a send's
+/// target and message; `nil` for `--help`, which sends nothing.
+private func drayWords(_ cmd: String, _ start: Int) -> [String]? {
+    let s = cmd as NSString
+    let n = s.length
+    let space: UInt16 = 32, tab: UInt16 = 9, newline: UInt16 = 10, cr: UInt16 = 13
+    let slash: UInt16 = 92, single: UInt16 = 39, double: UInt16 = 34
+    let ends: Set<UInt16> = [59, 38, 124, newline] // ; & | and a new line
+    var at = start
+    var words: [String] = []
+    var options = true
+    var machine = false
+    // `send <target> <message>`, or `session send …` and `bot send …`.
+    while words.count < (words.first == "send" ? 3 : 4) {
+        // A `\` line continuation is space to the shell.
+        while at < n {
+            let c = s.character(at: at)
+            if c == space || c == tab { at += 1 }
+            else if c == slash, at + 1 < n, s.character(at: at + 1) == newline { at += 2 }
+            else { break }
+        }
+        guard at < n, !ends.contains(s.character(at: at)) else { break }
+        // One shell word, unquoted. Only the target and the options are read
+        // for their value, so a message this misreads costs nothing.
+        let begin = at
+        var value: [UInt16] = []
+        while at < n {
+            let c = s.character(at: at)
+            if c == space || c == tab || c == cr || ends.contains(c) { break }
+            if c == single {
+                let close = s.range(of: "'", range: NSRange(location: at + 1, length: n - at - 1)).location
+                let end = close == NSNotFound ? n : close
+                for k in (at + 1)..<end { value.append(s.character(at: k)) }
+                at = min(end + 1, n)
+            } else if c == double {
+                at += 1
+                while at < n && s.character(at: at) != double {
+                    if s.character(at: at) == slash && at + 1 < n { at += 1 }
+                    value.append(s.character(at: at))
+                    at += 1
+                }
+                at = min(at + 1, n)
+            } else if c == slash {
+                if at + 1 < n { value.append(s.character(at: at + 1)) }
+                at = min(at + 2, n)
+            } else {
+                value.append(c)
+                at += 1
+            }
+        }
+        if at == begin { break }
+        let v = String(utf16CodeUnits: value, count: value.count)
+        if machine { machine = false }
+        else if !options { words.append(v) }
+        else if v == "--" { options = false }
+        else if v == "--machine" { machine = true }
+        else if v == "-h" || v == "--help" { return nil }
+        else if v != "--ask" && !v.hasPrefix("--machine=") { words.append(v) }
+    }
+    return words
 }

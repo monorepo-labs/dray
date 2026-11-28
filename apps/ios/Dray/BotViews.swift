@@ -332,11 +332,16 @@ private struct BotRowView: View {
         }
     }
 
-    /// The task by its index entry, or by a prefix of its id as `dray session send` takes one.
+    /// The task by its index entry, or by a prefix of its id as `dray session send` takes one: on the
+    /// bot's server first, then on any server, since a task on another machine (`--machine`) is that
+    /// machine's, reached as a shared server or a paired one.
     private func task(_ id: String) -> SessionKey? {
         let exact = SessionKey(server: key.server, id: id)
         if store.items[exact] != nil { return exact }
-        let hits = store.items.keys.filter { $0.server == key.server && $0.id.hasPrefix(id.lowercased()) }
+        let prefix = id.lowercased()
+        let hits = store.items.keys.filter { $0.id.hasPrefix(prefix) }
+        let own = hits.filter { $0.server == key.server }
+        if own.count == 1 { return own[0] }
         return hits.count == 1 ? hits[0] : nil
     }
 
