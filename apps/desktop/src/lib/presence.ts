@@ -39,6 +39,25 @@ export function due(
   return out;
 }
 
+/// Whether a reader on another client of this chat's server — a phone, say —
+/// has it on screen now, by that server's word. The desktop then holds its own
+/// banner, island pill and sound, as that server holds the phone's push for a
+/// chat on this screen. The server answers off this connection, so what this
+/// app said itself is never counted, and a lapsed lease never holds.
+///
+/// Anything but a quick yes is no: an older server answers `unknown command`,
+/// and an alert lost to a slow link is worse than one the phone also shows.
+export function viewedElsewhere(sessionId: string): Promise<boolean> {
+  const asked = invoke<boolean>("viewed_elsewhere", { sessionId }, serverOfSession(sessionId)).then(
+    (held) => held === true,
+    () => false,
+  );
+  const late = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ASK_MS));
+  return Promise.race([asked, late]);
+}
+
+const ASK_MS = 1_500;
+
 let shown: string[] = [];
 let lastInput = Date.now();
 const said = new Map<ServerId, Said>();

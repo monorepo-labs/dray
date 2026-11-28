@@ -1847,6 +1847,14 @@ async fn connection(
             let _ = replies.send(reply(&call.id, answer));
             continue;
         }
+        if call.cmd == "viewed_elsewhere" {
+            let replies = replies.clone();
+            tokio::spawn(async move {
+                let answer = viewed_elsewhere(connection, call.args).await;
+                let _ = replies.send(reply(&call.id, answer));
+            });
+            continue;
+        }
         let (sink, replies) = (sink.clone(), replies.clone());
         let key = CANCELLABLE.contains(&call.cmd.as_str()).then(|| call.id.to_string());
         let tracked = key.clone().map(|key| (key, running.clone()));
@@ -1915,6 +1923,20 @@ fn viewing(connection: u64, args: Value) -> Answer {
         serde_json::from_value(args).map_err(|e| Json::text(format!("invalid arguments to set_viewing: {e}")))?;
     crate::push::set_viewing(connection, sessions);
     Ok(Json::from(Value::Null))
+}
+
+/// `viewed_elsewhere {sessionId}`: whether a reader on some other client is
+/// looking at that chat now, so this one holds its own banner and sound.
+/// Answered off the connection so the asker's own `set_viewing` never counts.
+async fn viewed_elsewhere(connection: u64, args: Value) -> Answer {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Args {
+        session_id: String,
+    }
+    let Args { session_id } =
+        serde_json::from_value(args).map_err(|e| Json::text(format!("invalid arguments to viewed_elsewhere: {e}")))?;
+    Ok(Json::from(Value::Bool(crate::push::viewed_elsewhere(&session_id, connection).await)))
 }
 
 /// The app's links to other machines, tokens included, for the island alone.

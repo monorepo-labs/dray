@@ -105,7 +105,28 @@ pub fn connection_closed(connection: u64) {
 
 /// Whether some client's reader is looking at `session` now.
 fn viewed(session: &str) -> bool {
-    viewing().iter().any(|(_, shown, at)| at.elapsed() < VIEWING_LEASE && shown.iter().any(|s| s == session))
+    viewed_by_other(session, None)
+}
+
+/// [`viewed`], not counting what `asker` itself said.
+fn viewed_by_other(session: &str, asker: Option<u64>) -> bool {
+    viewing().iter().any(|(c, shown, at)| {
+        Some(*c) != asker && at.elapsed() < VIEWING_LEASE && shown.iter().any(|s| s == session)
+    })
+}
+
+/// Whether a reader on another client is looking at `session`, or at the bot
+/// chat its alert opens: the desktop holds its own banner and sound for it,
+/// as the phone's push holds for a chat on the desktop's screen.
+pub async fn viewed_elsewhere(session: &str, asker: u64) -> bool {
+    if viewed_by_other(session, Some(asker)) {
+        return true;
+    }
+    let Some(item) = store::get_session_index_item(session).await.ok().flatten() else { return false };
+    match crate::bots::bot_chat_of(&item).await {
+        Some(chat) => viewed_by_other(&crate::bots::current_chat(chat).await.session_id, Some(asker)),
+        None => false,
+    }
 }
 
 /// A turn's last words as one line an alert can hold: the first line with
@@ -347,6 +368,10 @@ mod tests {
         assert!(viewed("s2"), "another client still shows it");
         connection_closed(902);
         assert!(!viewed("s2"), "a closed connection shows nothing");
+        set_viewing(904, vec!["s5".into()]);
+        assert!(!viewed_by_other("s5", Some(904)), "the asker's own word is not counted");
+        assert!(viewed_by_other("s5", Some(905)));
+        connection_closed(904);
         set_viewing(903, vec!["s4".into()]);
         viewing().iter_mut().for_each(|(_, _, at)| *at -= VIEWING_LEASE);
         assert!(!viewed("s4"), "a lease not renewed runs out");
