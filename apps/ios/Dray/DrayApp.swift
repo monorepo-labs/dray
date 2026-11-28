@@ -136,6 +136,7 @@ struct RootView: View {
         }
         .onChange(of: selection) { opened = [] }
         .onChange(of: opened.last ?? selection, initial: true) { _, now in Push.shared.viewing = now }
+        .onChange(of: phase, initial: true) { _, now in Push.shared.active = now == .active }
         .onChange(of: Push.shared.opening, initial: true) { _, key in
             guard let key else { return }
             Push.shared.opening = nil
