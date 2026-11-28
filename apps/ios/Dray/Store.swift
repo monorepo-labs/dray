@@ -663,9 +663,17 @@ final class Store {
         return bots[key.server]?.first { samePath($0.path, cwd) }
     }
 
-    /// Every live server's bots, in its own order, servers in the list's.
+    /// Every live server's bots in the order the desktop set (#1670); unplaced ones
+    /// after, each server's in its own order, servers in the list's.
     var allBots: [(server: UUID, bot: Bot)] {
-        live.filter { !covered.contains($0.id) }.flatMap { s in (bots[s.id] ?? []).map { (s.id, $0) } }
+        Self.placed(live.filter { !covered.contains($0.id) }.flatMap { s in (bots[s.id] ?? []).map { (s.id, $0) } })
+    }
+
+    /// Sorts on `order`, ties and unplaced bots kept where they were, since Swift's sort isn't stable.
+    static func placed(_ rows: [(server: UUID, bot: Bot)]) -> [(server: UUID, bot: Bot)] {
+        rows.enumerated()
+            .sorted { ($0.element.bot.order ?? .max, $0.offset) < ($1.element.bot.order ?? .max, $1.offset) }
+            .map(\.element)
     }
 
     /// A bot's chat: every unsettled session in its folder, oldest first. The
