@@ -134,7 +134,7 @@ Copy `apps/desktop/demo/whats-new/relay-pair-white.png` to
 page shows the title and the action alone, so the title carries the whole
 message. The picture is drawn in
 [whatsNewIllustrations.tsx](../desktop/src/demo/whatsNewIllustrations.tsx)
-(`?art=relay-pair`), the Mac half a real capture of Settings → Servers.
+(`?art=relay-pair`) in the brand look, its QR a block that pairs with nothing.
 
 ## Deploy on Railway
 
