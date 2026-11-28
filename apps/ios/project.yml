@@ -7,7 +7,7 @@ settings:
     SWIFT_VERSION: "5.0"
     DEVELOPMENT_TEAM: 7WYP3LRDL8
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: 0.2.0
+    MARKETING_VERSION: 0.2.1
     CURRENT_PROJECT_VERSION: 1
 packages:
   ThinkingOrbs:
