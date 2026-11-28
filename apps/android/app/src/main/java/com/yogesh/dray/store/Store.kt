@@ -44,7 +44,10 @@ import com.yogesh.dray.wire.get
 import com.yogesh.dray.wire.jsonOf
 import com.yogesh.dray.wire.sentFrom
 import com.yogesh.dray.wire.wireJson
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -767,8 +770,15 @@ class Store(private val context: Context) {
             waiting += key
             return
         }
-        reload(key)
+        // In the store's scope, one per chat: a screen that leaves cancels only its wait, never the
+        // read, which a later open would skip since the held copy already stands in for it.
+        val read = firstReads[key] ?: scope.launch(start = CoroutineStart.LAZY) {
+            try { reload(key) } finally { firstReads.remove(key) }
+        }.also { firstReads[key] = it; it.start() }
+        read.join()
     }
+
+    private val firstReads = mutableMapOf<SessionKey, Job>()
 
     fun isLoading(key: SessionKey) = transcripts[key] == null && transcriptErrors[key] == null
 
@@ -810,6 +820,10 @@ class Store(private val context: Context) {
             transcripts[key] = Transcript.of(older + snap.events.map { heldById[it.id] ?: it } + live, olderBefore)
             transcriptErrors.remove(key)
             serverRead = serverRead + key
+        } catch (e: CancellationException) {
+            // The screen that asked went away or restarted its effect (an unread chat's open marks it
+            // read, which restarts the status-keyed one): nothing failed, and the next read answers.
+            throw e
         } catch (e: Exception) {
             transcriptErrors[key] = e.message ?: "Couldn't load"
         }
