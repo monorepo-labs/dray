@@ -72,6 +72,42 @@ fn at_the_computer() -> bool {
     false
 }
 
+/// How long a client's word that it shows a chat holds unless said again. A
+/// client renews well inside it while its reader is there, so one that hangs
+/// or drops off the network with its socket still open holds nothing for long.
+const VIEWING_LEASE: std::time::Duration = std::time::Duration::from_secs(60);
+
+type Viewing = Vec<(u64, Vec<String>, std::time::Instant)>;
+
+/// The chats each connected client says its reader is looking at, by
+/// connection. Only the client can say: this machine's own input tells
+/// nothing of a reader at a desktop on another one (#1654).
+static VIEWING: std::sync::Mutex<Viewing> = std::sync::Mutex::new(Vec::new());
+
+fn viewing() -> std::sync::MutexGuard<'static, Viewing> {
+    VIEWING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `connection`'s reader is looking at `sessions`, replacing what it said
+/// before; an empty list is looking at nothing.
+pub fn set_viewing(connection: u64, sessions: Vec<String>) {
+    let mut list = viewing();
+    list.retain(|(c, ..)| *c != connection);
+    if !sessions.is_empty() {
+        list.push((connection, sessions.into_iter().take(16).collect(), std::time::Instant::now()));
+    }
+}
+
+/// A closed connection shows nothing any more.
+pub fn connection_closed(connection: u64) {
+    viewing().retain(|(c, ..)| *c != connection);
+}
+
+/// Whether some client's reader is looking at `session` now.
+fn viewed(session: &str) -> bool {
+    viewing().iter().any(|(_, shown, at)| at.elapsed() < VIEWING_LEASE && shown.iter().any(|s| s == session))
+}
+
 /// A turn's last words as one line an alert can hold: the first line with
 /// text, its markdown marks dropped and each link as its text alone.
 fn first_line(text: &str) -> String {
@@ -197,6 +233,11 @@ pub fn notify(session_id: &str, payload: &AgentEventPayload, said: Option<&str>)
             return;
         }
         let Some(from) = sender(&session_id, &kind).await else { return };
+        // A chat on someone's screen is its own alert. A bot's task's alert
+        // waits as a card in the bot's chat, so that chat counts too.
+        if viewed(&session_id) || from.open.as_deref().is_some_and(viewed) {
+            return;
+        }
         alert["session"] = json!(session_id);
         alert["open"] = json!(from.open);
         if alert["title"].is_null() {
@@ -294,6 +335,22 @@ mod tests {
         assert!(alert(&ask(false, "Green"), None).unwrap()["question"].is_object());
         assert!(alert(&ask(true, "Green"), None).unwrap()["question"].is_null());
         assert!(alert(&ask(false, &"g".repeat(61)), None).unwrap()["question"].is_null());
+    }
+
+    #[test]
+    fn a_chat_is_viewed_while_a_connection_says_so() {
+        set_viewing(901, vec!["s1".into(), "s2".into()]);
+        set_viewing(902, vec!["s2".into()]);
+        assert!(viewed("s1") && viewed("s2") && !viewed("s3"));
+        set_viewing(901, vec![]);
+        assert!(!viewed("s1"), "an empty list is looking at nothing");
+        assert!(viewed("s2"), "another client still shows it");
+        connection_closed(902);
+        assert!(!viewed("s2"), "a closed connection shows nothing");
+        set_viewing(903, vec!["s4".into()]);
+        viewing().iter_mut().for_each(|(_, _, at)| *at -= VIEWING_LEASE);
+        assert!(!viewed("s4"), "a lease not renewed runs out");
+        connection_closed(903);
     }
 
     #[test]

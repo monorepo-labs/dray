@@ -10,6 +10,8 @@
 import { convertFileSrc, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen, type Event, type UnlistenFn } from "@tauri-apps/api/event";
 
+import { channel } from "@/lib/channel";
+
 /// `"local"` for the in-process core, an id from `servers.json` for a remote one.
 export type ServerId = string;
 export const LOCAL: ServerId = "local";
@@ -60,10 +62,16 @@ export function qualify(path: string, server: ServerId): string {
 /// Which server each session lives on. A session never moves servers, so an
 /// entry is never wrong once written.
 const sessionServers = new Map<string, ServerId>();
+const sessionNoted = channel<void>();
 
 export function noteSession(sessionId: string, server: ServerId): void {
-  if (server !== LOCAL) sessionServers.set(sessionId, server);
+  if (server === LOCAL || sessionServers.get(sessionId) === server) return;
+  sessionServers.set(sessionId, server);
+  sessionNoted.emit();
 }
+
+/// Hears a session learning its server, which a new one does at its first send.
+export const onSessionNoted = sessionNoted.subscribe;
 
 export const serverOfSession = (sessionId: string | null | undefined): ServerId =>
   (sessionId && sessionServers.get(sessionId)) || LOCAL;

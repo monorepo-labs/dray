@@ -1841,6 +1841,12 @@ async fn connection(
         };
         // Concurrently, as Tauri runs async commands: a send that spawns a
         // child must not hold a permission reply behind it.
+        // Answered off the connection, which is whose word it is.
+        if call.cmd == "set_viewing" {
+            let answer = viewing(connection, call.args);
+            let _ = replies.send(reply(&call.id, answer));
+            continue;
+        }
         let (sink, replies) = (sink.clone(), replies.clone());
         let key = CANCELLABLE.contains(&call.cmd.as_str()).then(|| call.id.to_string());
         let tracked = key.clone().map(|key| (key, running.clone()));
@@ -1872,6 +1878,7 @@ async fn connection(
         task.abort();
     }
 
+    crate::push::connection_closed(connection);
     // Dropping its waiters answers every call still out on it.
     let left = host_list().leave(connection);
     if left != Left::Unseen {
@@ -1894,6 +1901,20 @@ async fn connection(
     drop(replies);
     writer.abort();
     failed.map_or(Ok(()), |e| Err(e.into()))
+}
+
+/// `set_viewing {sessions}`: the chats this client's reader is looking at,
+/// which hold back the phone's alerts for them (#1654). Any client may say it;
+/// a relayed one reaches the machine on a connection of its own.
+fn viewing(connection: u64, args: Value) -> Answer {
+    #[derive(Deserialize)]
+    struct Args {
+        sessions: Vec<String>,
+    }
+    let Args { sessions } =
+        serde_json::from_value(args).map_err(|e| Json::text(format!("invalid arguments to set_viewing: {e}")))?;
+    crate::push::set_viewing(connection, sessions);
+    Ok(Json::from(Value::Null))
 }
 
 /// The app's links to other machines, tokens included, for the island alone.
