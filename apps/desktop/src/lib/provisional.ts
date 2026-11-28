@@ -72,11 +72,9 @@ const CARRIED_MAX = 12;
 
 /// Lets the real prompt's pictures draw from the bytes the provisional one held.
 ///
-/// The real `user_message` names archived copies, which load through the server
-/// and only once the new row has mounted — so for a moment every picture sent
-/// was blank, and in a bot chat, where a picture takes its own size, the row
-/// grew under the reader when it landed. The same `data:` URL is one the
-/// document has already decoded, so the new row draws at once and at its size.
+/// The real `user_message` names archived copies, which load through the server,
+/// so for a moment every picture sent was blank. The same `data:` URL is one
+/// the document has already decoded, so the row draws it at once.
 ///
 /// Paired by position, which holds because both lists are the attachments that
 /// travel as images, in the order they were pinned. A count that differs says
