@@ -32,6 +32,7 @@ import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/ea
 import { flushHeld, heldFlagFor, holdFlags, noteFlagWrite, onLanded, overlayHeld, settleAfterSend, unholdFlags, useHeldFlags } from "@/lib/heldFlags";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
+import { setShownChats } from "@/lib/presence";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
@@ -2849,6 +2850,7 @@ const selectionRequestRef = useRef<string | null>(selectedSessionId);
 // tracks the live one so "already being viewed" is judged against reality.
 const selectedSessionIdRef = useRef(selectedSessionId);
 selectedSessionIdRef.current = selectedSessionId;
+useEffect(() => setShownChats([selectedSessionId, ...onScreenRef.current]), [selectedSessionId]);
 
 // Same reason as the selection ref above: the status listener is registered
 // once, so it needs the live index to name the session that just finished, and
@@ -3120,6 +3122,7 @@ const setOnScreen = (ids: string[]) => {
     if (id !== selectionRequestRef.current) refreshHeld(id);
   }
   onScreenRef.current = next;
+  setShownChats([selectedSessionIdRef.current, ...next]);
 };
 
 const onScreen = (sessionId: string) =>
