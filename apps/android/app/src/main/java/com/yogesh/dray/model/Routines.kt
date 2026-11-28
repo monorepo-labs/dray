@@ -45,3 +45,11 @@ fun nextRunLabel(r: Routine, now: Long, zone: ZoneId = ZoneId.systemDefault(), l
         else -> "Next $time on ${then.format(DateTimeFormatter.ofPattern("MMM d", locale))}"
     }
 }
+
+/** Each routine's place, active above paused, the list's own order within each. */
+fun rankRoutines(list: List<Routine>): Map<String, Int> =
+    list.sortedBy { it.paused }.mapIndexed { i, r -> r.id to i }.toMap()
+
+/** [list] in [rank]'s order; one added since lands after the ranked ones, active before paused. */
+fun orderRoutines(list: List<Routine>, rank: Map<String, Int>): List<Routine> =
+    list.sortedBy { rank[it.id] ?: (rank.size + if (it.paused) 1 else 0) }
