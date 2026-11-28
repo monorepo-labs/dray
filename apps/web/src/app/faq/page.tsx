@@ -113,8 +113,8 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
         link: { label: "Set up a server", href: "/docs/server" },
       },
       {
-        q: "Why don't I see my bot's tasks on my phone?",
-        a: "Your phone likely reaches the bot's server through your Mac's Share these servers. Dray forwards a connection one step only, so a task the bot starts on that server's own machines, such as a Boat sandbox, is two steps away and doesn't show. To see it, pair your phone with the bot's server directly: turn on its remote access (dray server tunnel on on a Linux server), show its pairing code (dray server pair), and scan it from Add server in the Dray app on your phone.",
+        q: "Why doesn't my phone show some of my bot's tasks?",
+        a: "Your phone sees the servers it's connected to, plus one step beyond. Say your phone connects to your Mac, and your Mac connects to the server your bot runs on. You'll see the bot, but tasks it runs on other machines, like a Boat sandbox, are one step too far. To see them, connect your phone to the bot's server directly. On that server, run dray server tunnel on, then dray server pair, and scan the code from Add server in the Dray app.",
         link: { label: "Pair your phone", href: "/docs/reference/remote-access#pair-your-iphone" },
       },
       {
