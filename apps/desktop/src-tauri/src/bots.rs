@@ -1338,6 +1338,11 @@ pub async fn create_bot(name: String, avatar: Option<BotAvatar>) -> Result<Bot, 
 /// Told to the app whenever the list changes from outside it: `dray bot`.
 pub const BOTS_CHANGED: &str = "bots_changed";
 
+/// An Edit bot stance change, carrying the chat's updated index entry. The app
+/// syncs its composer pick to it, or a send still holding the old stance would
+/// quietly write that one back.
+pub const BOT_PERMISSION_CHANGED: &str = "bot_permission_changed";
+
 /// The shapes and hues a face can take, as the app's `SHAPES` and `HUES`
 /// name them, for a bot made with no pick.
 const SHAPES: [&str; 9] = ["round", "organic", "boxy", "capsule", "nub", "cloud", "hexagon", "sun", "triangle"];
@@ -1399,10 +1404,37 @@ pub async fn rename_bot(key: &str, name: &str, sink: &Sink) -> Result<Bot> {
     update_bot(key, name, None, sink).await
 }
 
-/// Edit in the sidebar: the New bot dialog's name and face, on a bot already made.
+/// Edit in the sidebar: the New bot dialog's name, face and stance, on a bot
+/// already made.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn edit_bot(id: String, name: String, avatar: BotAvatar, sink: Sink) -> Result<Bot, Fail> {
+pub async fn edit_bot(
+    id: String,
+    name: String,
+    avatar: BotAvatar,
+    permission_mode: ApprovalPolicy,
+    sink: Sink,
+) -> Result<Bot, Fail> {
     let bot = update_bot(&id, &name, Some(avatar), &sink).await?;
+    // A bot's stance is its chat's, recorded on the index like any thread's.
+    // Write it here rather than waiting for a send, so an Edit with no message
+    // still survives a restart and reaches a phone reading the same session.
+    // The running child takes it on the next send, as a thread does.
+    if let Some(chat) = chat_of(&bot).await {
+        if chat.permission_mode != permission_mode {
+            if let Some(item) = crate::store::touch_session_index_item(
+                &chat.session_id,
+                chat.model.clone(),
+                chat.effort,
+                permission_mode,
+                chat.fast,
+            )
+            .await?
+            {
+                sink.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
+                sink.emit(BOT_PERMISSION_CHANGED, &item).ok();
+            }
+        }
+    }
     sink.emit(BOTS_CHANGED, ()).ok();
     Ok(bot)
 }

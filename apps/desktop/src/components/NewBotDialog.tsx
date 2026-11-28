@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import PermissionSelector, { offersPermissionModes } from "@/components/composer/PermissionSelector";
 import { DEFAULT_AVATAR, HUES, SHAPES, swatch } from "@/lib/botAvatar";
 import { refreshBots, serverOfBot } from "@/lib/bots";
 import { serverName, useServers } from "@/lib/servers";
@@ -27,26 +28,29 @@ import type {
   SessionIndexItem,
 } from "@/types/events";
 
-/// What the bot's chat runs on, as the composer's picker has it.
+/// What the bot's chat runs on, as the composer's picker has it. The stance
+/// travels on its own below, since both dialogs own a pick of their own.
 export type BotPick = {
   harness: Harness;
   model: ModelId;
   effort: Effort | null;
-  permissionMode: ApprovalPolicy;
   fast: boolean;
 };
 
-/// Makes a bot — a name, a face and what it runs on — and starts its chat with
-/// the bot speaking first. Its job is told in reply, never in a form.
+/// Makes a bot — a name, a face, a stance and what it runs on — and starts its
+/// chat with the bot speaking first. Its job is told in reply, never in a form.
 ///
-/// Given `editing`, the same dialog filled in with that bot's name and face,
-/// saving those alone: its server and agent are its chat's, not the form's.
+/// Given `editing`, the same dialog filled in with that bot's name, face and
+/// stance, saving those alone: its server and agent are its chat's, not the
+/// form's.
 export default function NewBotDialog({
   open,
   onOpenChange,
   editing,
   server,
   onServerChange,
+  harness,
+  defaultPermissionMode,
   picker,
   pick,
   onStarted,
@@ -57,6 +61,10 @@ export default function NewBotDialog({
   /// Where the bot is made and runs: its folder, its chat and its tasks.
   server: ServerId;
   onServerChange: (server: ServerId) => void;
+  /// The agent the stance picker filters its modes by.
+  harness: Harness;
+  /// The stance the dialog opens on: Auto for a new bot, the chat's for an edit.
+  defaultPermissionMode: ApprovalPolicy;
   /// The composer's own agent and model picker, bound to `pick`.
   picker: ReactNode;
   pick: BotPick;
@@ -64,19 +72,24 @@ export default function NewBotDialog({
 }) {
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState<Avatar>(DEFAULT_AVATAR);
+  const [permissionMode, setPermissionMode] = useState<ApprovalPolicy>("auto");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // A bot already made whose first chat failed to start: a retry starts it
   // again rather than making a second bot beside it.
   const [made, setMade] = useState<Bot | null>(null);
 
-  // Filled in each time it opens on a bot. One made before there was a pick
-  // starts from the default face, since its seeded one has no shape name.
+  // Refilled each time it opens: an edit takes the bot's name and face, both
+  // dialogs take the stance they are to start on. One made before there was a
+  // pick starts from the default face, since its seeded one has no shape name.
   useEffect(() => {
-    if (!open || !editing) return;
-    setName(editing.name);
-    setAvatar(editing.avatar ?? DEFAULT_AVATAR);
-  }, [open, editing]);
+    if (!open) return;
+    if (editing) {
+      setName(editing.name);
+      setAvatar(editing.avatar ?? DEFAULT_AVATAR);
+    }
+    setPermissionMode(defaultPermissionMode);
+  }, [open, editing, defaultPermissionMode]);
 
   const shut = () => {
     onOpenChange(false);
@@ -95,7 +108,7 @@ export default function NewBotDialog({
 
   const save = async (bot: Bot) => {
     const at = serverOfBot(bot);
-    await invoke<Bot>("edit_bot", { id: bot.id, name: name.trim(), avatar }, at);
+    await invoke<Bot>("edit_bot", { id: bot.id, name: name.trim(), avatar, permissionMode }, at);
     await refreshBots(at);
   };
 
@@ -106,7 +119,7 @@ export default function NewBotDialog({
       setMade(bot);
       await refreshBots(server);
     }
-    return invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick }, serverOfBot(bot));
+    return invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick, permissionMode }, serverOfBot(bot));
   };
 
   const submit = async () => {
@@ -188,12 +201,19 @@ export default function NewBotDialog({
           ))}
         </div>
 
-        {!editing && (
-          <div className="flex justify-center gap-1">
-            {/* Locked from Create on: the bot lives on the server it was made
-                on, and a retry starts that one. */}
-            <ServerPicker value={server} onChange={onServerChange} disabled={busy || !!made} />
-            {picker}
+        {(!editing || offersPermissionModes(harness)) && (
+          <div className="flex flex-wrap items-center justify-center gap-1">
+            {!editing && (
+              <>
+                {/* Locked from Create on: the bot lives on the server it was
+                    made on, and a retry starts that one. */}
+                <ServerPicker value={server} onChange={onServerChange} disabled={busy || !!made} />
+                {picker}
+              </>
+            )}
+            {offersPermissionModes(harness) && (
+              <PermissionSelector harness={harness} value={permissionMode} onChange={setPermissionMode} />
+            )}
           </div>
         )}
 

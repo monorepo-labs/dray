@@ -229,7 +229,6 @@ import { botAt, botBrowser, botChat, botEntries, botOf, botSession, greetingOf, 
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
-import { botStance } from "@/lib/permission";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1380,6 +1379,9 @@ function App() {
   const [newBotOpen, setNewBotOpen] = useState(false);
   const [botToDelete, setBotToDelete] = useState<Bot | null>(null);
   const [botToEdit, setBotToEdit] = useState<Bot | null>(null);
+  // What Edit bot shows as the bot's current stance and agent: its chat's, not
+  // the composer's, which may be pointed at some other session.
+  const editChat = botToEdit ? botSession(sessionIndexItems, botToEdit) : undefined;
   // A bot clicked while the settled list was up, opened once the active side lands.
   const [botWaiting, setBotWaiting] = useState<Bot | null>(null);
   const openBot = (bot: Bot) => {
@@ -5281,6 +5283,8 @@ function App() {
       }}
       server={botServer ?? LOCAL}
       onServerChange={setBotServer}
+      harness={botToEdit ? (editChat?.harness ?? harness) : harness}
+      defaultPermissionMode={botToEdit ? (editChat?.permissionMode ?? "auto") : permissionMode}
       picker={
         <ModelSelector
           server={activeServer}
@@ -5305,7 +5309,6 @@ function App() {
         harness,
         model: modelId,
         effort,
-        permissionMode: botStance(harness, permissionMode),
         fast,
       }}
       onStarted={(chat) => goToSession(() => void handleSelectSessionIndexItem(chat.sessionId))}
