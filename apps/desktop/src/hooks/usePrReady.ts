@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { type NoticeKind, pushNotice } from "@/hooks/useNotices";
 import { readyToMerge, readyTransitions, sessionBranch } from "@/lib/pr";
+import { viewedElsewhere } from "@/lib/presence";
 import { playNotification } from "@/lib/sound";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
@@ -70,7 +71,7 @@ export function usePrReady({ sessions, prFor, canAnnounce }: Args) {
       if (!canAnnounce(sessionId, "pr")) continue;
       // The sound is the half that carries when the reader's eyes are on the
       // middle of the window, or on another app entirely.
-      playNotification();
+      void viewedElsewhere(sessionId).then((held) => held || playNotification());
       pushNotice({
         sessionId,
         kind: "pr",
