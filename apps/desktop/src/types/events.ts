@@ -1559,7 +1559,13 @@ ask?: boolean,
 /**
  * The answer to an `--ask`, passed back by Dray. Needs no answer itself.
  */
-reply?: boolean, };
+reply?: boolean, 
+/**
+ * The id of the report from a task on another machine that this message
+ * delivers (#958). Logged, so the bot's server finds it here before it
+ * acks the report, which is what makes delivery exactly once.
+ */
+report?: string, };
 
 export type Model = { 
 /**

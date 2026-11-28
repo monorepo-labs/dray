@@ -245,6 +245,12 @@ impl Outbox {
     }
 }
 
+/// What a bot chat's log holds once report `id` is in it: the delivering
+/// message's `MessageSender::report`, as serde writes it.
+fn report_mark(id: &str) -> String {
+    format!("\"report\":\"{id}\"")
+}
+
 /// The videos and screenshots a report names: what the chat draws inline
 /// (`RECORDING` and `SCREENSHOT` in Markdown.tsx), a `.mp4`, `.png` or `.jpg`
 /// one folder under a `browser/recordings` or `browser-dev/recordings`. Each
@@ -280,15 +286,18 @@ mod collect {
     use std::{
         collections::HashMap,
         path::Path,
+        sync::{LazyLock, Mutex},
         time::{Duration, Instant},
     };
 
     /// How often each machine with a task here is asked. A report is the bot's
     /// next move, so this is the wait the reader sees on top of the turn.
     const POLL: Duration = Duration::from_secs(10);
-    /// The longest a machine that fails to answer — a stopped sandbox — waits
-    /// between asks, so a dead one costs a login every few minutes, not every poll.
-    const BACKOFF_CAP: Duration = Duration::from_secs(300);
+    /// The longest a machine that fails to answer — a stopped sandbox, a tunnel
+    /// down — waits between asks. Also the longest a report finished during
+    /// the outage waits once the link is back: at five minutes, a four-minute
+    /// outage left the bot a further three behind.
+    const BACKOFF_CAP: Duration = Duration::from_secs(30);
     /// A proof video is short; a copy taking longer is holding up the report.
     const VIDEO_FETCH: Duration = Duration::from_secs(120);
     const MAX_FILES: usize = 3;
@@ -305,6 +314,13 @@ mod collect {
     }
 
     static TRACKED: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Reports this process handed to a bot chat that its log does not hold
+    /// yet, with the chat and how long its log was before: queued behind the
+    /// bot's turn, a prompt lives in memory alone, so it is never handed twice
+    /// here and acked only once logged. A restart empties this and that queue
+    /// alike, so a report in neither is handed again.
+    static HANDED: LazyLock<Mutex<HashMap<String, (String, u64)>>> = LazyLock::new(Default::default);
 
     async fn tracked_path() -> anyhow::Result<PathBuf> {
         Ok(store::get_home_app_dir().await?.join("remote-tasks.json"))
@@ -507,12 +523,33 @@ mod collect {
             Some(async move {
                 let mut acked = Vec::new();
                 for report in reports {
+                    let handed = HANDED.lock().unwrap().get(&report.id).cloned();
+                    let found = match &handed {
+                        Some((chat, from)) => logged(chat, &report.id, *from).await,
+                        // Delivered before a restart, or before an ack lost on
+                        // the way: the log says so, whichever chat took it.
+                        None => logged(to, &report.id, 0).await || logged(&chat_of(to).await, &report.id, 0).await,
+                    };
+                    if found {
+                        HANDED.lock().unwrap().remove(&report.id);
+                        acked.push(report.id);
+                        continue;
+                    }
+                    if handed.is_some() {
+                        continue;
+                    }
                     // Into the chat this server tracked the task under, never
                     // one the answer names: that machine holds no token here,
                     // so it must not pick which chat runs a turn.
                     let text = fetch_proof(saved, to, &report.text).await;
+                    let chat = chat_of(to).await;
+                    let from = log_len(&chat).await;
                     if deliver(&report, text, to, &saved.name, app).await {
-                        acked.push(report.id);
+                        if logged(&chat, &report.id, from).await {
+                            acked.push(report.id);
+                        } else {
+                            HANDED.lock().unwrap().insert(report.id, (chat, from));
+                        }
                     }
                 }
                 acked
@@ -521,8 +558,7 @@ mod collect {
         let mut acked: Vec<String> = futures_util::future::join_all(runs).await.into_iter().flatten().collect();
         acked.extend(acked_acts);
         if !acked.is_empty() {
-            // Lost, the reports come again next poll: a bot reading
-            // one twice beats a bot never reading it.
+            // Lost, the reports come again next poll, and are found logged.
             if let Err(e) = ask(saved, &[], &acked, &[]).await {
                 eprintln!("[remote reports ack err] {}: {e}", saved.name);
             }
@@ -538,10 +574,53 @@ mod collect {
         serde_json::from_value(answer).map_err(|e| e.to_string())
     }
 
+    /// The chat a send to `parent` lands in, which a bot's Start fresh moves on.
+    async fn chat_of(parent: &str) -> String {
+        match store::get_session_index_item(parent).await.ok().flatten() {
+            Some(item) => crate::bots::current_chat(item).await.session_id,
+            None => parent.to_string(),
+        }
+    }
+
+    async fn log_path(session: &str) -> Option<PathBuf> {
+        Some(store::get_sessions_dir().await.ok()?.join(format!("{session}.jsonl")))
+    }
+
+    async fn log_len(session: &str) -> u64 {
+        let Some(path) = log_path(session).await else { return 0 };
+        tokio::fs::metadata(path).await.map_or(0, |m| m.len())
+    }
+
+    /// Whether `session`'s log, from byte `from` on, holds the message that
+    /// delivered report `id` (`MessageSender::report`).
+    async fn logged(session: &str, id: &str, from: u64) -> bool {
+        let Some(path) = log_path(session).await else { return false };
+        let needle = report_mark(id);
+        let read = tokio::task::spawn_blocking(move || -> std::io::Result<bool> {
+            use std::io::{Read, Seek, SeekFrom};
+            let mut file = match std::fs::File::open(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                file => file?,
+            };
+            file.seek(SeekFrom::Start(from))?;
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            Ok(memchr::memmem::find(&bytes, needle.as_bytes()).is_some())
+        });
+        match read.await {
+            Ok(Ok(found)) => found,
+            Ok(Err(e)) => {
+                eprintln!("[remote reports log err] {session}: {e}");
+                false
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Into the bot's chat `parent`, the way a local task's report goes, named
     /// as the task on `machine` so the bot can message it back with
-    /// `dray session send`. False where the send failed, so the report is not
-    /// acked and comes again next poll.
+    /// `dray session send`. False where the send failed, so the report comes
+    /// again next poll.
     async fn deliver(report: &Report, text: String, parent: &str, machine: &str, app: &Sink) -> bool {
         let from = MessageSender {
             session_id: report.child.clone(),
@@ -549,6 +628,7 @@ mod collect {
             machine: Some(machine.to_string()),
             bot_id: None,
             routine: None,
+            report: Some(report.id.clone()),
             ..Default::default()
         };
         let sent = crate::orchestration::deliver_report(parent.to_string(), text, from, app.clone());
@@ -758,6 +838,17 @@ mod tests {
         // A settled bot chat takes no more.
         outbox.take(&[], &[], &["b".into()], &[]);
         assert!(outbox.acts.is_empty());
+    }
+
+    /// The collector finds a delivered report by this mark in the log line, so
+    /// a rename or a change of casing would deliver every report again.
+    #[test]
+    fn a_delivered_report_is_marked_in_its_log_line() {
+        let from = crate::events::MessageSender { session_id: "a".into(), report: Some("r1".into()), ..Default::default() };
+        let line = serde_json::to_string(&from).unwrap();
+        assert!(line.contains(&report_mark("r1")), "{line}");
+        let plain = serde_json::to_string(&crate::events::MessageSender::default()).unwrap();
+        assert!(!plain.contains("report"), "{plain}");
     }
 
     #[test]
