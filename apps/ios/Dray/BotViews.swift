@@ -231,9 +231,17 @@ struct ReplyBubble: View {
     var reaction: String? = nil
     /// Takes the reader's pick. Nil where nothing reacts: a settled chat, a reply quoted in a sheet.
     var react: ((String) -> Void)? = nil
+    @State private var viewing: Gallery?
 
     var body: some View {
         MarkdownText(text: text, selectable: react == nil)
+            // A picture opens among this reply's own, never the whole chat's.
+            .environment(\.openImage) { ref in
+                let shots = messageShots(text)
+                guard let i = shots.firstIndex(where: { $0.ref == ref }) else { return }
+                instantly { viewing = Gallery(shots: shots, start: i) }
+            }
+            .imageViewer($viewing)
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, 10)
             .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
@@ -1074,8 +1082,6 @@ struct BotReplySheet: View {
                 .padding(Theme.Space.l)
             }
             .environment(\.imageServer, store.connection(chat.server))
-            // The bot chat's viewer pages its own turn; a picture here opens on its own.
-            .environment(\.openImage, nil)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }

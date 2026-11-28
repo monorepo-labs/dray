@@ -50,6 +50,54 @@ final class ImageViewerTests: XCTestCase {
         snap(app, "closed")
     }
 
+    /// #1714: a bot whose reply holds four pictures, then a reply holding one. A tap pages
+    /// the reply's own, opened on the one tapped; the lone one opens alone.
+    ///   TEST_RUNNER_DRAY_BOT=<bot title>, with the URL and token above.
+    func testBotReplyPages() throws {
+        guard let bot = env["DRAY_BOT"] else { throw XCTSkip("set TEST_RUNNER_DRAY_BOT") }
+        let app = try pair()
+        let row = labelled(app, bot)
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "no bot listed")
+        row.tap()
+        let opens = app.buttons.matching(identifier: "Open image")
+        XCTAssertTrue(opens.element(boundBy: 4).waitForExistence(timeout: 15), "the chat drew fewer than five images")
+        sleep(2)
+        snap(app, "chat")
+        func inOrder() -> [XCUIElement] { opens.allElementsBoundByIndex.sorted { $0.frame.midY < $1.frame.midY } }
+        inOrder()[2].tap()
+
+        let close = app.buttons["Close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "the viewer didn't open")
+        XCTAssertTrue(app.staticTexts["3 of 4"].waitForExistence(timeout: 5), "didn't open on the third of four")
+        sleep(1)
+        snap(app, "third")
+        app.descendants(matching: .any)["image-pager"].swipeLeft()
+        XCTAssertTrue(app.staticTexts["4 of 4"].waitForExistence(timeout: 5), "swiping didn't page")
+        sleep(1)
+        app.buttons["Image 1 of 4"].tap()
+        XCTAssertTrue(app.staticTexts["1 of 4"].waitForExistence(timeout: 5), "the strip didn't jump")
+        sleep(1)
+        snap(app, "first")
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+        sleep(1)
+
+        // The viewer opened on a picture scrolled up from the end, so the lone one sits below the fold.
+        let lone = inOrder()[4]
+        // Its centre still reads hittable under the dock, so scroll to the end regardless.
+        app.scrollViews.firstMatch.swipeUp()
+        app.scrollViews.firstMatch.swipeUp()
+        sleep(1)
+        lone.tap()
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "the lone image didn't open")
+        sleep(1)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH ' of 1'")).firstMatch.exists, "a lone image counts pages")
+        XCTAssertFalse(app.buttons["Image 1 of 1"].exists, "a lone image draws a strip")
+        snap(app, "alone")
+        close.tap()
+        XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+    }
+
     /// Shows a page whose picture the server can't send, for the failure state.
     func testFailure() throws {
         let app = try pair()
