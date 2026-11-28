@@ -115,12 +115,11 @@ export const NEXT_RELEASE: Highlight[] = [
   ),
   // For the release that turns Dray's own relay on for every server (#1669):
   // each server's Remote access address changes, so phones and other Macs
-  // must pair again. No picture yet. It would show This Mac's row in
-  // Settings → Servers with its new pairing QR, an iPhone scanning it beside.
+  // must pair again. WhatsNewPage draws the title alone, so it says both.
   page(
-    "Remote access is faster now. Reconnect your servers.",
-    "Your servers now go through Dray's own relay, which reconnects faster after a drop. Each server has a new address, so scan its pairing code again on your phone, and add it again on your other Macs.",
-    [],
+    "Remote access is faster. Pair your phone and other Macs again.",
+    "Your servers now reach your phone through Dray's own relay, which reconnects faster after a drop. Each server has a new address, so scan its pairing code again on your phone, and add it again on your other Macs.",
+    [{ kind: "image", url: "/demo/whats-new/relay-pair.png", alt: "Settings → Servers with Pair a phone open, an iPhone scanning its code" }],
     { label: "Open Servers settings", target: "settings/servers" },
   ),
 ];

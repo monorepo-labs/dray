@@ -466,8 +466,9 @@ function Alert({ title, body, mark }: { title: string; body: string; mark: strin
 
 /// An iPhone 16 Pro Max drawn to its own proportions (a 440×956pt screen,
 /// 62pt corners, the Dynamic Island 126×37pt at 11pt), titanium rim and side
-/// buttons, bleeding off the tile's foot, a real screenshot on its screen.
-function RealPhone({ left, width = 150, src }: { left: number; width?: number; src: string }) {
+/// buttons, bleeding off the tile's foot, a real screenshot on its screen, or
+/// a screen drawn as `children`.
+function RealPhone({ left, width = 150, src, children }: { left: number; width?: number; src?: string; children?: ReactNode }) {
   const pt = (width - 10) / 440;
   const radius = 62 * pt;
   const button = (side: "left" | "right", top: number, height: number) => (
@@ -489,7 +490,7 @@ function RealPhone({ left, width = 150, src }: { left: number; width?: number; s
       >
         <div className="h-full bg-black p-[3.5px]" style={{ borderRadius: radius + 3.5 }}>
           <div className="relative h-full overflow-hidden bg-black" style={{ borderRadius: radius }}>
-            <img src={src} alt="" className="absolute inset-0 size-full object-cover object-top" />
+            {src ? <img src={src} alt="" className="absolute inset-0 size-full object-cover object-top" /> : children}
             <span
               className="absolute left-1/2 -translate-x-1/2 rounded-full bg-black"
               style={{ top: 11 * pt, width: 126 * pt, height: 37 * pt }}
@@ -541,7 +542,69 @@ function IPhoneQuestion() {
   );
 }
 
+/// Settings → Servers as the Mac shows it with Pair a phone open, a real
+/// capture in the Dray theme: Remote access on through the relay. Its token
+/// was rotated after the capture and its address answers nothing, so the code
+/// pairs with no server. The QR is the same capture's code, cut out.
+const PAIR_SHOT = "/demo/whats-new/relay-pair-mac.png";
+const PAIR_QR = "/demo/whats-new/relay-pair-qr.png";
+
+/// The iPhone app's own scanner (`PairScanner` in apps/ios/Dray/Pairing.swift)
+/// with the Mac's code in its viewfinder: the title bar, four rounded
+/// corners, the prompt, the camera's picture behind. Drawn, since no
+/// simulator here has a camera to point.
+function PairScanner() {
+  const corner = (rotate: number, at: string) => (
+    <svg viewBox="0 0 24 24" className={cn("absolute size-[22px]", at)} style={{ rotate: `${rotate}deg` }}>
+      <path d="M2.5 13V10a7.5 7.5 0 0 1 7.5-7.5h3" fill="none" stroke="#FFFFFF" strokeWidth="2.6" strokeLinecap="round" />
+    </svg>
+  );
+  return (
+    <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_40%,#55555A_0%,#2A2A2D_55%,#121213_100%)]">
+      <div className="relative flex h-[40px] items-end px-2.5 pb-1.5 text-[6.5px] text-white">
+        <span>Cancel</span>
+        <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2 font-semibold">Scan QR code</span>
+      </div>
+      <div className="relative mx-auto mt-7 size-[92px]">
+        <img src={PAIR_QR} alt="" className="absolute inset-[14px] size-[64px] rotate-[-4deg] shadow-[0_4px_14px_#00000090]" />
+        {corner(0, "top-0 left-0")}
+        {corner(90, "top-0 right-0")}
+        {corner(180, "right-0 bottom-0")}
+        {corner(270, "bottom-0 left-0")}
+      </div>
+      <p className="mt-4 text-center text-[9px] font-medium text-white">Point at the pairing code</p>
+    </div>
+  );
+}
+
+/// Settings → Servers with Pair a phone open, and the phone scanning that
+/// very code: what a reader does once per server after the switch to the
+/// relay (#1669).
+function RelayPair() {
+  return (
+    <div aria-hidden className="absolute inset-0">
+      <img
+        src={PAIR_SHOT}
+        alt=""
+        className={cn(
+          "absolute top-[32px] left-[18px] w-[226px]",
+          WHITE ? "shadow-[0_0_0_1px_#00000014,0_12px_28px_#00000026]" : "shadow-[0_16px_36px_#000000B0]",
+        )}
+      />
+      <RealPhone left={254} width={132}>
+        <PairScanner />
+      </RealPhone>
+    </div>
+  );
+}
+
 const ROWS: { title: string; takes: Record<string, { name: string; Art: () => ReactNode }> }[] = [
+  {
+    title: "Reconnect your servers (the relay)",
+    takes: {
+      "relay-pair": { name: "A · Pair again from Settings → Servers", Art: RelayPair },
+    },
+  },
   {
     title: "Switch a task's harness mid-session",
     takes: {

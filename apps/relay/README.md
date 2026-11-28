@@ -113,6 +113,29 @@ on`), or restart the server. The address changes, so pair the phone again.
 Deleting the file and toggling again goes back to opentunnel. Deleting
 `<DRAY_HOME>/relay/` gives the server a new id, and new addresses.
 
+## Switching everyone over
+
+The release that makes the relay the default changes every server's address,
+so it tells readers to pair again with a full-window highlight. Its entry for
+CHANGELOG.md, under that release's `### New`, ready to paste (it stays out of
+the file until then, since the site publishes whatever is there):
+
+```markdown
+- **Remote access is faster. Pair your phone and other Macs again.** Your
+  servers now reach your phone through Dray's own relay, which reconnects
+  faster after a drop. Each server has a new address, so scan its pairing
+  code again on your phone, and add it again on your other Macs.
+  ![](changelog/relay-pair.png)
+  <!-- highlight: desktop · action: Open Servers settings → settings/servers -->
+```
+
+Copy `apps/desktop/demo/whats-new/relay-pair-white.png` to
+`apps/web/public/changelog/relay-pair.png`: What's New draws white cards. The
+page shows the title and the action alone, so the title carries the whole
+message. The picture is drawn in
+[whatsNewIllustrations.tsx](../desktop/src/demo/whatsNewIllustrations.tsx)
+(`?art=relay-pair`), the Mac half a real capture of Settings → Servers.
+
 ## Deploy on Railway
 
 Nothing here is created yet; this is the list.
