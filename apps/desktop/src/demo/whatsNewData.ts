@@ -119,7 +119,7 @@ export const NEXT_RELEASE: Highlight[] = [
   page(
     "Remote access is faster. Pair your phone and other Macs again.",
     "Your servers now reach your phone through Dray's own relay, which reconnects faster after a drop. Each server has a new address, so scan its pairing code again on your phone, and add it again on your other Macs.",
-    [{ kind: "image", url: "/demo/whats-new/relay-pair.png", alt: "Settings → Servers with Pair a phone open, an iPhone scanning its code" }],
+    [{ kind: "image", url: "/demo/whats-new/relay-pair.png", alt: "A server's card with Remote access on and a new relay address, beside its pairing code: Scan to reconnect" }],
     { label: "Open Servers settings", target: "settings/servers" },
   ),
 ];

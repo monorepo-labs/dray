@@ -466,9 +466,8 @@ function Alert({ title, body, mark }: { title: string; body: string; mark: strin
 
 /// An iPhone 16 Pro Max drawn to its own proportions (a 440×956pt screen,
 /// 62pt corners, the Dynamic Island 126×37pt at 11pt), titanium rim and side
-/// buttons, bleeding off the tile's foot, a real screenshot on its screen, or
-/// a screen drawn as `children`.
-function RealPhone({ left, width = 150, src, children }: { left: number; width?: number; src?: string; children?: ReactNode }) {
+/// buttons, bleeding off the tile's foot, a real screenshot on its screen.
+function RealPhone({ left, width = 150, src }: { left: number; width?: number; src: string }) {
   const pt = (width - 10) / 440;
   const radius = 62 * pt;
   const button = (side: "left" | "right", top: number, height: number) => (
@@ -490,7 +489,7 @@ function RealPhone({ left, width = 150, src, children }: { left: number; width?:
       >
         <div className="h-full bg-black p-[3.5px]" style={{ borderRadius: radius + 3.5 }}>
           <div className="relative h-full overflow-hidden bg-black" style={{ borderRadius: radius }}>
-            {src ? <img src={src} alt="" className="absolute inset-0 size-full object-cover object-top" /> : children}
+            <img src={src} alt="" className="absolute inset-0 size-full object-cover object-top" />
             <span
               className="absolute left-1/2 -translate-x-1/2 rounded-full bg-black"
               style={{ top: 11 * pt, width: 126 * pt, height: 37 * pt }}
@@ -542,58 +541,70 @@ function IPhoneQuestion() {
   );
 }
 
-/// Settings → Servers as the Mac shows it with Pair a phone open, a real
-/// capture in the Dray theme: Remote access on through the relay. Its token
-/// was rotated after the capture and its address answers nothing, so the code
-/// pairs with no server. The QR is the same capture's code, cut out.
-const PAIR_SHOT = "/demo/whats-new/relay-pair-mac.png";
-const PAIR_QR = "/demo/whats-new/relay-pair-qr.png";
-
-/// The iPhone app's own scanner (`PairScanner` in apps/ios/Dray/Pairing.swift)
-/// with the Mac's code in its viewfinder: the title bar, four rounded
-/// corners, the prompt, the camera's picture behind. Drawn, since no
-/// simulator here has a camera to point.
-function PairScanner() {
-  const corner = (rotate: number, at: string) => (
-    <svg viewBox="0 0 24 24" className={cn("absolute size-[22px]", at)} style={{ rotate: `${rotate}deg` }}>
-      <path d="M2.5 13V10a7.5 7.5 0 0 1 7.5-7.5h3" fill="none" stroke="#FFFFFF" strokeWidth="2.6" strokeLinecap="round" />
-    </svg>
-  );
+/// A QR code's look without being one: the three finder squares and modules
+/// from a fixed seed, so the picture pairs with nothing when scanned.
+function PairBlock({ size }: { size: number }) {
+  const n = 25;
+  let seed = 1669;
+  const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const inFinder = (x: number, y: number) => (x < 8 || x >= n - 8) && (y < 8 || (y >= n - 8 && x < 8)) && !(x >= n - 8 && y >= 8);
+  const finderOn = (x: number, y: number) => {
+    const fx = x < 8 ? x : x - (n - 7);
+    const fy = y < 8 ? y : y - (n - 7);
+    if (fx < 0 || fy < 0 || fx > 6 || fy > 6) return false;
+    return fx === 0 || fx === 6 || fy === 0 || fy === 6 || (fx >= 2 && fx <= 4 && fy >= 2 && fy <= 4);
+  };
+  let d = "";
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      if (inFinder(x, y) ? finderOn(x, y) : next() < 0.48) d += `M${x + 2} ${y + 2}h1v1h-1z`;
+    }
+  }
   return (
-    <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_40%,#55555A_0%,#2A2A2D_55%,#121213_100%)]">
-      <div className="relative flex h-[40px] items-end px-2.5 pb-1.5 text-[6.5px] text-white">
-        <span>Cancel</span>
-        <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2 font-semibold">Scan QR code</span>
-      </div>
-      <div className="relative mx-auto mt-7 size-[92px]">
-        <img src={PAIR_QR} alt="" className="absolute inset-[14px] size-[64px] rotate-[-4deg] shadow-[0_4px_14px_#00000090]" />
-        {corner(0, "top-0 left-0")}
-        {corner(90, "top-0 right-0")}
-        {corner(180, "right-0 bottom-0")}
-        {corner(270, "bottom-0 left-0")}
-      </div>
-      <p className="mt-4 text-center text-[9px] font-medium text-white">Point at the pairing code</p>
-    </div>
+    <svg width={size} height={size} viewBox={`0 0 ${n + 4} ${n + 4}`} shapeRendering="crispEdges" className="shrink-0">
+      <rect width={n + 4} height={n + 4} fill="#FFFFFF" />
+      <path d={d} fill="#0A0A0A" />
+    </svg>
   );
 }
 
-/// Settings → Servers with Pair a phone open, and the phone scanning that
-/// very code: what a reader does once per server after the switch to the
-/// relay (#1669).
+/// A server after the switch to the relay (#1669): its card with Remote
+/// access on and the new address, beside its pairing code, which phones and
+/// other Macs scan once to reconnect. Drawn the way `HarnessComposer` is:
+/// square cards 2px apart on the panel, mono labels, blue on the one thing to
+/// do.
 function RelayPair() {
+  const light = WHITE;
+  const card = light ? "bg-white shadow-[0_0_0_1px_#0000001A]" : "bg-[#141414]";
+  const dim = light ? "text-[#71717A]" : "text-[#8A8A8A]";
+  const ink = light ? "text-[#0A0A0A]" : "text-white";
+  const row = (label: string, value: ReactNode) => (
+    <div className="flex items-center justify-between gap-3">
+      <span className={cn(MONO, "text-[9px] leading-3", dim)}>{label}</span>
+      {value}
+    </div>
+  );
   return (
-    <div aria-hidden className="absolute inset-0">
-      <img
-        src={PAIR_SHOT}
-        alt=""
-        className={cn(
-          "absolute top-[32px] left-[18px] w-[226px]",
-          WHITE ? "shadow-[0_0_0_1px_#00000014,0_12px_28px_#00000026]" : "shadow-[0_16px_36px_#000000B0]",
-        )}
-      />
-      <RealPhone left={254} width={132}>
-        <PairScanner />
-      </RealPhone>
+    <div aria-hidden className={cn("flex w-[300px] gap-[2px] p-2", PANEL(light))}>
+      <div className={cn("flex min-w-0 flex-1 flex-col justify-between gap-3 p-3", card)}>
+        <div className="flex flex-col gap-1">
+          <span className={cn(MONO, "text-[9px] leading-3", dim)}>Server</span>
+          <span className={cn(MONO, "text-[13px] leading-4", ink)}>MacBook Pro</span>
+        </div>
+        <div className="flex flex-col gap-2">
+          {row("Remote access", <span className={cn(MONO, "text-[9px] leading-3", ink)}>On</span>)}
+          {row("Address", <span className={cn(MONO, "text-[9px] leading-3", dim)}>New</span>)}
+          <div className={cn("flex h-6 items-center border px-2", light ? "border-[#0000001A]" : "border-[#333333]")}>
+            <span className={cn(MONO, "truncate text-[9px] leading-3", ink)}>r7f2c.relay.drayhq.com</span>
+          </div>
+        </div>
+      </div>
+      <div className={cn("flex w-[124px] shrink-0 flex-col items-center gap-2.5 p-3", card)}>
+        <PairBlock size={94} />
+        <span className={`${MONO} flex h-5 w-full items-center justify-center text-[9px] leading-3 whitespace-nowrap text-white`} style={{ background: BLUE }}>
+          Scan to reconnect
+        </span>
+      </div>
     </div>
   );
 }
@@ -602,7 +613,7 @@ const ROWS: { title: string; takes: Record<string, { name: string; Art: () => Re
   {
     title: "Reconnect your servers (the relay)",
     takes: {
-      "relay-pair": { name: "A · Pair again from Settings → Servers", Art: RelayPair },
+      "relay-pair": { name: "A · The server and its code", Art: RelayPair },
     },
   },
   {
