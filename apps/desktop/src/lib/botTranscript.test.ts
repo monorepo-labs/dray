@@ -129,6 +129,44 @@ describe("botItems", () => {
     expect(sentMessages(`dray bot send Ops --ask "is CI green?"`)).toEqual([{ target: "Ops", text: "is CI green?", bot: true }]);
   });
 
+  it("reads a send past its options, wherever they sit", () => {
+    const sent = [{ target: "abc12345", text: "hi there" }];
+    // A task on another machine is reached with `--machine`, before or after the target.
+    expect(sentMessages(`dray session send --machine vps abc12345 "hi there"`)).toEqual(sent);
+    expect(sentMessages(`dray session send --machine=vps abc12345 "hi there"`)).toEqual(sent);
+    expect(sentMessages(`dray session send abc12345 --machine vps "hi there"`)).toEqual(sent);
+    expect(sentMessages(`dray session send abc12345 "hi there" --machine vps`)).toEqual(sent);
+    expect(sentMessages(`dray --machine vps session send abc12345 "hi there"`)).toEqual(sent);
+    expect(sentMessages(`dray session --machine=vps send abc12345 "hi there"`)).toEqual(sent);
+    expect(sentMessages(`dray --machine "my vps" send abc12345 "hi there"`)).toEqual(sent);
+    expect(sentMessages(`dray session send --machine="my vps" abc12345 "hi there"`)).toEqual(sent);
+    expect(sentMessages(`dray session send --machine vps \\\n  abc12345 "hi there"`)).toEqual(sent);
+    expect(sentMessages(`dray session send -- abc12345 "hi there"`)).toEqual(sent);
+    // After `--` a dash is the message.
+    expect(sentMessages(`dray session send abc12345 -- --ask`)).toEqual([{ target: "abc12345", text: "--ask" }]);
+    expect(sentMessages(`dray bot send --machine vps --ask Ops "is CI green?"`)).toEqual([
+      { target: "Ops", text: "is CI green?", bot: true },
+    ]);
+    expect(sentMessages(`dray --machine vps bot send Ops --ask "is CI green?"`)).toEqual([
+      { target: "Ops", text: "is CI green?", bot: true },
+    ]);
+    // The flag's value is no target, and `--help` sends nothing.
+    expect(sentMessages(`dray session send --machine vps`)).toEqual([]);
+    expect(sentMessages(`dray session send --machine abc12345 "hi"`)).toEqual([]);
+    expect(sentMessages(`dray session send --help abc12345 "hi"`)).toEqual([]);
+    // A command ends at its line, so the next one is no message.
+    expect(sentMessages(`dray session send abc12345\nls`)).toEqual([]);
+    expect(sentMessages(`dray session send --machine vps abc12345 hi; dray session send --machine vps bbbb2222 yo`)).toEqual([
+      { target: "abc12345", text: "hi" },
+      { target: "bbbb2222", text: "yo" },
+    ]);
+  });
+
+  it("draws a send to a task on another machine", () => {
+    const items = botItems([call("m", `dray session send --machine vps ${ID} "ship it"`), result("m", "Delivered.")]);
+    expect(items).toEqual([{ kind: "sent", key: "m:0", target: ID, text: "ship it" }]);
+  });
+
   it("reads every send out of one command", () => {
     expect(sentMessages(`dray session send aaaa1111 "hello" && dray session send bbbb2222 'hello'`)).toEqual([
       { target: "aaaa1111", text: "hello" },

@@ -286,12 +286,17 @@ private fun BotRowView(key: SessionKey, row: BotRow, late: Boolean, openTask: (S
     val store = LocalStore.current
     var expanded by remember { mutableStateOf(false) }
 
-    /** The task by its index entry, or by a prefix of its id as `dray session send` takes one. */
+    /**
+     * The task by its index entry, or by a prefix of its id as `dray session send` takes one: on the
+     * bot's server first, then on any server, since a task on another machine (`--machine`) is that
+     * machine's, reached as a shared server or a paired one.
+     */
     fun task(id: String): SessionKey? {
         val exact = SessionKey(key.server, id)
         if (store.items[exact] != null) return exact
-        val hits = store.items.keys.filter { it.server == key.server && it.id.startsWith(id.lowercase()) }
-        return hits.singleOrNull()
+        val prefix = id.lowercase()
+        val hits = store.items.keys.filter { it.id.startsWith(prefix) }
+        return hits.filter { it.server == key.server }.singleOrNull() ?: hits.singleOrNull()
     }
 
     @Composable
