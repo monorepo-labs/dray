@@ -195,6 +195,7 @@ fun BotChatScreen(opened: SessionKey, bot: Bot, back: () -> Unit, openTask: (Ses
                                 MaxWidth {
                                     val events = transcript?.events.orEmpty()
                                     when {
+                                        store.checking(key) -> CheckingLine()
                                         // A review's turn draws nothing, its orb included.
                                         busy -> if (!inReviewTurn(events)) OrbLine(OrbKind.Working, currentTool(events) ?: "Working")
                                         // A bot's runs list under its tasks, as on desktop.
@@ -216,7 +217,7 @@ fun BotChatScreen(opened: SessionKey, bot: Bot, back: () -> Unit, openTask: (Ses
                             for (i in rows.indices.reversed()) item(rows[i].id) {
                                 MaxWidth { BotChatRow(key, rows, i, items, newFrom?.at, openTask, openSession) }
                             }
-                            if (transcript == null) item("placeholder") {
+                            if (transcript == null && !store.checking(key)) item("placeholder") {
                                 MaxWidth {
                                     val err = store.transcriptErrors[key]
                                     if (err != null) Text("Couldn't load this chat. ${sentence(err)}", Modifier.clickable { store.retryLoad(key) }, style = Dray.Font.subhead.copy(color = Dray.secondary))

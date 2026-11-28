@@ -311,6 +311,12 @@ fun WorkingLine() {
     OrbLine(OrbKind.Working, word)
 }
 
+/** A chat's foot while its first read since launch is out: text alone, no orb. */
+@Composable
+fun CheckingLine() {
+    Text("Checking new messages…", Modifier.shimmer(), style = Dray.Font.subhead.copy(color = Dray.secondary), maxLines = 1)
+}
+
 @Composable
 fun OrbLine(kind: OrbKind, label: String, modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
