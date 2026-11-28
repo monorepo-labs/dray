@@ -270,7 +270,7 @@ impl Model {
 ///
 /// **`fable` and `claude-fable-5` are both here on purpose, and the pair is
 /// the whole reason this list has a second tier.** An alias follows the latest
-/// model — `fable` resolves to `claude-fable-5-1` today, and to whatever ships
+/// model — `fable` resolves to `claude-fable-5-2` today, and to whatever ships
 /// next without anything here changing — which is what the top level wants and
 /// what makes a dated id wrong there. But following the latest is exactly what
 /// a reader pinning a previous generation is asking *not* to do, so pinned ids
@@ -281,7 +281,7 @@ pub fn claude_models() -> Vec<Model> {
     let all = vec![Low, Medium, High, Xhigh, Max];
 
     vec![
-        Model::new("fable", "fable", "Fable 5.1", all.clone(), Some(High)),
+        Model::new("fable", "fable", "Fable 5.2", all.clone(), Some(High)),
         // Opus alone, and that is the CLI's own rule rather than a choice here:
         // it gates fast mode on the resolved model naming `opus-5`, and reports
         // `fast_mode_state: "off"` beside a reason for anything else. Verified
@@ -720,7 +720,7 @@ mod tests {
             .map(|m| m.label)
             .collect();
 
-        assert_eq!(cycled, ["Fable 5.1", "Opus 5.5"]);
+        assert_eq!(cycled, ["Fable 5.2", "Opus 5.5"]);
     }
 
     /// The submenu is drawn in list order, so the order is the list's.

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Sliders } from "lucide-react";
 import AgentIcon, { ProviderIcon } from "@/components/AgentIcon";
 import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
-import { useAgentAvailability } from "@/hooks/useAgentAvailability";
+import { recheckMissingAgents, useAgentAvailability } from "@/hooks/useAgentAvailability";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import {
   byProvider,
@@ -461,7 +461,15 @@ export default function ModelSelector({
     );
 
   return (
-    <DropdownMenu open={open} onOpenChange={(next) => setOpen(next && !modelLocked)}>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        // The agent rows' red dots are what a reader who just installed one
+        // is looking at.
+        if (next) recheckMissingAgents(server);
+        setOpen(next && !modelLocked);
+      }}
+    >
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
