@@ -2359,6 +2359,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             crate::bots::start_bot(id, harness, model, effort, permission_mode, fast, sink).await;
         delete_bot(id: String) => crate::bots::delete_bot(id, sink).await;
         edit_bot(id: String, name: String, avatar: crate::bots::BotAvatar) => crate::bots::edit_bot(id, name, avatar, sink).await;
+        set_bot_order(places: std::collections::HashMap<String, i64>) => crate::bots::set_bot_order(places, sink).await;
         bot_learned_diff(session_id: String, commit: String, path: String) => crate::bots::bot_learned_diff(session_id, commit, path).await;
         bot_undo_learned(session_id: String, commit: String, path: String) => crate::bots::bot_undo_learned(session_id, commit, path, sink).await;
         list_routines(bot_id: String) => crate::routines::list_routines(bot_id).await;

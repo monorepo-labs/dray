@@ -4,9 +4,10 @@ import { remoteServers, subscribeServers } from "@/lib/servers";
 import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import type { Bot, BotPreview, SessionIndexItem } from "@/types/events";
 
-/// Every server's bots, held once for the app: This Mac's first, then each
-/// remote's in the server list's order. A remote's paths come back qualified,
-/// so a bot's server is `serverOfPath(bot.path)`.
+/// Every server's bots, held once for the app, in the reader's order: by each
+/// bot's `order`, then This Mac's unplaced ones, then each remote's in the
+/// server list's order. A remote's paths come back qualified, so a bot's
+/// server is `serverOfPath(bot.path)`.
 let bots: Bot[] = [];
 const byServer = new Map<ServerId, Bot[]>();
 const answered = new Set<ServerId>();
@@ -17,13 +18,48 @@ let watching = false;
 /// on but unreachable keeps its bots, drawn offline; one turned off or removed
 /// takes them with it, as it does its projects.
 function rebuild() {
-  const next = [
+  const next = inOrder([
     ...(byServer.get(LOCAL) ?? []),
     ...remoteServers().flatMap((s) => (s.on ? (byServer.get(s.id) ?? []) : [])),
-  ];
+  ]);
   if (next.length === bots.length && next.every((b, i) => b === bots[i])) return;
   bots = next;
   listeners.forEach((l) => l());
+}
+
+/// Placed bots by their `order`, then the rest as listed. The sort is stable,
+/// so a tie or a new bot keeps the server order it came in.
+export function inOrder(list: readonly Bot[]): Bot[] {
+  const at = (b: Bot) => b.order ?? Number.MAX_SAFE_INTEGER;
+  return [...list].sort((a, b) => at(a) - at(b));
+}
+
+/// Every bot's place once `bot` sits at `to` in `list`.
+export function placesAfterMove(list: readonly Bot[], bot: Bot, to: number): Map<string, number> {
+  const next = list.filter((b) => b.id !== bot.id);
+  next.splice(to, 0, bot);
+  return new Map(next.map((b, i) => [b.id, i]));
+}
+
+/// The sidebar's drag: moves `bot` to `to` and tells each server whose bots
+/// moved where they sit now. The order lives on the bots' own servers, which
+/// every client already reads, so a phone shows it too (#1670). Drawn at
+/// once; a server that refuses is read again, which puts its bots back.
+export async function moveBot(bot: Bot, to: number): Promise<void> {
+  const places = placesAfterMove(bots, bot, to);
+  const writes: [ServerId, Record<string, number>][] = [];
+  for (const [server, list] of byServer) {
+    const moved = list.filter((b) => places.has(b.id) && b.order !== places.get(b.id));
+    if (moved.length === 0) continue;
+    writes.push([server, Object.fromEntries(moved.map((b) => [b.id, places.get(b.id)!]))]);
+    byServer.set(server, list.map((b) => (moved.includes(b) ? { ...b, order: places.get(b.id) } : b)));
+  }
+  rebuild();
+  await Promise.all(
+    writes.map(([server, at]) =>
+      invoke("set_bot_order", { places: at }, server).catch(() => refreshBots(server)),
+    ),
+  );
 }
 
 /// Reads `server`'s list again, after a write or on its connect.
