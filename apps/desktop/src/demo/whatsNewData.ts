@@ -93,7 +93,7 @@ export const PAGE_HIGHLIGHTS: Highlight[] = [
   ),
 ];
 
-/// The next release's three highlights, on the picked take of each. Their
+/// The next release's highlights, on the picked take of each. Their
 /// pictures are drawn in code ([whatsNewIllustrations.tsx](whatsNewIllustrations.tsx))
 /// and captured at 2560×1440; for the release itself they move to
 /// apps/web/public/changelog/.
@@ -112,6 +112,16 @@ export const NEXT_RELEASE: Highlight[] = [
     "OpenCode is now in Dray.",
     "Pick OpenCode in the composer and run it like any other agent, with your own models and providers.",
     [{ kind: "image", url: "/demo/whats-new/opencode-logo.png", alt: "The OpenCode logo" }],
+  ),
+  // For the release that turns Dray's own relay on for every server (#1669):
+  // each server's Remote access address changes, so phones and other Macs
+  // must pair again. No picture yet. It would show This Mac's row in
+  // Settings → Servers with its new pairing QR, an iPhone scanning it beside.
+  page(
+    "Remote access is faster now. Reconnect your servers.",
+    "Your servers now go through Dray's own relay, which reconnects faster after a drop. Each server has a new address, so scan its pairing code again on your phone, and add it again on your other Macs.",
+    [],
+    { label: "Open Servers settings", target: "settings/servers" },
   ),
 ];
 
