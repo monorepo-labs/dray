@@ -78,6 +78,10 @@ final class Connection {
     private var generation = 0
     private var retry: Double = 1
     private var nextId = 1
+    /// Pings sent, the newest one ponged, and the newest one a frame came in after.
+    private var pinged = 0
+    private var ponged = 0
+    private var framed = 0
     private var waiting: [Int: CheckedContinuation<Data, Error>] = [:]
 
     init(serverId: UUID, url: String, token: String) {
@@ -88,13 +92,16 @@ final class Connection {
 
     /// Reconnects unless already connected. Called on launch and whenever the
     /// app comes back to the front, since iOS drops sockets in the background.
+    /// One that reads connected is pinged: the server can have dropped it while
+    /// the phone slept, leaving this side open and silent, and the reconnect is
+    /// what re-reads the index and every open transcript.
     func resume() {
-        if !connected && !stopped { connect() }
+        if connected { probe(within: .seconds(5), frames: false) } else if !stopped { connect() }
     }
 
     /// Connects now, whatever it was waiting on.
     func retryNow() {
-        if !connected { connect() }
+        if connected { probe(within: .seconds(5), frames: false) } else { connect() }
     }
 
     /// For a refused token: the next connect sends this one.
@@ -158,6 +165,7 @@ final class Connection {
             while true {
                 let data = try await receive(t)
                 guard gen == generation else { return }
+                framed = pinged
                 route(data)
             }
         } catch {
@@ -177,14 +185,33 @@ final class Connection {
         }
     }
 
-    /// Keeps the tunnel from idling the socket out, and finds a dead one: a
-    /// failed ping cancels the task, which ends the receive loop and reconnects.
+    /// Keeps the tunnel from idling the socket out, and finds a dead one.
     private func ping(_ t: URLSessionWebSocketTask, _ gen: Int) async {
         while gen == generation {
             try? await Task.sleep(for: .seconds(25))
-            if gen == generation {
-                t.sendPing { error in if error != nil { t.cancel(with: .goingAway, reason: nil) } }
+            if gen == generation { probe(within: .seconds(15), frames: true) }
+        }
+    }
+
+    /// Pings, and cancels the task where no pong comes back in time, which ends the
+    /// receive loop and reconnects. A socket whose far end is gone without a close
+    /// never fails the ping: its pong just never comes. `frames` lets any frame
+    /// answer instead, for a pong queued behind a long tail on a slow link; never
+    /// back from the background, where frames the OS held all night arrive first.
+    private func probe(within: Duration, frames: Bool) {
+        guard let t = task else { return }
+        let gen = generation
+        pinged += 1
+        let n = pinged
+        t.sendPing { error in
+            Task { @MainActor in
+                guard gen == self.generation else { return }
+                if error == nil { self.ponged = max(self.ponged, n) } else { t.cancel(with: .goingAway, reason: nil) }
             }
+        }
+        Task {
+            try? await Task.sleep(for: within)
+            if gen == generation && connected && max(ponged, frames ? framed : 0) < n { t.cancel(with: .goingAway, reason: nil) }
         }
     }
 

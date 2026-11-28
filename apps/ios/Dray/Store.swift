@@ -374,7 +374,8 @@ final class Store {
         servers.first { $0.id == server }?.name ?? "Server"
     }
 
-    /// iOS drops sockets once the app leaves the screen; coming back reconnects.
+    /// iOS drops sockets once the app leaves the screen; coming back reconnects,
+    /// and pings one still reading connected, which may be dead without knowing it.
     /// `now` also asks servers that stopped, as a Retry does.
     func resume(now: Bool = false) {
         // Back from the background every socket is down; each gets a fresh grace
