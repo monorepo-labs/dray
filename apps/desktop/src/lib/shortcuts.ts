@@ -36,11 +36,16 @@ export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Compo
 /// `tab.reopen` and `worktree.toggle` share ⌘⇧T on the same terms: the tab row
 /// is mounted only with a session up, the toggle only on the new-task composer.
 ///
+/// `mention.kind` and `model.next` share ⇧Tab on different terms: both are on
+/// screen, but the composer's own key handler takes the chord and stops it
+/// while the `#` menu is open, so `model.next`'s document listener never sees it.
+///
 /// [`PageSearch`]: ../components/PageSearch.tsx
 export const SHARED_CHORDS: [string, string][] = [
   ["issues.search", "composer.fast"],
   ["doc.save", "composer.draft"],
   ["tab.reopen", "worktree.toggle"],
+  ["mention.kind", "model.next"],
 ];
 
 /// Whether these two ids are the documented exception above.
@@ -96,6 +101,7 @@ export const SHORTCUTS = [
   { id: "dictate", label: "Dictate", group: "Composer", chord: k("d") },
   { id: "attach", label: "Attach files", group: "Composer", chord: k("o", { alt: true }) },
   { id: "model.next", label: "Next model", group: "Composer", chord: k("Tab", { meta: false, shift: true }) },
+  { id: "mention.kind", label: "Switch issues and pull requests in the # menu", group: "Composer", chord: k("Tab", { meta: false, shift: true }) },
   { id: "effort.next", label: "Next effort level", group: "Composer", chord: k("e", { shift: true }) },
   { id: "composer.fast", label: "Toggle fast mode", group: "Composer", chord: k("f", { shift: true }) },
   { id: "harness.next", label: "Next agent", group: "Composer", chord: k("a", { shift: true }) },
@@ -141,6 +147,7 @@ export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   "mode.toggle": null,
   "agent.update": null,
   "server.next": null,
+  "mention.kind": null,
   // Was ⌘⇧I; ⌘P was free in the app and the menu bar.
   "pulls.open": k("i", { shift: true }),
 };
