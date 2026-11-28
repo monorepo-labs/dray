@@ -27,6 +27,32 @@ reads:
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 
+## 0.36.6 · 2026-11-28
+
+### New
+
+- **Bots get the permission picker.** A bot's chat has the same Bypass,
+  Ask every time, Plan and Auto picker as a task. Routines and a bot's
+  tasks always start on Auto, and a task can't start looser than the
+  session that starts it. `dray session new` and `dray draft new` take
+  `--permission-mode`.
+- `dray secret cancel` lets an agent withdraw a secret request it made.
+
+### Improved
+
+- Reorder bots in the sidebar with a plain click and drag, no hold.
+- Clicking an image in an agent's reply opens the viewer with all of
+  that reply's images and videos.
+- The # menu shows the Shift Tab shortcut beside the Issues/PRs switch,
+  and you can change it in Settings → Shortcuts.
+
+### Fixed
+
+- Servers say "You're offline" when your own network is down, and
+  reconnect at once when it's back.
+- Reports from tasks on other machines arrive within about 30 seconds
+  after a dropped link, and exactly once.
+
 ## 0.36.5 · 2026-11-28
 
 ### New
