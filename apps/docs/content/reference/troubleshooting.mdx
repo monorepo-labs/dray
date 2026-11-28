@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Fixes for common problems — a missing or logged-out agent, a stuck session, a dead permission card, a refused dray command, silent dictation, missing notifications, gh, worktrees, rate limits — and where the logs are.
+description: Fixes for common problems — a missing or logged-out agent, a stuck session, a dead permission card, a refused dray command, silent dictation, missing notifications, gh, worktrees, rate limits, a dropped Remote access — and where the logs are.
 sidebar:
   order: 5
 ---
@@ -23,12 +23,13 @@ Dray finds an agent on your `PATH`, in the usual install folders (`~/.local/bin`
 
 When an agent's sign-in has expired, the composer says "`<Agent>` isn't logged in" with **Copy command** and **Log in**. **Log in** opens Terminal running that agent's own login. Finish it there, then send again.
 
-To see which account each agent uses, or to sign in before anything fails, open Settings → Accounts. See [Accounts](/settings/accounts).
+To see which account each agent uses, or to sign in before anything fails, open Settings → Agents. See [Agents and accounts](/settings/accounts).
 
 ## A session seems stuck
 
 - **The agent is still working.** A turn can take minutes. A "Retrying — attempt n of m" row means the agent is retrying a failed request to its provider; leave it.
 - **Its server is offline.** The composer says "`<name>` is offline". Press **Try again**, or **Turn on** if you turned that server off. Its agents keep running there meanwhile.
+- **Its machine is a stopped Boat sandbox.** The composer says "`<name>` is stopped". Send anyway: the machine resumes, and your message waits, dimmed, until it is delivered. See [Boat sandboxes](/reference/remote-access#boat-sandboxes).
 - **Stop it.** While a turn runs, the send button is **Stop**. Press it, then send your message again.
 - **Still nothing.** Restart the server, open the session and send again. The session resumes where it left off.
 
@@ -38,7 +39,7 @@ If a session never shows any reply, look in the [logs](#logs-and-parse-failures)
 
 Changing effort, and on some agents the model, restarts the agent. Dray waits to do that until the agent's background tasks have ended, and it doesn't say it is waiting. A dev server or a watch command the agent started in the background never ends on its own.
 
-Open the subagent panel from the background tasks count in the transcript, and stop the tasks you don't need with **Stop this subagent**, or **Stop all**. Then change the setting again.
+Click the background tasks count in the transcript to open **More**, which lists **Background tasks** and **Subagents** apart. Stop the ones you don't need with the square button on a row, or **Stop all** on a section of two or more. Then change the setting again.
 
 ## A permission card's buttons don't work
 
@@ -125,9 +126,17 @@ If you delete a session and its worktree can't be removed, the folder stays behi
 
 | Where | What |
 |---|---|
-| `~/.dray/server.log` | The Mac's background server, where your sessions run. Start here. |
+| `~/.dray/server.log` | The app's background server, where your sessions run, on a Mac or in the Linux app. Start here. It starts over once it passes 10 MB. |
 | `journalctl --user -u dray -n 50` | A Linux server's log. `dray server status` shows whether it runs. |
 | `~/.dray/parse_failures.jsonl` | Lines from an agent CLI that Dray could not read. A new agent version that changed its output shows up here first, as missing rows in the transcript. |
+
+**Remote access and public links** write their own lines to the server log, each with the time: `[tunnel remote …]` for Remote access and `[tunnel share …]` for public links. They record connecting, a drop and its reason, each reconnect attempt, and each visitor with the address it came from. The token is never written. When a phone or another Mac loses this one, look there for when the drop happened and whether it came back:
+
+```bash
+grep '\[tunnel' ~/.dray/server.log | tail -20
+```
+
+On a Linux server, read them with `journalctl --user -u dray | grep tunnel`.
 
 To see what kinds of line failed and how often:
 

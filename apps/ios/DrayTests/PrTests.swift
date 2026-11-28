@@ -28,7 +28,8 @@ final class PrTests: XCTestCase {
 
     func testSessionBranch() {
         XCTAssertEqual(sessionBranch(branch: "main", worktreeName: "a", worktreeRemoved: false, observed: "fix"), "fix")
-        XCTAssertEqual(sessionBranch(branch: "main", worktreeName: "a", worktreeRemoved: false, observed: nil), "worktree-a")
+        XCTAssertEqual(sessionBranch(branch: nil, worktreeName: "a", worktreeRemoved: false, observed: nil), "worktree-a")
+        XCTAssertEqual(sessionBranch(branch: "fix/pr", worktreeName: "a", worktreeRemoved: false, observed: nil), "fix/pr")
         XCTAssertEqual(sessionBranch(branch: "main", worktreeName: nil, worktreeRemoved: false, observed: nil), "main")
         // A relocated session's shared checkout never answers.
         XCTAssertEqual(sessionBranch(branch: "worktree-a", worktreeName: nil, worktreeRemoved: true, observed: "main"), "worktree-a")

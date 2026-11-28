@@ -1,0 +1,5 @@
+# The static CRT on Windows, as src-tauri/.cargo/config.toml gives the app and
+# dray-serve: a `dray.exe` linked against it dynamically needs the VC++
+# runtime installed, which a fresh Windows does not have.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

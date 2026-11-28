@@ -22,17 +22,41 @@ phone reads and drives it over the same WebSocket the desktop uses
   the words show as the bubble they will send as, the keyboard edits them
   in a sheet that can also send, and Cancel asks first. A swipe up from the
   resting orb or under it opens that sheet too, on every dock (#1302);
-  "Swipe up to type" sits over the orb until the reader has done it three times. The model chip and
+  "Swipe up to type" sits over the orb until the reader has done it three times.
+  The sheet opens short over the keyboard, as Android's does, and a drag up
+  its header takes it to full height (#1415): one detent at a time, since a
+  sheet offered both goes to the larger as soon as the keyboard is up. A
+  swipe down the short sheet closes it with the keyboard, never the keyboard
+  alone (#1453). In a
+  bot's chat a swipe in from the right edge opens its Tasks sheet, the button
+  being a reach to the top of the screen. The model chip and
   "···" open **This task**: the session's model, effort, fast mode and
   stance for the next reply, each locked mid-turn where the harness can't
   carry it onto a queued prompt (`liveControls.ts`, restated in
   `Picks.lockedMidTurn`). Nothing there reaches the session until a reply
-  goes out, since `send_msg` is what carries it. **Stop** sits at the end of
+  goes out, since `send_msg` is what carries it. Its agent row moves the
+  session to another agent at that send (#1439), as the desktop does: a task
+  calls `switch_agent` first and continues in place, so a server from before
+  it refuses and nothing goes out; a bot chat starts a new session in its
+  folder. Neither draws a line in the chat, and `agent_switched` moves the
+  picker when the switch was made elsewhere. **Stop** sits at the end of
   the picks while a turn runs. The top bar names the project and machine,
   never the branch.
 - **Permission and question cards**, answered in place. A hidden task's card,
   a bot's above all, draws at the foot of the chat that started it under the
   task's title, on whichever machine the task runs, and lights the bot's face.
+- **Secret cards** (#1605), the desktop's `SecretRequest` ([secrets.md](../desktop/docs/secrets.md)):
+  paste and Share, Save to Vault, Use saved with its picker, Decline. Held in
+  `Store.secretAsks`, apart from `asks`, since they are logged and close only
+  on their own `secret_answered`, and the Island, which shares the store, has
+  no card for them. A closed card's line leads the turn its answer opens, and
+  that turn's prompt (Dray's own, carrying the path) draws no bubble.
+  Settings › Vault lists, adds, replaces and deletes saved ones per machine.
+- **Reactions in a bot's chat** (#1416), never a task's: a long press on the
+  bot's message opens the seven emoji and nothing else, so its words cannot be
+  copied there while the chat is open (`react_to_message`). The pick is a badge
+  beside the bubble's bottom corner; the bot's own sits beside the top corner
+  of the reader's. Both are overlays, so neither moves a row.
 - **New task by voice**, from a dock under the list: hold the orb to talk,
   and the recording runs hands-free until Done or Cancel. The words land as
   the task's text; holding again adds to them, the keyboard edits them in a
@@ -45,13 +69,16 @@ phone reads and drives it over the same WebSocket the desktop uses
   it, on this phone, per agent; starred ones lead. With the worktree off a
   Branch row switches the checkout at once (`checkout_branch`), asking
   Bring or Stash first where files are uncommitted, as the desktop does.
-- **A lone bot opens itself** (#1169): a cold launch where one bot is all
-  the list would draw — no other bot, no session shown, or Hide sessions on —
-  opens its chat at once. It decides off the cached list, so the list never
-  shows first; a server with no cache waits on its index and its bots both,
-  and until both are in its rows stay hidden, or a bot's chat draws as a task.
+  On an iPad or an unfolded Duo (#1390) the list is a sidebar whose foot is
+  a **New task** button instead: the same dock fills the main pane, which
+  shows it whenever no session is open. A sidebar laid over the pane shuts;
+  one beside it stays, as a row tap does.
+- **Open bot at launch** (Settings, Off by default): a cold launch opens the
+  picked bot's chat as its first screen, read off the cached list before the
+  first frame, so the list never shows first; Back is the list. A bot with no
+  chat cached waits on its server's index and bots, then opens its own page.
   Coming back from the background, a link, a tap first or ten seconds and the
-  list stays.
+  list stays. Nothing opens by itself with it Off, one bot or not.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
 - **Shared machines** (#847): a paired server that shares its list
@@ -59,7 +86,18 @@ phone reads and drives it over the same WebSocket the desktop uses
   own, never saved, with a hello naming `via` its id and `/file`/`/upload`
   carrying `via=`, under the paired server's token. Its id is hashed from the
   pair, so transcripts survive a reconnect. The Island skips this: it follows
-  the app's links, which already name those machines.
+  the app's links, which already name those machines. **A machine the phone
+  also pairs directly is shown once, the direct way** (#1404): every welcome
+  carries `identity`, a hash of the server's token that a relay passes
+  through untouched, so a relayed copy whose `identity` hashes a token the
+  phone holds gives way to the direct pairing **while that one works**
+  (#1466): a copy on screen goes once its twin connects, never before, so a
+  reconnect takes no open chat away; a copy not on screen stays off while its
+  twin is coming up, and comes back once the twin is lost or turned off.
+  Identities are kept across launches, so a launch draws no duplicate even
+  for a moment. An alert tagged by a copy that gave way opens and answers on
+  its twin (`reachable`). A server from before `identity` is still shown twice. Never `id` in a welcome:
+  `Head` reads every frame's `id` as a call's, and fails on a string.
 - **Pull request** sheet from the session view: readiness in the desktop's
   order with checks speaking first, checks failing-first, comments; every
   check and comment opens on GitHub. Merge is the desktop's split button —
@@ -67,6 +105,16 @@ phone reads and drives it over the same WebSocket the desktop uses
   it lands; it stays shut while checks run or fail. Mark ready, reopen.
   Hidden when the branch has none. Reads and merges only: no comment, reply
   or close.
+- **Changes** (#1326), a button in the session's top bar pushing its own
+  screen: uncommitted work against HEAD, a tab only while `work_status`
+  counts some and then the one it opens on, the whole branch from the parent
+  of its oldest own commit (`log_branch_commits`) to its tip, and the
+  history, a commit opening its own files. No last turn: the desktop's
+  Changes panel is where that lives. Files group under their folder,
+  each with the desktop's Material glyph (`scripts/file_icons.py` copies the
+  set and its lookup from `apps/desktop`). Every file opens a unified diff
+  built on the phone from `file_change`'s two sides, lines wrapping. Only
+  calls `dray-serve` has had from the start. Reads only, like the repo view.
 - **Dictation**, transcribed on the Mac or on the phone: the phone records a
   16kHz mono WAV, then either uploads it through `POST /upload` and calls
   `transcribe_upload` — only the Mac's server has that command, and its
@@ -78,9 +126,39 @@ phone reads and drives it over the same WebSocket the desktop uses
   analyzer offers no audio format, so a read there fails; test it on a phone.
   Where nothing can transcribe, every dock trades the orb for a text field
   and send. The Island's `VoiceOrb` draws it.
+- **Pull requests and Issues** (#1361), the desktop's two pages, each a
+  button beside Settings opening a sheet with its own stack. Pushed inside
+  the split view's sidebar instead, a page's own push looped the layout.
+  GitHub's search and the trackers are asked through `trackerServer`: the
+  Mac app's server where one is connected, else the first. Both keep their
+  last answers on disk, per server; a server switched off loses its kept
+  answers and their freshness at once, so none draws and it is read afresh
+  once back on (#1547). A GitHub repository picked through one server is no
+  pick on another that does not hold it.
+  - Pull requests (`Pulls.swift`, `PullDetail.swift`, rules from
+    `prInbox.ts` restated and tested in `PullsTests`): All reads each
+    project's `pr_marks` with `listing`, plus bot tasks' repos; the other
+    three filters are one `pr_search`, each row read through a checkout
+    `repo_checkouts` finds, else its `github:` slug. Spaces, Owner and
+    Repository sit behind the filter button. The phone has no active space,
+    so Spaces starts on All. A PR opens the PR sheet's rows, a comment
+    opening in place on a tap, and its tasks newest first (a settled one
+    opens with no dock). The top bar holds Share (the system sheet) and play,
+    which opens the start sheet (`StartTask.swift`): the reader's words, a
+    bot's task or the reader's own on a machine, agent, model, effort and
+    fast mode, always Auto. A checkout is attached or cloned
+    (`clone_github_repo`) only on Start, then `start_pr_session`.
+  - Issues (`Issues.swift`): GitHub and Linear, the desktop's scopes,
+    Open/Closed, search, repository, type and label or team and project;
+    Linear grouped by state with Done and Cancelled read on opening. An
+    issue moves its status and priority (`update_issue`). Its play opens
+    the same start sheet: sent to a bot (`send_issue_to_bot`), or a task
+    right there (`send_msg` with `issueIds`) on a checkout of the issue's
+    repo, cloned if none, any project for Linear's; the task then opens.
+    Linear connects by pasting a key.
 
 Left out: push, attachments, the Diff/Files/Browser views,
-forks, settle/pin, the settled list, spaces, issues.
+forks, settle/pin, the settled list, spaces.
 
 ## Stack
 
@@ -229,7 +307,13 @@ turn runs, gyro for a subagent, spiral for background tasks.
 
 Opens on the newest turns (`turns: 8`), pages older ones in on scroll to top.
 A reconnect re-reads the open session's tail and appends what it does not hold,
-matched on event id, never `seq`.
+matched on event id, never `seq`. **A socket reading connected is not trusted**
+(#1635): one the server dropped while the phone slept stays open here and
+silent, failing no ping, so coming back to the front pings it and reconnects
+where no pong comes in 5s, and the 25s ping reconnects past 15s with neither a
+pong nor a frame. `StaleSocketTests` runs it behind `scripts/freeze_proxy.py`.
+A chat's first read since launch draws "Checking new messages…" at its foot;
+later opens read quietly (`serverRead`).
 
 The view holds the end only while the reader is within 40pt of it, the
 desktop's pin: a scroll up leaves them where they are, coming back or sending

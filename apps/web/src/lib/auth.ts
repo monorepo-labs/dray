@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
+import { lastLoginMethod } from "better-auth/plugins";
 import { emailOTP } from "better-auth/plugins/email-otp";
 import { organization } from "better-auth/plugins/organization";
 
@@ -37,6 +38,21 @@ const emailCodes = emailOTP({
     }),
 });
 
+/// The cookie naming how this browser last signed in, read by `/login` to
+/// tag that card. Set only alongside a new session, so a cancelled or failed
+/// try never moves it; never stored on the account.
+export const LAST_METHOD_COOKIE = "dray.last_sign_in";
+
+const lastMethod = lastLoginMethod({
+  cookieName: LAST_METHOD_COOKIE,
+  // The longest a browser keeps a cookie; the session itself lapses sooner.
+  maxAge: 60 * 60 * 24 * 400,
+  // A verified code signs in too (`autoSignInAfterVerification`), and every
+  // email path is one card.
+  customResolveMethod: (ctx) =>
+    ctx.path === "/email-otp/verify-email" || ctx.path === "/sign-in/email-otp" ? "email" : null,
+});
+
 /// Better Auth for drayhq.com: GitHub, Google, and email with a password
 /// whose address is proved by an emailed code; orgs and their members.
 /// `nextCookies` lets a server action that signs in or out set its cookie.
@@ -47,6 +63,11 @@ export const auth = betterAuth({
       // Written only by `setUsername`, which checks the format and reports a
       // taken one; `input: false` keeps `updateUser` from going around it.
       username: { type: "string", required: false, unique: true, input: false },
+      // Taken from the GitHub profile at sign-up, so the app can tell a name
+      // that is only the login (a profile with no name) from one typed. Input
+      // stays on, or the provider's profile never reaches it; a reader setting
+      // their own changes nothing but whether their bots ask their name.
+      githubLogin: { type: "string", required: false },
     },
   },
   // Verified before it can sign in, so an address someone merely typed is
@@ -65,7 +86,11 @@ export const auth = betterAuth({
     },
     // Only where its OAuth app is configured, so a site without keys still starts.
     ...(process.env.GITHUB_CLIENT_ID && {
-      github: { clientId: process.env.GITHUB_CLIENT_ID, clientSecret: process.env.GITHUB_CLIENT_SECRET! },
+      github: {
+        clientId: process.env.GITHUB_CLIENT_ID,
+        clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+        mapProfileToUser: (profile) => ({ githubLogin: profile.login }),
+      },
     }),
   },
   // The page trims the name too; this holds for a sign-up posted straight here.
@@ -107,6 +132,7 @@ export const auth = betterAuth({
     // Left out while email is off, or its sign-in route would make accounts.
     ...(emailSignIn ? [emailCodes] : []),
     drayTables,
+    lastMethod,
     nextCookies(),
   ],
 });

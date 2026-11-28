@@ -14,6 +14,17 @@ export function trackFeature(feature: string) {
   void invoke("track_feature", { feature }).catch(() => {});
 }
 
+/// Why the sign-in gate is up: never signed in on this machine, Settings'
+/// Sign in, sign-in now required (#1590), or a sign-in that went away.
+export type GateReason = "first_launch" | "settings" | "required" | "signed_out";
+
+/// Reports the sign-in gate coming up or being skipped. The browser sign-in's
+/// own steps are reported by the server that runs it. Swallows failures like
+/// [`trackFeature`].
+export function trackSignInGate(step: "shown" | "skipped", reason: GateReason) {
+  void invoke("track_sign_in_gate", { step, reason }).catch(() => {});
+}
+
 /// Reports a render error by **where** it broke, never by what it said.
 ///
 /// Two closed things leave: React's error code, read off the minified message

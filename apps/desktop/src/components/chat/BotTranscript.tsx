@@ -1,9 +1,11 @@
 import { Undo2 } from "lucide-react";
-import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import BotAvatar from "@/components/BotAvatar";
+import AssistantMessage from "@/components/chat/AssistantMessage";
 import DiffView from "@/components/chat/DiffView";
 import EventRow from "@/components/chat/EventRow";
+import { PartyChip, type Party } from "@/components/chat/PartyChip";
+import { Reactable } from "@/components/chat/Reactions";
 import { Button } from "@/components/ui/button";
 import UserMessage from "@/components/chat/UserMessage";
 import { OrbLine } from "@/components/chat/WorkingIndicator";
@@ -25,14 +27,13 @@ import {
   type BotSegment,
   type TalkItem,
 } from "@/lib/botTranscript";
-import { AGENT_LABELS } from "@/lib/model";
 import { isModClick } from "@/lib/platform";
 import { stripSenderPrefix } from "@/lib/relay";
 import { streamingCall } from "@/lib/streaming";
 import { streamingLabel, toolArgument, toolLabel } from "@/lib/tools";
 import { invoke } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, Bot, BotAvatar as Avatar, Harness, LearnedDiff, LearnedFile, ToolResult } from "@/types/events";
+import type { AgentEvent, Bot, LearnedDiff, LearnedFile, ToolResult } from "@/types/events";
 
 /// A task a bot started, as its card names it.
 /// A task as its chat draws it. `sessionId` is the full id, since the bot may
@@ -224,9 +225,7 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
     <>
       {isNew && <NewDivider />}
       {time && <TimeLabel at={time} />}
-      {item.kind === "switch" ? (
-        <SwitchLine harness={item.harness} />
-      ) : item.kind === "learned" ? (
+      {item.kind === "learned" ? (
         <LearnedLine sessionId={item.sessionId} commit={item.commit} file={item.file} undone={item.undone} />
       ) : item.kind === "botMessage" ? (
         <>
@@ -273,10 +272,12 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
           onOpenSession={onOpenSession}
           onOpenBot={onOpenBot}
         />
-      ) : item.kind === "assistant" ? (
-        <BotBubble tight={tight}>
-          <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
-        </BotBubble>
+      ) : item.kind === "assistant" && item.event.payload.type === "assistant_text" ? (
+        <Reactable event={item.event} className={tight ? "-mt-2.5" : undefined}>
+          <BotBubble className="max-w-full">
+            <AssistantMessage text={item.event.payload.text} />
+          </BotBubble>
+        </Reactable>
       ) : (
         <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
       )}
@@ -284,8 +285,6 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
   );
 }, sameRow);
 
-/// Who a line names: a task, by its session id, or a bot, with its own face.
-type Party = { id: string; title: string; avatar?: Avatar | null };
 
 /// The task a message went to or came from. A send may name its task by an id
 /// prefix, which `taskOf` resolves.
@@ -388,50 +387,6 @@ function TalkLine({
   );
 }
 
-/// Who a line is about: one task's face and name, or several faces stacked
-/// and a count.
-export function PartyChip({
-  parties,
-  expanded,
-  onClick,
-}: {
-  parties: Party[];
-  /// Set where the chip opens messages rather than a task.
-  expanded?: boolean;
-  onClick: (e: React.MouseEvent) => void;
-}) {
-  const single = parties.length === 1 ? parties[0] : null;
-  return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      onClick={onClick}
-      className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-full py-0.5 pr-1.5 pl-1 transition-colors hover:bg-(--party-wash) hover:text-(--party-ink)"
-      style={single ? partyColours(single) : NEUTRAL}
-    >
-      <span className="flex shrink-0 -space-x-2">
-        {parties.slice(0, 3).map((p) => (
-          <span key={p.id} className="size-5">
-            <BotAvatar still seed={p.id} avatar={p.avatar ?? seededAvatar(p.id)} className="block size-5 scale-[1.18]" />
-          </span>
-        ))}
-      </span>
-      <span className="truncate">{single ? single.title : `${parties.length} tasks`}</span>
-    </button>
-  );
-}
-
-const NEUTRAL = { "--party-wash": "var(--muted)", "--party-ink": "var(--foreground)" } as CSSProperties;
-
-/// A party's name, on hover, in a pill of its own face's colour.
-function partyColours(party: Party): CSSProperties {
-  const { hue } = party.avatar ?? seededAvatar(party.id);
-  return {
-    "--party-wash": `oklch(0.7 0.12 ${hue} / 0.16)`,
-    "--party-ink": `oklch(0.78 0.12 ${hue})`,
-  } as CSSProperties;
-}
-
 /// The time a run of messages began, centred and quiet, as a messenger draws it.
 function TimeLabel({ at }: { at: string }) {
   // `data-bot-passing`: a page landing above can take it away, so the chat
@@ -445,22 +400,26 @@ function TimeLabel({ at }: { at: string }) {
 
 /// A bot's reply as a messenger draws the other side: a bubble on the left,
 /// quieter than the reader's own card.
-export function BotBubble({ tight = false, children }: { tight?: boolean; children: ReactNode }) {
+export function BotBubble({
+  tight = false,
+  className,
+  children,
+}: {
+  tight?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
     <div
       className={cn(
         "bot-bubble max-w-[85%] self-start rounded-xl bg-muted/50 px-3 py-2",
         tight && "-mt-2.5",
+        className,
       )}
     >
       {children}
     </div>
   );
-}
-
-/// Where the chat moved to another agent, said as quietly as a time label.
-function SwitchLine({ harness }: { harness: Harness }) {
-  return <p className="self-center text-[12px] text-muted-foreground/70">Switched to {AGENT_LABELS[harness]}</p>;
 }
 
 /// Where the replies the reader has not seen begin, as a messenger marks it.

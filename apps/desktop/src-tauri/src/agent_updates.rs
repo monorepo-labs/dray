@@ -25,6 +25,34 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 /// button spinning until the app restarted.
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// The vendor's installer, run with no window: `/bin/sh` off Windows, and on it
+/// the PowerShell `install.ps1` each vendor publishes for it, which Windows'
+/// own PowerShell 5.1 runs.
+#[cfg(not(windows))]
+fn installer(script: &str) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", script]);
+    command
+}
+
+#[cfg(windows)]
+fn installer(script: &str) -> Command {
+    let mut command = Command::new("powershell");
+    command
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .creation_flags(crate::platform::CREATE_NO_WINDOW);
+    command
+}
+
+/// Why there is nothing to run, with the vendor's page where there is one: on
+/// Windows, fx and OpenCode publish no installer.
+fn no_installer(harness: Harness) -> String {
+    match harness.docs_url() {
+        "" => format!("Dray can't install {}", harness.label()),
+        docs => format!("Dray can't install {} here. Install it yourself: {docs}", harness.label()),
+    }
+}
+
 #[derive(Serialize, TS, Clone)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
@@ -86,8 +114,10 @@ pub async fn update_agent(harness: Harness) -> Result<Option<AgentUpdate>, Strin
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        let said = text.lines().map(str::trim).filter(|line| !line.is_empty()).last();
-        return Err(said.map_or_else(|| format!("{} update failed", harness.label()), String::from));
+        // Colour codes out first: OpenCode ends on a bare `ESC[0m`, which was
+        // the whole message.
+        let said = text.lines().map(crate::title::readable).filter(|line| !line.is_empty()).last();
+        return Err(said.unwrap_or_else(|| format!("{} update failed", harness.label())));
     }
     // "Updated" is read back, never assumed, so a recheck that cannot answer
     // is a failure rather than the success its silence would look like.
@@ -115,6 +145,59 @@ pub async fn update_agent_in_terminal(harness: Harness) -> Result<(), String> {
     crate::apps::run_in_terminal(&line, "").await
 }
 
+/// Runs the vendor's installer for an agent that is not on this machine, then
+/// drops the cached miss so it reads as installed at once. `Err` carries the
+/// installer's last line, which names the step that failed.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_agent(harness: Harness) -> Result<(), String> {
+    let script = harness.install_command();
+    if script.is_empty() {
+        return Err(no_installer(harness));
+    }
+    if !binpath::agent_installed(harness).await {
+        let output = tokio::time::timeout(
+            UPDATE_TIMEOUT,
+            installer(script).stdin(Stdio::null()).kill_on_drop(true).output(),
+        )
+        .await
+        .map_err(|_| format!("{} install took too long", harness.label()))?
+        .map_err(|err| format!("could not install {}: {err}", harness.label()))?;
+        if !output.status.success() {
+            let text = format!("{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            let said = text.lines().map(str::trim).filter(|line| !line.is_empty()).last();
+            return Err(said.map_or_else(|| format!("{} install failed", harness.label()), String::from));
+        }
+    }
+    if recheck_agent(harness).await {
+        Ok(())
+    } else {
+        Err(format!("{} installed, but Dray can't find it", harness.label()))
+    }
+}
+
+/// The installer in Terminal, for when the in-app run failed. On Windows a
+/// PowerShell window, since the command is PowerShell there, or the vendor's
+/// page where it publishes no installer.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_agent_in_terminal(harness: Harness) -> Result<(), String> {
+    #[cfg(windows)]
+    return match (harness.install_command(), harness.docs_url()) {
+        ("", "") => Err(no_installer(harness)),
+        ("", docs) => crate::apps::open_url(docs).await,
+        (command, _) => crate::apps::run_in_powershell(command).await,
+    };
+    #[cfg(not(windows))]
+    crate::apps::run_in_terminal(harness.install_command(), "").await
+}
+
+/// Looks for the agent again rather than answering from the cache, for one the
+/// reader may have just installed in Terminal.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn recheck_agent(harness: Harness) -> bool {
+    binpath::forget_agent(harness).await;
+    binpath::agent_installed(harness).await
+}
+
 fn update_args(harness: Harness) -> &'static [&'static str] {
     match harness {
         Harness::ClaudeCode => &["update"],
@@ -122,12 +205,13 @@ fn update_args(harness: Harness) -> &'static [&'static str] {
         Harness::Pi => &["update", "--self"],
         Harness::Fx => &["upgrade"],
         Harness::Grok => &["update"],
+        Harness::OpenCode => &["upgrade"],
         Harness::Other(_) => &[],
     }
 }
 
 fn command(bin: &std::path::Path) -> Command {
-    let mut command = Command::new(bin);
+    let mut command = crate::binpath::command(bin);
     // `agent_path` because pi is a `node` script and its updater runs npm, and
     // a Dock-launched bundle has neither on launchd's `PATH`.
     command
@@ -196,6 +280,12 @@ async fn versions(harness: Harness, bin: &std::path::Path) -> Option<(String, St
         Harness::Codex => json_version("https://registry.npmjs.org/@openai/codex/latest").await?,
         Harness::Pi => json_version("https://pi.dev/api/latest-version").await?,
         Harness::Fx => get("https://releases.fx.sh/latest.txt").await?,
+        // `opencode-ai` is OpenCode 1 alone; 2 ships as `@opencode/cli`. Read
+        // off the one running, so 2 is never told to "update" to 1.19.
+        Harness::OpenCode if parse(&current).is_some_and(|(major, _, _)| major < 2) => {
+            json_version("https://registry.npmjs.org/opencode-ai/latest").await?
+        }
+        Harness::OpenCode => json_version("https://registry.npmjs.org/@opencode/cli/latest").await?,
         _ => return None,
     };
     Some((current, version_in(&latest)?))

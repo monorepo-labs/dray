@@ -1,0 +1,120 @@
+---
+title: Bots
+description: Make, list, message, rename and delete bots with dray bot, ask a bot a question and get its answer back, and schedule a bot's routines with dray bot routine.
+sidebar:
+  order: 3
+---
+
+`dray bot` does from a terminal what the sidebar's bot rows do: make a bot, list them, message one, rename or delete it. `dray bot routine` manages a bot's scheduled checks. Bots themselves use these to talk to each other and to schedule their own work. For what a bot is and does, see [Bots](/using-dray/bots).
+
+A bot is named by its name, in any case, or by its id. Two bots cannot share a name.
+
+## Make a bot
+
+```bash
+dray bot new "Ops" --shape sun --colour teal
+```
+
+Prints the new bot's id, then a line saying how to start its chat. It shows in the sidebar at once.
+
+| Flag | What it does |
+|---|---|
+| `--shape <shape>` | Its face: `round`, `organic`, `boxy`, `capsule`, `nub`, `cloud`, `hexagon`, `sun` or `triangle`. Random without it. |
+| `--colour <colour>` | `red`, `orange`, `amber`, `green`, `teal`, `blue`, `purple`, `pink`, or a hue in degrees. `--color` works too. Random without it. |
+
+A bot made here has no chat until its first message, and does not greet you: whoever made it is about to tell it its job. Its chat starts on the agent of the session that sends that message, or on Claude Code when you send it from your own terminal.
+
+## List bots
+
+```bash
+dray bot ls
+dray bot ls --json
+```
+
+One line per bot: its id, its chat's session id (a dash before it has one), its name, and `(working)` while its chat is mid-turn. Indented under it, its role, the first line of its `AGENTS.md`, and one line per open task, with the task's title, id, project, branch and whether it is working.
+
+## Message a bot
+
+```bash
+dray bot send "Ops" "The staging deploy failed on the migration step. Look into it."
+dray bot send --ask "Ops" "Is anyone working on the billing repo right now?"
+```
+
+The message lands in the bot's chat and starts its turn, or waits behind the one running. Sent from inside a session, it is signed with that session or bot. A bot with no chat yet starts one with your message.
+
+Without `--ask`, nothing comes back on its own. The bot answers only if it chooses to.
+
+With `--ask`, Dray passes the bot's answer, the last words of the turn your message started, back to the chat that asked: a bot's chat, or the task or routine run that asked. `--ask` needs a calling session, so it is refused from your own terminal.
+
+Between bots, Dray stops a runaway exchange: after 4 messages back and forth in one exchange, the same message sent twice in one, or 20 messages between two bots in 5 minutes. The refused send fails with the reason. See [Bots working together](/using-dray/bots#bots-working-together).
+
+## Rename and delete
+
+```bash
+dray bot rename "Ops" "Release Ops"
+dray bot rm "Release Ops"
+```
+
+`rm` is the sidebar's **Delete bot…**, with no question asked: it settles the bot's chat and deletes its folder, instructions and memory included.
+
+## Routines
+
+A routine is a prompt Dray sends a bot on a schedule. Each run is a session of its own, hidden from the chat, that reports back to the bot. You see a bot's routines under **Routines** in its **More** tab, where you can turn one off or delete it. See [Routines](/using-dray/bots#routines).
+
+```bash
+dray bot routine add "PR watch" "Check PR #970. Tell me when it can merge." --every 2h
+dray bot routine add "Standup" "List what merged yesterday across my repos." --at 9am --days weekdays
+dray bot routine add "CI" "Say whether CI on #970 passed." --every 10m \
+  --check "gh pr checks 970 --json state -q '.[].state'"
+```
+
+Prints the routine's id, then its schedule and next run.
+
+| Flag | What it does |
+|---|---|
+| `--every <interval>` | Run every `30m`, `2h`, `1d` and so on. At least `5m`. |
+| `--at <time>` | Run at a local time: `09:00`, `9am`, `5:30pm`. |
+| `--days <days>` | With `--at`: `weekdays`, `weekends`, `daily`, or a list like `mon,wed,fri`. Daily without it. |
+| `--check <command>` | A shell command run in the bot's folder first. A run starts only when its output differs from the last run's, so print only what matters, and nothing that changes every time, like a timestamp. |
+| `--bot <bot>` | The bot it belongs to. Without it, the bot whose chat runs the command. |
+
+Write the prompt to be read cold: a run starts with nothing but the bot's memory and notes.
+
+A run is stopped after 30 minutes, or after its interval where that is shorter. A machine that slept through several runs runs an `--every` routine once on waking. An `--at` routine catches up only on the same day; an earlier day's run is recorded as missed.
+
+```bash
+dray bot routine ls
+dray bot routine ls --bot "Ops" --json
+dray bot routine pause "PR watch"
+dray bot routine resume "PR watch"
+dray bot routine run "PR watch"
+dray bot routine rm "PR watch"
+```
+
+| Command | What it does |
+|---|---|
+| `ls` | Lists routines: id, schedule, name, next run or `paused`, and the bot. Under each, its check and its last result. `--bot` picks one bot; without it, the calling bot's, or every bot's from your own terminal. |
+| `pause <routine>` | Stops it running until resumed. |
+| `resume <routine>` | Starts it again, counting from now. |
+| `run <routine>` | Runs it within 30 seconds, whatever its schedule, to try it. |
+| `rm <routine>` | Deletes it. |
+
+Each takes a routine's id or its name.
+
+## Bots on another machine
+
+```bash
+dray --machine vps bot ls
+dray --machine vps bot send --ask "Ops" "Has the nightly backup finished?"
+```
+
+`--machine` runs any `dray bot` command on a machine from `dray machine ls`. `--ask` works there too: the answer comes back once that machine is reachable from this one, usually within seconds of the bot's turn ending. An answer waits there for 7 days if this machine is offline.
+
+`routine add` with `--machine` needs `--bot`, since without it the routine would go to the calling bot, which is on this machine.
+
+## Limits
+
+- Making a bot here cannot pick its agent or model. Change them in the bot's composer.
+- A bot cannot move to another machine.
+- `dray bot rm` asks nothing. The bot's instructions and memory go with it.
+- Routines have no one-off reminders and no cron expressions, and keep only their last result.

@@ -4,11 +4,14 @@ import { ArrowDown } from "lucide-react";
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import BotTranscript, { type BotTask } from "@/components/chat/BotTranscript";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
+import { IssueCardChatContext } from "@/components/chat/IssueCard";
 import { MergeCardChatContext } from "@/components/chat/MergeCard";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QueuedMessages from "@/components/chat/QueuedMessages";
 import QuestionRequest from "@/components/chat/QuestionRequest";
+import SecretRequest from "@/components/chat/SecretRequest";
+import { ReactionsContext, type Reactions } from "@/components/chat/Reactions";
 import Reasoning from "@/components/chat/Reasoning";
 import WorkingIndicator, { OrbLine } from "@/components/chat/WorkingIndicator";
 import StreamingToolCall from "@/components/chat/StreamingToolCall";
@@ -32,6 +35,9 @@ import { drawnSegments, earlierTurns, lastTurns } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
 import { dropOlder, loadOlder } from "@/lib/olderPages";
+import { readerReactions } from "@/lib/reactions";
+import { issueStarts, startsKey } from "@/lib/issueCard";
+import { invoke } from "@/lib/transport";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
@@ -282,20 +288,24 @@ export default function Chat({
   // near it, or on `ALL_HELD`, where pages read from the log are drawn as they
   // land. Back at the bottom it slides again, and what was above goes. Keyed on
   // the session inside the state, so a switch draws the new session's tail on
-  // its very first commit.
-  const [drawn, setDrawn] = useState<{ sessionId: string | null; from: string | null }>({
+  // its very first commit. `turns` is how many the sliding window draws: more
+  // than `WINDOW_TURNS` where those fill less than a screen above the bottom.
+  const [drawn, setDrawn] = useState<{ sessionId: string | null; from: string | null; turns: number }>({
     sessionId: null,
     from: null,
+    turns: WINDOW_TURNS,
   });
-  const held = drawn.sessionId === session?.sessionId ? drawn.from : null;
+  const mine = drawn.sessionId === session?.sessionId;
+  const held = mine ? drawn.from : null;
+  const slideTurns = mine ? drawn.turns : WINDOW_TURNS;
   const holdWindow = (from: string | null) => {
-    if (held !== from) setDrawn({ sessionId: session?.sessionId ?? null, from });
+    if (held !== from) setDrawn({ sessionId: session?.sessionId ?? null, from, turns: WINDOW_TURNS });
   };
   const drawFrom = useMemo(() => {
     if (!session || held === ALL_HELD) return 0;
     const at = held ? session.events.findIndex((e) => e.id === held) : -1;
-    return at >= 0 ? at : lastTurns(session.events, WINDOW_TURNS);
-  }, [session?.events, held]);
+    return at >= 0 ? at : lastTurns(session.events, slideTurns);
+  }, [session?.events, held, slideTurns]);
   // Pages read above a sliding window are let go, so a chat read back and left
   // holds its tail again. Turns that landed live stay held, since only a page
   // read says where in the log it began.
@@ -488,10 +498,21 @@ export default function Chat({
   // pane must also hold a screen above the bottom, or a short tail leaves
   // nothing to scroll and nothing is ever asked for. What is already held is
   // drawn before the log is read further.
+  //
+  // A window still sliding grows rather than holding. Held, the pin's own
+  // scroll event read as the reader back at the bottom and let it go, and the
+  // short tail asked again: a bot chat whose last turns draw nothing, its
+  // replies to task reports, swapped its height every frame. It grows with a
+  // page it reads too, or the page lands above it and is let go at once.
   const askOlder = () => {
     const el = scrollRef.current;
     if (!el || !session || el.scrollTop >= el.clientHeight) return;
-    if (drawFrom > 0) {
+    // `followRef` as well: a scroll up holds the window in this same event,
+    // and `held` here is from before it.
+    if (held === null && followRef.current && (drawFrom > 0 || oldest?.olderBefore != null)) {
+      setDrawn({ sessionId: session.sessionId, from: null, turns: slideTurns + OLDER_TURNS });
+      if (drawFrom === 0) loadOlder(oldest!.sessionId);
+    } else if (drawFrom > 0) {
       const from = earlierTurns(session.events, drawFrom, OLDER_TURNS);
       holdWindow(from > 0 ? session.events[from].id : ALL_HELD);
     } else if (oldest?.olderBefore != null) {
@@ -719,9 +740,32 @@ export default function Chat({
     [segments, bot],
   );
 
+  // A bot's chat alone takes the reader's reactions. Kept while its contents
+  // hold, so a new event re-renders no message the reader has not reacted to anew.
+  const reactionKey = bot ? [...readerReactions(segments.flatMap((s) => s.events))].join() : "";
+  const closed = !bot || !!session?.archived;
+  const reactions = useMemo<Reactions>(
+    () => ({
+      mine: bot ? readerReactions(segments.flatMap((s) => s.events)) : new Map(),
+      react: closed
+        ? null
+        : (event, emoji) =>
+            void invoke("react_to_message", { sessionId: event.sessionId, messageId: event.id, emoji }).catch((e) =>
+              console.error("[react]", e),
+            ),
+    }),
+    [reactionKey, closed],
+  );
+
+  // Rebuilt only when a hand-off lands, like the reactions above.
+  const starts = issueStarts(segments.flatMap((s) => s.events));
+  const startedKey = startsKey(starts);
+  const settled = !!session?.archived;
+  const issueCards = useMemo(() => ({ starts, closed: settled }), [startedKey, settled]);
+
   if (!session) return null;
 
-  // fx alone: it takes one prompt per turn, so a held message waits out the
+  // fx and OpenCode alone: each takes one prompt per turn, so a held message waits out the
   // whole turn on screen. Every other harness hands its queue over at the next
   // tool boundary, seconds away, where stopping the turn to save that wait
   // costs more than the wait.
@@ -733,7 +777,7 @@ export default function Chat({
   const queued = (
     <QueuedMessages
       messages={queuedMessages}
-      onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
+      onSendNow={(session.harness === "fx" || session.harness === "opencode") && active ? onSendNow : undefined}
       active={active}
     />
   );
@@ -743,6 +787,8 @@ export default function Chat({
     // `@mention` and a file link, several components down. See `useChatSession`.
     <ChatSessionContext value={chatSession}>
       <MergeCardChatContext value={cardChat}>
+      <IssueCardChatContext value={issueCards}>
+      <ReactionsContext value={reactions}>
       <div className="relative h-full">
         <div
           ref={scrollRef}
@@ -802,7 +848,21 @@ export default function Chat({
             ))}
 
             {cards.map((ask) =>
-              ask.type === "questions_asked" ? (
+              ask.type === "secret_requested" ? (
+                <SecretRequest
+                  key={ask.requestId}
+                  sessionId={session.sessionId}
+                  requestId={ask.requestId}
+                  name={ask.name}
+                  label={ask.label}
+                  reason={ask.reason}
+                  url={ask.url}
+                  savedNames={ask.savedNames}
+                  closest={ask.closest}
+                  task={ask.task}
+                  autoFocus={active}
+                />
+              ) : ask.type === "questions_asked" ? (
                 <QuestionRequest
                   key={ask.requestId}
                   requestId={ask.requestId}
@@ -897,6 +957,8 @@ export default function Chat({
         )}
 
       </div>
+      </ReactionsContext>
+      </IssueCardChatContext>
       </MergeCardChatContext>
     </ChatSessionContext>
   );

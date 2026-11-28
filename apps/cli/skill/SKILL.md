@@ -110,9 +110,11 @@ dray session model <id>                       # print what it runs on
 
 The composer's model picker, from here. The pick lands from the session's next
 turn — the next message it gets, from you or the user, one already waiting
-included — and a running turn is not stopped. The model is an alias of the
-session's own agent; an effort the model lacks is refused with the levels it
-has. A session on another machine is found by its id. Switch a session only
+included — and a running turn is not stopped. An effort the model lacks is
+refused with the levels it has. An alias of another installed agent's model,
+like `gpt-6-luna` on a Claude Code session, moves the task to that agent: it
+keeps its worktree, branch and transcript, the new agent is handed the
+conversation so far, and it is refused while a turn runs. A session on another machine is found by its id. Switch a session only
 where the user asked, or one you started yourself, and ask before raising one
 to Fable or above its harness's default effort, for the reasons above.
 
@@ -218,6 +220,18 @@ dray session new --base feature/login "Write tests for the login flow on this br
 `dray session send` takes — or a branch, tag or commit. Naming a session is the usual case: you have
 its id already, and you do not have to know how Dray names its branches.
 
+**A branch name is worked on by that name**, the same way the app's new-task
+branch picker does it, so the new session's commits land on that branch:
+
+- The default branch (`main`) starts from `origin/main`, as with no `--base`.
+- A branch only on the remote is fetched, and a local branch tracking it made.
+- A branch only here is used as it is.
+- A branch in both places is fetched first. Behind its remote, it is moved up;
+  holding commits the remote lacks, it is used as it is, so none are lost.
+- A branch already checked out in another tree — the main checkout or another
+  session — gets a tree detached at its tip, and the agent is told to push
+  with `git push <remote> HEAD:refs/heads/<branch>`.
+
 This is what makes review possible. Spawn a session with a different model or a
 different harness, point it at yours with `--base`, and it gets its own checkout
 of the same commits — so it collides with nobody while it reads.
@@ -233,15 +247,16 @@ Three things to know:
   for a review of work in progress, commit it first — or say plainly in your
   prompt what is missing, or the reviewer will report on a tree that lacks the
   very change the user is looking at.
-- **A new branch, not a shared one.** The session gets its own
-  `worktree-<name>` branch starting at that commit. It never checks out the
-  branch you named, so it cannot commit onto your work or move it.
+- **A session's work gets a new branch, not a shared one.** Named by session
+  id, a tag or a commit, the session gets its own `worktree-<name>` branch
+  starting there. It never checks out that session's branch, so it cannot
+  commit onto its work or move it.
 - **Not a shared checkout.** `--base` never runs two sessions in one
   directory. Two agents writing to one checkout overwrite
   each other, and the changes panel cannot tell them apart.
 
 The line `dray session new` prints says what it resolved: `Started "…" in worktree
-calm-owl, based on worktree-brisk-jade`. Worth reading back when you passed a
+calm-owl, based on worktree-brisk-jade`, or `on branch feature/login` for a branch. Worth reading back when you passed a
 session id, since the branch that id resolved to is something only the app knew.
 
 ### Hidden sessions
@@ -314,11 +329,22 @@ dray session settle <id> --delete-worktree  # and the worktree and branch go too
 dray session unsettle <id>
 dray session set-aside <id>                 # sink it in the sidebar: started, not wanted now
 dray session unset-aside <id>
+dray session detach <id>                    # out of its parent: a top-level row of its own
+dray session attach <id> --bot <name>       # hand it to a bot: the bot's task from now on
 ```
 
 These are the user's sidebar buttons, so act on sessions the user named, or
 ones you started yourself. A rename sticks: no generated title replaces it.
 Settling is refused while a turn runs — stop it first, or wait.
+
+`detach` is the sidebar's Detach from parent. The session stops nesting under
+the one that started it, a hidden one shows in the sidebar, and it no longer
+reports back. Use it when the user wants to work with a task directly.
+
+`attach` is the sidebar's Attach to bot, detach's reverse: the task leaves the
+sidebar for the bot's Tasks, the bot gets a note saying where it stands, and
+its reports go to the bot after every turn. The bot must be on the same machine
+as the task and have a chat already.
 
 **`--delete-worktree` deletes whatever the worktree holds**, uncommitted and
 unpushed work included, and nothing asks. Before passing it, check the tree
@@ -335,9 +361,24 @@ dray session merge-card <task-id>   # a card in your chat for that task's open P
 Dray posts this card in your chat on its own once GitHub says a task you started
 has a pull request ready to merge, on this machine or another. So don't post one
 yourself; run the command only when the user asks for a card. It lands in your own chat with the task's
-title, the PR number, its live status, a Merge button and an Open on GitHub
-link. It is refused when the task's branch has no open pull request, and while
+title, its live status, a Merge button (Fix conflicts when the branch
+conflicts) and the PR number, which opens the PR. It is refused when the task's branch has no open pull request, and while
 the task is still mid-turn.
+
+## Showing the user GitHub issues
+
+```bash
+dray session issue-card owner/repo 12              # one issue
+dray session issue-card owner/repo 12 15 18
+```
+
+Whenever you show the user GitHub issues, one or several, post them as a card
+instead of writing them out. It lands in your own chat: each issue's number,
+purple once closed, its title and its labels, in the order given, 20 at
+most. The user opens an issue in Dray from the card, or presses Work on it,
+which reaches you as a message of its own naming the issue: start on it then.
+Don't restate the card in your reply; say only what it can't, such as why
+these issues.
 
 ```bash
 dray session need <task-id> "Pick: keep the button or drop it"   # no text clears it
@@ -349,7 +390,7 @@ row in the "Waiting on you" card at the foot of your chat, and it clears as soon
 as the task moves.
 
 ```bash
-dray session react 👀   # or ✅ 🎉 👍 ❤️ 😂 😢; also seen, done, celebrate, like, love, laugh, sad
+dray session react 👀   # or ✅ 🎉 👍 👎 ❤️ 😂 😢; also seen, done, celebrate, like, dislike, love, laugh, sad
 ```
 
 A bot only. Puts the emoji on the user's newest message in your chat, in place
@@ -358,11 +399,43 @@ checking), ✅ done, 🎉 celebrate, ❤️ thanks, 😂 funny, 😢 sorry to he
 react to starting or messaging a task: the chat already shows that row. A new one on the same message replaces the old. End
 your turn without writing anything after it.
 
+## Asking the user for a secret
+
+```bash
+dray secret ls                    # names saved on this machine, and which agents use without asking
+dray secret request GITHUB_TOKEN --reason "Sign gh in" --url https://github.com/settings/tokens
+```
+
+Whenever you need a token, API key or password, ask this way. Run `dray secret
+ls` first and ask by a saved name where one fits, so the user hands it over in
+one click; the card offers the nearest saved one either way. Keep the reason to
+a few words: the card shows who is asking. Never ask for one
+in chat, never invent one. The request puts a masked card in your chat with
+your reason and link and returns at once: end your turn and say you're waiting.
+The user pastes the value there, or declines. Either way the answer reaches you
+as a message of its own. A saved value lives in a file only this user can read,
+on the machine this session runs on, and the message names it: use it inside
+the command that needs it, like `GITHUB_TOKEN="$(cat <file>)" gh auth login
+--with-token <<< "$GITHUB_TOKEN"` or a flag that reads a file. Never print,
+echo or log the value, and never copy it into another file, a commit or a
+message.
+
+A secret is one-time unless the user ticks Save as NAME: its file is deleted
+after 24 hours. A saved one stays on that machine, but you still ask for it with
+`dray secret request`: the card offers the saved one in one click. Where the
+user lets agents use a saved name without asking, the request posts no card and
+prints the file's path at once: use it and carry on. Asking again for a name
+whose card is still open replaces that card.
+
+A bot's task on another machine asks the same way. Its bot's machine keeps the
+secrets, the card shows in the bot's chat, and the value arrives as a one-time
+file on the task's own machine.
+
 ## Saving work for later
 
 ```bash
 dray draft new "Add retry to the upload client"   # prints the draft id
-dray draft ls                                     # this project; --all, --json
+dray draft ls                                     # every draft; --project, --json
 dray draft rm <draft-id>
 dray draft start <draft-id>                       # prints the new session id
 ```
@@ -408,6 +481,12 @@ that turn ends: to a bot's chat, or to the task or routine run that asked.
 A bot's role is the first line of its `AGENTS.md`. `dray bot ls` shows each
 bot's role, whether it is working, and its open tasks. `dray session new` from
 a bot warns on stderr when other bots have open tasks in the same project.
+
+`dray --machine <name> bot …` acts on the bots of a machine from
+`dray machine ls`, every verb and routine alike. `--ask` works there too: the
+answer comes back to you once that machine's server is reachable from this one,
+usually within seconds of the bot's turn ending. `routine add` there needs
+`--bot`, since the calling bot is on this machine.
 
 Between bots, Dray stops an exchange after 4 messages back and forth, a
 message repeated within one exchange, or 20 messages between two bots in 5
@@ -574,7 +653,7 @@ dray session send <session-id> "Use the staging DB"   # finds the machine on its
 dray session model <session-id> sonnet                # so does every verb taking an id
 ```
 
-`--machine <name>` runs a `session`, `draft`, `issue`, `browser` or `share`
+`--machine <name>` runs a `session`, `draft`, `issue`, `browser`, `share` or `bot`
 command on a machine from `dray machine ls`, through this machine's Dray
 server — app open or not. A session id needs no `--machine`: one this machine
 has never heard of is looked for on every machine it reaches.
@@ -584,13 +663,6 @@ found by its `origin` remote; pass `--project <path on that machine>` where it
 has none. `--base <session-id>` names that session's branch, which the other
 machine can only see once it is pushed. Model, effort, agent and fast mode
 inherit from you as they do here.
-
-`--machine cloud` starts a session on a fresh Dray Cloud machine of its own:
-the app starts the machine, clones the project's GitHub repository there and
-starts the session in a worktree of it. It takes `session new` alone, needs
-Dray Cloud on with the app open, and can take a few minutes, so give the
-command a long timeout. The session's row names its machine (`cloud-…`), and
-settling it deletes the machine.
 
 **Reach follows tokens.** You reach a machine this one added; it reaches you
 only if it added this one too. A session you start there can message you back
@@ -622,6 +694,17 @@ sidebar, nested under this one, and reading ids back is noise they cannot act on
 
 Don't poll in a loop waiting for sessions to finish unless the user asked you to.
 They can watch the sidebar.
+
+### Where the user typed
+
+A message the user typed ends with a line such as `[sent from iPhone]`: Mac app,
+Windows app, Linux app, iPhone, iPad, Android or Island. Dray adds it and the user
+never sees it, so never quote it. In a bot's chat it also holds the user's local
+time (`[sent from iPhone, 14:32]`). On a phone, reply shorter, skip wide tables,
+never ask them to open a file or look at their screen, put screenshot and video
+paths in the reply so they show inline, and read past dictation typos. On
+Island, keep it to a line or two. Messages from `dray session send`, other
+sessions and routines carry no tag, so never add one yourself.
 
 ## Staying current
 

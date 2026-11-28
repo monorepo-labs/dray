@@ -197,6 +197,19 @@ pub struct SessionIndexItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub routine_run: Option<String>,
+    /// Agents this session ran on before a switch (#1414). Claude Code, grok
+    /// and pi keep their conversation under this session's id, so a switch
+    /// back to one listed here resumes it. A fork starts with none, since its
+    /// copy of the conversation lives only on its current agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(skip)]
+    pub other_agents: Vec<Harness>,
+    /// The log holds an `agent_switched` marker, so a spawn has a hand-over to
+    /// look for; a task never switched skips reading its log for one. A fork
+    /// inherits it with the copied log.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(skip)]
+    pub switched: bool,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -321,8 +334,10 @@ pub async fn config_dir() -> Result<PathBuf> {
 /// The `<name>` of a path under `.claude/worktrees/<name>/`, the innermost
 /// where worktrees nest.
 fn worktree_name(dir: &str) -> Option<&str> {
-    let (_, rest) = dir.rsplit_once("/.claude/worktrees/")?;
-    rest.split('/').next().filter(|name| !name.is_empty())
+    let (_, rest) = dir
+        .rsplit_once("/.claude/worktrees/")
+        .or_else(|| dir.rsplit_once("\\.claude\\worktrees\\"))?;
+    rest.split(['/', '\\']).next().filter(|name| !name.is_empty())
 }
 
 async fn make_home_app_dir() -> Result<PathBuf> {
@@ -363,9 +378,7 @@ async fn make_home_app_dir() -> Result<PathBuf> {
 /// Best-effort: a directory that cannot be narrowed is worth carrying on with,
 /// since the alternative is an app that refuses to start.
 pub(crate) async fn restrict_to_owner(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    if let Err(e) = fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await {
+    if let Err(e) = crate::platform::set_mode(path, 0o700) {
         eprintln!("[app dir permissions err] {e}");
     }
 }
@@ -470,9 +483,19 @@ struct IndexStamp {
 }
 
 impl IndexStamp {
-    fn of(meta: &std::fs::Metadata) -> Option<Self> {
-        use std::os::unix::fs::MetadataExt;
-        Some(Self { dev: meta.dev(), ino: meta.ino(), mtime: meta.modified().ok()?, len: meta.len() })
+    async fn at(path: &Path) -> Option<Self> {
+        let meta = fs::metadata(path).await.ok()?;
+        #[cfg(unix)]
+        let (dev, ino) = {
+            use std::os::unix::fs::MetadataExt;
+            (meta.dev(), meta.ino())
+        };
+        // NTFS's file id, as std gives none there. Not mtime alone: its clock
+        // ticks every ~15.6ms, so two writes can share one, and not creation
+        // time, which NTFS carries onto a file renamed over another.
+        #[cfg(windows)]
+        let (dev, ino) = crate::platform::file_id(path)?;
+        Some(Self { dev, ino, mtime: meta.modified().ok()?, len: meta.len() })
     }
 }
 
@@ -495,7 +518,7 @@ async fn cached_index() -> Result<Arc<Vec<SessionIndexItem>>> {
 async fn cached_index_at(path: &Path) -> Result<Arc<Vec<SessionIndexItem>>> {
     // Stamped before the read, so a file replaced between the two is cached
     // under the older stamp — which costs a re-read, never a stale answer.
-    let stamp = fs::metadata(path).await.ok().and_then(|m| IndexStamp::of(&m));
+    let stamp = IndexStamp::at(path).await;
     if let Some(stamp) = stamp {
         if let Some((cached, items)) = &*INDEX_CACHE.lock().unwrap() {
             if *cached == stamp {
@@ -542,8 +565,7 @@ pub async fn lock_across_processes(name: &str) -> Option<std::fs::File> {
     let path = config_dir().await.ok()?.join(format!("{name}.lock"));
     tokio::task::spawn_blocking(move || {
         let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
-        let locked = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) } == 0;
-        locked.then_some(file)
+        file.lock().is_ok().then_some(file)
     })
     .await
     .ok()
@@ -597,7 +619,7 @@ async fn write_atomic_stamped(path: &Path, contents: impl AsRef<[u8]>) -> Result
     fs::write(&tmp, contents)
         .await
         .with_context(|| format!("could not write {}", tmp.display()))?;
-    let stamp = fs::metadata(&tmp).await.ok().and_then(|m| IndexStamp::of(&m));
+    let stamp = IndexStamp::at(&tmp).await;
 
     if let Err(e) = fs::rename(&tmp, path).await {
         // Or the next write inherits a stale temp file it never wrote.
@@ -674,15 +696,15 @@ fn project_root_of(project_path: &str) -> &str {
 /// it and answers `None`, which is right: the entry's recorded project is what
 /// names the repo in that case, and it is tried first anyway.
 ///
-/// A `/` separator rather than `Path::components`, because this reads paths the
-/// app itself wrote on the only platform it runs on: CEF, the app picker, the
-/// notification centre and the output mute are all macOS-only, and the release
-/// workflow builds `universal-apple-darwin` and nothing else. A Windows port
-/// has this to fix and a great deal more beside it.
+/// Both separators, since [`worktree_path`] writes with `Path::join` and git
+/// writes with `/` everywhere. Still a split rather than `Path::components`:
+/// the first `.claude/worktrees/` segment is what names the outermost repo,
+/// and the name after it must be a direct child.
 fn worktree_root_of(path: &str) -> Option<&str> {
-    let (root, name) = path.split_once("/.claude/worktrees/")?;
-    let name = name.trim_end_matches('/');
-    (!name.is_empty() && !name.contains('/')).then_some(root)
+    let at = [path.find("/.claude/worktrees/"), path.find("\\.claude\\worktrees\\")].into_iter().flatten().min()?;
+    let (root, name) = (&path[..at], &path[at + "/.claude/worktrees/".len()..]);
+    let name = name.trim_end_matches(['/', '\\']);
+    (!name.is_empty() && !name.contains('/') && !name.contains('\\')).then_some(root)
 }
 
 impl SessionIndexItem {
@@ -743,6 +765,8 @@ impl SessionIndexItem {
             need: None,
             adopted_by: None,
             routine_run: None,
+            other_agents: Vec::new(),
+            switched: false,
             unknown: Default::default(),
         }
     }
@@ -839,6 +863,8 @@ impl SessionIndexItem {
             need: None,
             adopted_by: None,
             routine_run: None,
+            other_agents: Vec::new(),
+            switched: self.switched,
             unknown: Default::default(),
         }
     }
@@ -1055,14 +1081,15 @@ pub async fn append_session_index_item(session: SessionIndexItem) -> Result<()> 
 /// Records the settable per-session fields, writing only when one changed —
 /// the whole index is serialized on every write, and an unchanged send is the
 /// ordinary case. `modified` is left to the `InProgress` the send publishes.
+/// Answers the entry only where it changed, for the caller to announce.
 pub async fn touch_session_index_item(
     session_id: &str,
     model: ModelId,
     effort: Option<Effort>,
     permission_mode: ApprovalPolicy,
     fast: bool,
-) -> Result<()> {
-    edit_item(session_id, |item| {
+) -> Result<Option<SessionIndexItem>> {
+    let item = edit_item(session_id, |item| {
         // An unset pick means "no explicit model" — the truth for a new session,
         // but touching an existing one it must not *erase* a model already recorded.
         // fx's model list is its active provider's and global, so switching provider
@@ -1086,10 +1113,10 @@ pub async fn touch_session_index_item(
         item.effort = effort;
         item.permission_mode = permission_mode;
         item.fast = fast;
-        ((), changed)
+        (changed.then(|| item.clone()), changed)
     })
     .await?;
-    Ok(())
+    Ok(item.flatten())
 }
 
 /// Brings a set-aside session back, for a queued prompt reaching the child:
@@ -1156,15 +1183,20 @@ pub async fn take_continue_at(session_id: &str, at: &str) -> Result<Option<(Sess
 /// Cuts a session loose from the parent that spawned it, so the sidebar draws
 /// it as a top-level row rather than nested.
 ///
-/// One-way on purpose: there is no re-attach. Parentage records who *created*
-/// a session, which is a fact about the past — a session detached and then
-/// re-parented somewhere else would describe a history that never happened,
-/// and nothing in the app needs that.
+/// Nothing re-parents it to another session. The one way back under anyone is
+/// [`attach_session`], to a bot, which the reader asks for by name.
 ///
 /// `modified` is left alone for [`set_session_flags`]'s reason: it orders the
 /// list, and detaching must not jump the row to the top of it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
+    // A bot's task here whose bot runs on another machine reports through the
+    // outbox, not its parent link, so clearing the link alone kept it the bot's.
+    // First, so a failure leaves the link standing and a retry can finish.
+    crate::remote_reports::disown(session_id).await?;
+    // An attach's note to a child still running, not yet sent: it now names a
+    // bot this task no longer reports to.
+    crate::bots::take_handover(session_id);
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
         // Or the walk would still find a way up through it.
@@ -1174,6 +1206,61 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
         item.clone()
     })
     .await?)
+}
+
+/// Detach's reverse, for a task the reader hands to a bot (#1395): `chat` becomes
+/// its parent, and it and everything below it run hidden, as a bot's own tasks
+/// do. Answers the ids written, the task first, or `None` for an unknown id.
+///
+/// The one place parentage stops meaning "who created it". `modified` moves so
+/// the stall clock starts at the hand-over: the bot is told where the task
+/// stands then, and a nudge for a week it already heard of says nothing new.
+pub async fn attach_session(session_id: &str, chat: &str) -> Result<Option<Vec<String>>> {
+    let _guard = INDEX_LOCK.lock().await;
+    let mut sessions = read_index().await?;
+    let Some(changed) = attach_in(&mut sessions, session_id, chat, now_rfc3339()) else {
+        return Ok(None);
+    };
+    write_session_index(sessions).await?;
+    Ok(Some(changed))
+}
+
+/// [`attach_session`] on a held index.
+fn attach_in(sessions: &mut [SessionIndexItem], session_id: &str, chat: &str, now: String) -> Option<Vec<String>> {
+    let task = sessions.iter_mut().find(|i| i.session_id == session_id)?;
+    task.parent_session_id = Some(chat.to_string());
+    task.adopted_by = None;
+    task.hidden = true;
+    // Neither means anything on a row the sidebar no longer draws, and either
+    // would come back with it on a detach.
+    task.pinned = false;
+    task.aside = false;
+    task.modified = now;
+    let mut changed = vec![session_id.to_string()];
+    let mut queue = std::collections::VecDeque::from([session_id.to_string()]);
+    while let Some(parent) = queue.pop_front() {
+        let kids: Vec<usize> = (0..sessions.len())
+            .filter(|&k| tree_parent_in(sessions, &sessions[k]).is_some_and(|p| p.session_id == parent))
+            .collect();
+        for k in kids {
+            let id = sessions[k].session_id.clone();
+            // A cycle in the index cannot queue a session twice.
+            if changed.contains(&id) {
+                continue;
+            }
+            sessions[k].hidden = true;
+            changed.push(id.clone());
+            queue.push_back(id);
+        }
+    }
+    // Hidden now, so an open session under a settled one is listed only by
+    // its adopter: the Tasks tab skips the settled step it would walk through.
+    for id in readopt_in(sessions, session_id, None) {
+        if !changed.contains(&id) {
+            changed.push(id);
+        }
+    }
+    Some(changed)
 }
 
 /// The hidden sessions `parent_id` started directly — the ones that follow it
@@ -1459,6 +1546,7 @@ pub async fn unlink_session_issue(session_id: &str, key: &str) -> Result<Vec<Iss
 /// Index first: a log with no entry is invisible, an entry with no log reads
 /// back as a session with no events. Only one of those is a lie the UI shows.
 pub async fn delete_session(session_id: &str) -> Result<bool> {
+    crate::secrets::forget(session_id).await;
     let existed = {
         let _guard = INDEX_LOCK.lock().await;
 
@@ -1707,6 +1795,39 @@ pub async fn rename_session(session_id: &str, title: &str) -> Result<Option<Sess
     .await
 }
 
+/// How a session runs on the agent it moves to: picks that belong to one agent.
+pub struct AgentPick {
+    pub model: ModelId,
+    pub effort: Option<Effort>,
+    pub permission_mode: ApprovalPolicy,
+    pub fast: bool,
+}
+
+/// Moves a session onto `to` and its picks in one write, so a failed send
+/// never leaves an agent beside another's model. Remembers the agent it
+/// leaves where `remember`: that agent holds a conversation here to resume.
+pub async fn set_session_agent(
+    session_id: &str,
+    to: Harness,
+    pick: AgentPick,
+    remember: bool,
+) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        if remember && !item.other_agents.contains(&item.harness) {
+            item.other_agents.push(item.harness);
+        }
+        item.harness = to;
+        item.model = pick.model;
+        item.effort = pick.effort;
+        item.effort_above = None;
+        item.permission_mode = pick.permission_mode;
+        item.fast = pick.fast;
+        item.switched = true;
+        item.clone()
+    })
+    .await
+}
+
 /// Records the id the harness knows this session by.
 ///
 /// Written once, when `thread/start` answers. A session whose entry has gone —
@@ -1949,29 +2070,200 @@ pub async fn get_session_calls(session_id: &str, call_ids: Vec<String>) -> Resul
 /// or a kickoff is not theirs, so neither resets it.
 pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
     let page = read_session_page(session_id, None, 20).await?;
-    let mut last = None;
-    let mut since = 0;
-    // The count stops at the reader's own last message; the preview reads on
-    // past it, or a turn still running would blank the row.
+    let tail = tail_of(&page.events);
+    Ok((tail.reply, tail.since))
+}
+
+/// A bot chat's inbox row, read off the end of its log: the line it shows,
+/// one plain line, and the replies since the reader last wrote.
+pub async fn inbox_line(session_id: &str) -> Result<(Option<String>, u32)> {
+    let page = read_session_page(session_id, None, 20).await?;
+    let tail = tail_of(&page.events);
+    Ok((tail.line, tail.since))
+}
+
+/// How much of the reader's message a reaction's line quotes: cut any later
+/// and the row's own truncation takes the closing quote mark.
+const INBOX_QUOTE: usize = 40;
+
+/// How long an inbox line runs: well past what a row draws, short enough
+/// that a long reply is not sent whole on every read.
+const INBOX_LINE: usize = 200;
+
+/// What the end of a chat's log says, read in one walk so the inbox row's
+/// unread count and a task's report can never count replies differently.
+#[derive(Debug, Default, PartialEq)]
+struct Tail {
+    /// The main thread's newest reply, read on past the reader's last
+    /// message, or a turn still running would have none.
+    reply: Option<String>,
+    /// The inbox row's line: the newest of the reader's own message
+    /// (`You: …`), the bot's reaction to it, or its reply.
+    line: Option<String>,
+    /// Replies since the reader last wrote.
+    since: u32,
+}
+
+/// Hidden notes — a review's turn, a kickoff, a task's report — are no one's
+/// line; the reader's reaction to the bot is a badge, read past like the
+/// hidden note telling the bot of it. A message showing nothing is read past.
+///
+/// The bot's reaction is the line only where it said nothing after the
+/// reader's message: a reply, then 👀 turning into ✅ on that message, still
+/// shows the reply, the newest thing it said.
+fn tail_of(events: &[AgentEvent]) -> Tail {
+    let review = crate::bots::learn::in_review(events);
+    let mut tail = Tail::default();
     let mut counting = true;
-    let review = crate::bots::learn::in_review(&page.events);
-    for (event, review) in page.events.into_iter().zip(review).rev() {
+    // Held until the reader's message is reached, so a reply in between wins.
+    let mut reaction = None;
+    for (event, review) in events.iter().zip(review).rev() {
         if event.subagent.is_some() || review {
             continue;
         }
-        match event.payload {
-            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(&text) => {
-                since += u32::from(counting);
-                last.get_or_insert(text);
+        match &event.payload {
+            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
+                tail.since += u32::from(counting);
+                tail.reply.get_or_insert_with(|| text.clone());
+                tail.line.get_or_insert_with(|| cut(&plain(text), INBOX_LINE));
             }
-            AgentEventPayload::UserMessage { from: None, kickoff: false, .. } => counting = false,
+            AgentEventPayload::Reaction { message_id, emoji, by_user: false }
+                if tail.line.is_none() && reaction.is_none() =>
+            {
+                let reacted = events.iter().find(|e| &e.id == message_id).map(|e| match &e.payload {
+                    AgentEventPayload::UserMessage { text, images, .. } => said(text, images.len(), INBOX_QUOTE),
+                    _ => None,
+                });
+                reaction = match reacted {
+                    Some(Some(Said::Text(quote))) => Some(format!("Reacted {emoji} to \"{quote}\"")),
+                    Some(Some(Said::Images(1))) => Some(format!("Reacted {emoji} to an image")),
+                    Some(Some(Said::Images(n))) => Some(format!("Reacted {emoji} to {n} images")),
+                    Some(None) => None,
+                    // Its message is older than the page read.
+                    None => Some(format!("Reacted {emoji} to your message")),
+                };
+            }
+            AgentEventPayload::UserMessage { from: None, kickoff: false, text, images, .. } => {
+                counting = false;
+                if tail.line.is_none() {
+                    tail.line = reaction.take().or_else(|| {
+                        said(text, images.len(), INBOX_LINE).map(|said| match said {
+                            Said::Text(text) => format!("You: {text}"),
+                            Said::Images(1) => "You: Image".into(),
+                            Said::Images(n) => format!("You: {n} images"),
+                        })
+                    });
+                }
+            }
             _ => {}
         }
-        if !counting && last.is_some() {
+        if !counting && tail.reply.is_some() && tail.line.is_some() {
             break;
         }
     }
-    Ok((last, since))
+    // The page ran out before the reader's message: nothing came after it here.
+    tail.line = tail.line.or(reaction);
+    tail
+}
+
+enum Said {
+    Text(String),
+    Images(usize),
+}
+
+/// A message of the reader's on one line, cut to `cap` characters, in their
+/// own words: a `*` they typed is theirs, not markdown. Its images where it
+/// holds no words; `None` where it shows nothing at all.
+fn said(text: &str, images: usize, cap: usize) -> Option<Said> {
+    if crate::events::has_text(text) {
+        Some(Said::Text(cut(&text.split_whitespace().collect::<Vec<_>>().join(" "), cap)))
+    } else {
+        (images > 0).then_some(Said::Images(images))
+    }
+}
+
+/// `line` cut to `cap` characters as a reader counts them, so an emoji
+/// joined with ZWJ or a flag is never split, at the last word break where
+/// the cut lands inside a word.
+fn cut(line: &str, cap: usize) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
+    let Some((at, next)) = line.grapheme_indices(true).nth(cap) else {
+        return line.to_string();
+    };
+    let head = &line[..at];
+    let head = match next.chars().all(char::is_whitespace) {
+        true => head,
+        false => head.rsplit_once(' ').map_or(head, |(words, _)| words),
+    };
+    format!("{}…", head.trim_end())
+}
+
+/// A reply as one plain line with its markdown marks out, by the rule the
+/// clients' `previewLine` follows for a server too old to send this.
+fn plain(text: &str) -> String {
+    let mut unfenced = String::with_capacity(text.len());
+    let mut rest = text;
+    // Fences go in pairs; an unclosed one only loses its backticks below.
+    while let Some(open) = rest.find("```") {
+        let Some(close) = rest[open + 3..].find("```") else { break };
+        unfenced.push_str(&rest[..open]);
+        unfenced.push(' ');
+        rest = &rest[open + 3 + close + 3..];
+    }
+    unfenced.push_str(rest);
+    let unmarked: String = unfenced
+        .lines()
+        .map(line_marks_out)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        // Underscores stay: `parse_args` is a name, and agents bold with `*`.
+        .filter(|&c| c != '*' && c != '`')
+        .collect();
+    unlinked(&unmarked).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A line without its heading and quote marks — by their place at the line's
+/// start alone, since `#908` mid-line is a PR.
+fn line_marks_out(line: &str) -> &str {
+    let mut rest = line.trim_start();
+    loop {
+        let hashes = rest.len() - rest.trim_start_matches('#').len();
+        if (1..=6).contains(&hashes) && rest[hashes..].starts_with(char::is_whitespace) {
+            rest = rest[hashes..].trim_start();
+        } else if let Some(quoted) = rest.strip_prefix('>') {
+            rest = quoted.strip_prefix(char::is_whitespace).unwrap_or(quoted);
+        } else {
+            return rest;
+        }
+    }
+}
+
+/// Every `[words](target)` as its words.
+fn unlinked(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let link = after.find(']').and_then(|close| {
+            let target = after[close + 1..].strip_prefix('(')?;
+            let end = target.find(')')?;
+            Some((close, after.len() - target.len() + end + 1))
+        });
+        match link {
+            Some((close, end)) => {
+                out.push_str(&rest[..open]);
+                out.push_str(&after[..close]);
+                rest = &after[end..];
+            }
+            None => {
+                out.push_str(&rest[..=open]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// What `find` picks out of a session's log, read back from the end a few
@@ -2739,7 +3031,8 @@ pub async fn clear_fork_from(session_id: &str) -> Result<bool> {
 /// calls plus a `create_dir_all` were ~10 thread handoffs per event. No handle
 /// is kept between events: delete, fork repointing and worktree relocation all
 /// rely on each append opening the file afresh.
-pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result<()> {
+pub async fn append_session_event(session_id: &str, mut event: AgentEvent) -> Result<()> {
+    crate::secrets::mask(&mut event);
     let dir = get_home_app_dir().await?.join("sessions");
     let path = dir.join(format!("{session_id}.jsonl"));
     let mut line = serde_json::to_vec(&event)?;
@@ -3140,6 +3433,45 @@ mod tests {
         assert_eq!(live_ancestor_in(&items, "sub"), Some("task"));
     }
 
+    /// A task handed to a bot hangs under its chat, hidden, and so does what it
+    /// started; nothing else moves.
+    #[test]
+    fn an_attached_task_and_its_sub_tasks_go_hidden_under_the_chat() {
+        let mut items = vec![
+            tree_item("chat", None),
+            tree_item("task", None),
+            tree_item("sub", Some("task")),
+            tree_item("other", None),
+        ];
+        items[2].hidden = false;
+        items[1].pinned = true;
+        let changed = attach_in(&mut items, "task", "chat", "now".into()).unwrap();
+        assert_eq!(changed, ["task", "sub"]);
+        assert_eq!(items[1].parent_session_id.as_deref(), Some("chat"));
+        assert!(items[1].hidden && items[2].hidden && !items[1].pinned);
+        assert_eq!(items[1].modified, "now");
+        assert!(!items[3].hidden);
+        assert!(attach_in(&mut items, "gone", "chat", "now".into()).is_none());
+    }
+
+    /// An open session under a settled one is adopted by the attached task, or
+    /// it would be hidden with no list left that reaches it.
+    #[test]
+    fn attaching_adopts_what_hangs_under_a_settled_sub_task() {
+        let mut items = vec![
+            tree_item("chat", None),
+            tree_item("task", None),
+            tree_item("sub", Some("task")),
+            tree_item("leaf", Some("sub")),
+        ];
+        items[2].archived = true;
+        items[3].hidden = false;
+        let changed = attach_in(&mut items, "task", "chat", "now".into()).unwrap();
+        assert_eq!(changed, ["task", "sub", "leaf"]);
+        assert!(items[3].hidden);
+        assert_eq!(adopted(&items, "leaf"), Some("task"));
+    }
+
     /// A bot's task from another machine is the top of its tree here, its
     /// parent being in no index this server holds.
     #[test]
@@ -3231,6 +3563,7 @@ mod tests {
             .collect();
         assert!(prefixes.len() > 1, "only drew {prefixes:?}");
     }
+    #[cfg_attr(windows, allow(unused_imports))]
     use crate::events::{AgentEventPayload, ImageRef, ToolResult};
 
     /// A field a *newer* build wrote has to survive being read and written back
@@ -3895,6 +4228,7 @@ mod tests {
     /// under two session ids, and an image still pointing into its attachment
     /// directory goes blank the moment the parent is deleted.
     #[test]
+    #[cfg(unix)]
     fn a_copied_log_belongs_to_the_fork_that_replays_it() {
         let from_dir = Path::new("/home/.dray/attachments/parent");
         let to_dir = Path::new("/home/.dray/attachments/child");
@@ -4141,6 +4475,7 @@ mod tests {
     /// A fork into a new tree is indexed before the tree exists, and a server
     /// restart in between must not read that as a tree someone deleted.
     #[test]
+    #[cfg(unix)]
     fn a_fork_whose_tree_is_not_made_yet_keeps_its_worktree() {
         let parent = SessionIndexItem::new(
             "parent",
@@ -4200,6 +4535,24 @@ mod tests {
         );
         assert_eq!(worktree_root_of("/repo/.claude/worktrees/"), None);
         assert_eq!(worktree_root_of("/repo"), None);
+    }
+
+    /// `worktree_path` writes backslashes on Windows, where the same repair
+    /// must find the root rather than leave a session pointing at a tree that
+    /// is gone.
+    #[test]
+    fn a_worktree_root_is_found_with_either_separator() {
+        assert_eq!(worktree_root_of(r"C:\repo\.claude\worktrees\calm-owl"), Some(r"C:\repo"));
+        assert_eq!(worktree_root_of(r"C:\repo\.claude\worktrees\calm-owl\"), Some(r"C:\repo"));
+        assert_eq!(worktree_root_of(r"C:\repo\.claude\worktrees\proj\subrepo"), None);
+        assert_eq!(
+            worktree_root_of(r"C:\repo\.claude\worktrees\caller\.claude\worktrees\mine"),
+            None
+        );
+        // git writes `/` even on Windows, so a path can carry either spelling.
+        assert_eq!(worktree_root_of(r"C:\repo/.claude/worktrees/calm-owl"), Some(r"C:\repo"));
+        // The outermost segment names the repo whichever spelling each carries.
+        assert_eq!(worktree_root_of(r"C:\repo\.claude\worktrees\caller/.claude/worktrees/mine"), None);
     }
 
     /// The caller's worktree recorded as the project is usually a *live*
@@ -4466,5 +4819,182 @@ mod page_tests {
         let held = HashSet::from(["e3".to_string()]);
         let since = read_back("s", &mut file, log.len() as u64, 7, |buf, top| after_held(buf, top, &held)).await;
         assert_eq!(seqs(&since.unwrap().unwrap().0), [4, 6, 7]);
+    }
+}
+
+#[cfg(test)]
+mod inbox_tests {
+    use super::*;
+    use crate::events::ImageRef;
+    use crate::harness::Harness;
+
+    fn event(payload: AgentEventPayload) -> AgentEvent {
+        AgentEvent::mint("s".into(), Harness::ClaudeCode, 0, None, None, payload)
+    }
+
+    fn typed(text: &str) -> AgentEvent {
+        user(text, None, false, 0)
+    }
+
+    fn user(text: &str, from: Option<&str>, kickoff: bool, images: usize) -> AgentEvent {
+        event(AgentEventPayload::UserMessage {
+            text: text.into(),
+            images: vec![ImageRef { path: Some("/a.png".into()), url: None, mime_type: None }; images],
+            issues: vec![],
+            baseline: None,
+            queued: false,
+            from: from.map(|title| serde_json::from_value(serde_json::json!({"sessionId": "t", "title": title})).unwrap()),
+            cwd: None,
+            kickoff,
+        })
+    }
+
+    fn reply(text: &str) -> AgentEvent {
+        event(AgentEventPayload::AssistantText { block: None, text: text.into() })
+    }
+
+    fn reaction(on: &AgentEvent, emoji: &str, by_user: bool) -> AgentEvent {
+        event(AgentEventPayload::Reaction { message_id: on.id.clone(), emoji: emoji.into(), by_user })
+    }
+
+    fn inbox_line_of(events: &[AgentEvent]) -> (Option<String>, u32) {
+        let tail = tail_of(events);
+        (tail.line, tail.since)
+    }
+
+    #[test]
+    fn the_reply_reads_on_past_the_readers_message_and_the_line_does_not() {
+        let events = [typed("hi"), reply("Hello"), typed("and now?")];
+        let tail = tail_of(&events);
+        assert_eq!(tail, Tail { reply: Some("Hello".into()), line: Some("You: and now?".into()), since: 0 });
+    }
+
+    #[test]
+    fn the_readers_own_words_keep_their_marks() {
+        assert_eq!(inbox_line_of(&[typed("2*3 is 6")]).0.as_deref(), Some("You: 2*3 is 6"));
+        assert_eq!(inbox_line_of(&[typed("```\nls -la\n```")]).0.as_deref(), Some("You: ``` ls -la ```"));
+    }
+
+    #[test]
+    fn a_reply_loses_its_markdown() {
+        let said = "## Done\n**Merged** — see [the PR](https://x/1) and `parse_args`, #908.\n\n```rust\nfn x() {}\n```\n> quoted";
+        assert_eq!(
+            inbox_line_of(&[typed("go"), reply(said)]).0.as_deref(),
+            Some("Done Merged — see the PR and parse_args, #908. quoted")
+        );
+        // An unclosed fence keeps its words; `[` with no link stays.
+        assert_eq!(plain("```sh\nmake [all]"), "sh make [all]");
+    }
+
+    #[test]
+    fn a_quote_keeps_a_word_that_ends_at_the_cap() {
+        let asked = typed("one two three four five six seven eights nine");
+        let events = [asked.clone(), reaction(&asked, "👍", false)];
+        assert_eq!(
+            inbox_line_of(&events).0.as_deref(),
+            Some("Reacted 👍 to \"one two three four five six seven eights…\"")
+        );
+    }
+
+    #[test]
+    fn a_cut_never_splits_an_emoji() {
+        assert_eq!(cut("👨‍👩‍👧 family", 1), "👨‍👩‍👧…");
+        assert_eq!(cut("🇳🇵🇳🇵🇳🇵", 2), "🇳🇵🇳🇵…");
+        assert_eq!(cut("short", 40), "short");
+    }
+
+    /// A message with nothing to show — a lone zero-width space, no images —
+    /// is no line, and nor is a reaction on one; the walk reads on past both.
+    #[test]
+    fn a_message_showing_nothing_is_read_past() {
+        let blank = typed(" \u{200B} ");
+        assert_eq!(inbox_line_of(&[reply("Hello"), blank.clone()]), (Some("Hello".into()), 0));
+        let events = [reply("Hi"), blank.clone(), reaction(&blank, "👍", false)];
+        assert_eq!(inbox_line_of(&events), (Some("Hi".into()), 0));
+    }
+
+    #[test]
+    fn the_readers_own_message_is_the_line_once_it_is_newest() {
+        let events = [reply("Hello"), typed("fix the\n  build   please")];
+        assert_eq!(inbox_line_of(&events), (Some("You: fix the build please".into()), 0));
+    }
+
+    #[test]
+    fn the_bots_reply_is_the_line_once_it_answers() {
+        let events = [typed("hi"), reply("one"), reply("two")];
+        assert_eq!(inbox_line_of(&events), (Some("two".into()), 2));
+    }
+
+    #[test]
+    fn a_reaction_in_place_of_a_reply_quotes_the_message_it_is_on() {
+        let asked = typed("thanks, that looks great to me and I will merge it after lunch today");
+        let events = [reply("Done"), asked.clone(), reaction(&asked, "👍", false)];
+        assert_eq!(
+            inbox_line_of(&events),
+            (Some("Reacted 👍 to \"thanks, that looks great to me and I…\"".into()), 0)
+        );
+    }
+
+    #[test]
+    fn a_reply_after_the_reaction_wins() {
+        let asked = typed("ok");
+        let events = [asked.clone(), reaction(&asked, "👀", false), reply("On it")];
+        assert_eq!(inbox_line_of(&events), (Some("On it".into()), 1));
+    }
+
+    /// 👀 turning into ✅ once the work is done lands after the bot's reply,
+    /// and must not hide it: the reply is the newest thing the bot said.
+    #[test]
+    fn a_reaction_after_a_reply_leaves_the_reply_as_the_line() {
+        let asked = typed("fix the build");
+        let events = [
+            asked.clone(),
+            reaction(&asked, "👀", false),
+            reply("Fixed, PR is up"),
+            reaction(&asked, "✅", false),
+        ];
+        assert_eq!(inbox_line_of(&events), (Some("Fixed, PR is up".into()), 1));
+    }
+
+    #[test]
+    fn a_reaction_on_a_message_out_of_the_page_still_says_what_it_is() {
+        let gone = typed("old");
+        let events = [reaction(&gone, "✅", false)];
+        assert_eq!(inbox_line_of(&events).0.as_deref(), Some("Reacted ✅ to your message"));
+    }
+
+    #[test]
+    fn images_alone_are_named() {
+        let pic = user("", None, false, 1);
+        assert_eq!(inbox_line_of(&[pic.clone()]).0.as_deref(), Some("You: Image"));
+        let reacted = [pic.clone(), reaction(&pic, "❤️", false)];
+        assert_eq!(inbox_line_of(&reacted).0.as_deref(), Some("Reacted ❤️ to an image"));
+        assert_eq!(inbox_line_of(&[user(" ", None, false, 3)]).0.as_deref(), Some("You: 3 images"));
+    }
+
+    /// A kickoff (the note telling the bot of the reader's reaction, Dray's
+    /// own prompts), a task's report and the reader's own reaction are no one's line.
+    #[test]
+    fn hidden_notes_are_read_past() {
+        let said = reply("Here is the plan");
+        let events = [
+            typed("plan it"),
+            said.clone(),
+            reaction(&said, "❤️", true),
+            user("The user reacted ❤️ (love) to your message", None, true, 0),
+            user("Task finished", Some("fix-build"), false, 0),
+        ];
+        assert_eq!(inbox_line_of(&events), (Some("Here is the plan".into()), 1));
+    }
+
+    #[test]
+    fn a_reviews_turn_is_read_past() {
+        let events = [
+            typed("hi"),
+            reply("Hello"),
+            user(&format!("{} look back", crate::bots::learn::REVIEW), None, true, 0),
+            reply("I learned nothing"),
+        ];
+        assert_eq!(inbox_line_of(&events), (Some("Hello".into()), 1));
     }
 }

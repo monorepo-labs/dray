@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 
-import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { readLocalStorage, useLocalStorage } from "@/hooks/useLocalStorage";
 import type { ModelByHarness } from "@/lib/model";
 import type { ApprovalPolicy, Effort, Harness, ModelId } from "@/types/events";
 
@@ -55,6 +55,13 @@ type ComposerPrefs = {
 ///
 /// Restoring a *session's* settings must never write here — clicking through old
 /// sessions would otherwise rewrite the defaults behind the user's back.
+/// The prefs as stored now, for a caller that needs them once rather than a
+/// hook's own copy — Start session on the pull requests page, whose draft takes
+/// a new task's picks whatever session happens to be selected.
+export function readComposerPrefs(): ComposerPrefs {
+  return { ...SEED, ...readLocalStorage<Partial<ComposerPrefs>>("ade.composerPrefs", SEED) };
+}
+
 export function useComposerPrefs() {
   const [prefs, setPrefs] = useLocalStorage<ComposerPrefs>("ade.composerPrefs", SEED);
 

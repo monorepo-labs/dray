@@ -36,9 +36,10 @@ import { lockedMidTurn } from "@/lib/liveControls";
 import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
+import { DEVICE, localNow } from "@/lib/platform";
 import { setCallReader, setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
-import { botStance, stanceFor } from "@/lib/permission";
+import { botStance, stanceFor, taskStance } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
@@ -48,7 +49,7 @@ import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KE
 import { FIRST_MOUNT } from "@/lib/turnWindow";
 import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionDeletedEvent, SessionSnapshot, SessionStatus, SessionServingEvent, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -280,8 +281,7 @@ function apiRetryOf(session: SessionSnapshot | null, busy: boolean): ApiRetrySta
 }
 
 /// A composer pick made on a session and not yet sent — see `unsentPicks`.
-/// `harness` only ever differs from the session's own in a bot chat, where the
-/// next send moves the chat to that agent.
+/// A `harness` differing from the session's own moves it at the next send.
 type UnsentPick = Partial<Pick<SessionIndexItem, "harness" | "model" | "effort" | "permissionMode" | "fast">> & {
   efforts?: EffortByModel;
 };
@@ -367,6 +367,18 @@ export function useSessions() {
     // has uncommitted changes. Null when nothing is pending.
     const [pendingBranch, setPendingBranch] = useState<string | null>(null);
     const [useWorktree, setUseWorktreeState] = useState(() => prefs.useWorktree);
+    // The branch a new worktree starts on, null for the default branch. Held
+    // with the project it was picked in, so a pick never follows the reader to
+    // another project however that project became the current one.
+    const [worktreePick, setWorktreePick] = useState<{ project: string | null; branch: string | null }>({
+      project: null,
+      branch: null,
+    });
+    const projectPathRef = useRef(projectPath);
+    projectPathRef.current = projectPath;
+    const worktreeBranch = worktreePick.project === projectPath ? worktreePick.branch : null;
+    const setWorktreeBranch = (branch: string | null, project: string | null = projectPathRef.current) =>
+      setWorktreePick({ project, branch });
     // The server New bot makes its bot on, while the dialog is open. It shares
     // the composer's picker, so the models offered must be that server's.
     const [botServer, setBotServer] = useState<ServerId | null>(null);
@@ -430,6 +442,10 @@ export function useSessions() {
     // themselves are: no child survives a restart, so a request that outlived
     // one could never be answered.
     const [asksBySession, setAsksBySession] = useState<Record<string, string[]>>({});
+    // Open secret cards, apart from the asks above: they are logged, outlive
+    // the turn and the child, and close only on their own `secret_answered`,
+    // so no turn ending or task draining may strand them.
+    const [secretAsks, setSecretAsks] = useState<Record<string, string[]>>({});
     const [error, setError] = useState<string | null>(null);
     // Bumped by every navigation, so an action started before it and rejecting
     // after it can be told from one the reader is still standing next to.
@@ -555,8 +571,8 @@ const setHarness = (next: Harness) => {
   // read, which is the only one that can answer.
   const model = rememberedModel(prefs.modelByHarness, next);
   setModelId(model);
-  // Inside a session only a bot chat offers the switch, and the pick is that
-  // chat's until the next send carries it out.
+  // Inside a session the pick is that session's until the next send carries
+  // it out, moving it to that agent.
   if (selectedSessionId) rememberPick({ harness: next, model });
   else setPrefs({ harness: next });
 };
@@ -721,6 +737,18 @@ const runCheckout = async (target: string, stash: boolean) => {
   }
 };
 
+// Read again each time the worktree picker opens: a task started since may have
+// made a remote-only branch local, or the reader fetched.
+const refreshBranches = () => {
+  const asked = projectPath;
+  if (!asked) return;
+  invoke<BranchList>("list_branches", { cwd: asked })
+    .then((list) => {
+      if (projectPathRef.current === asked) setBranches(list);
+    })
+    .catch(() => {});
+};
+
 // A clean tree switches silently; a dirty one routes through the dialog, whose
 // buttons call back into `runCheckout` with the user's choice.
 //
@@ -877,7 +905,7 @@ const handleSendMsg = async (
   // time. The wire still takes paths alone.
   attachments: Attachment[] = [],
   // Where a new session's worktree starts, from a draft `dray draft new
-  // --base` saved. Nothing in the composer sets one.
+  // --base` saved. Without one, the worktree branch picker's.
   baseRef: string | null = null,
 ): Promise<boolean> => {
   const attachmentPaths = attachments.map((a) => a.path);
@@ -886,9 +914,16 @@ const handleSendMsg = async (
   // A bot chat picked onto another agent moves there now: a new session in the
   // bot's folder, which the backend hands the conversation so far. Each CLI
   // resumes only its own sessions, so this one cannot carry on.
-  const switching = !!selected && isBotPath(selected.cwd) && harness !== selected.harness;
-  if (switching && statusOf(selected.sessionId) === "in_progress") {
-    setError(`Wait for this turn to finish before moving the chat to ${AGENT_LABELS[harness]}.`);
+  // A task moves in place instead (#1414): the backend stops its agent and
+  // hands the next one the conversation.
+  // Judged against the index row, which `session_changed` keeps current,
+  // before the loaded transcript's copy: a move made by `dray session model`
+  // must still read as one when the reader picks the agent back.
+  const recorded = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.harness ?? selected?.harness;
+  const moving = !!selected && harness !== recorded;
+  const switching = moving && isBotPath(selected.cwd);
+  if (moving && statusOf(selected.sessionId) === "in_progress") {
+    setError(`Wait for this turn to finish before switching to ${AGENT_LABELS[harness]}.`);
     return false;
   }
   if (switching) unsentPicks.current.delete(selected.sessionId);
@@ -910,7 +945,10 @@ const handleSendMsg = async (
   }
   const sentAt = Date.now();
 
-  const existing = sessionId ? selected : undefined;
+  // Its row when the transcript is not loaded, as on a machine that is down:
+  // the picked project's path would send it to the wrong server, or past the
+  // resume a stopped sandbox needs.
+  const existing = sessionId ? (selected ?? sessionIndexItems.find((i) => i.sessionId === sessionId)) : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
   // for a new session.
   let cwd = switching ? selected.cwd : isNewSession ? projectPath : existing?.cwd ?? projectPath;
@@ -954,7 +992,9 @@ const handleSendMsg = async (
   // A bot's folder is no project, and its chat runs in the folder itself. A
   // cloud task always gets a worktree, whatever the saved toggle says.
   const worktree = (useWorktree || placed !== null) && !isBotPath(cwd);
-  const stance = isBotPath(cwd) ? botStance(harness, permissionMode) : stanceFor(harness, permissionMode);
+  const stance = isBotPath(cwd)
+    ? botStance(harness, permissionMode)
+    : (isNewSession ? stanceFor : taskStance)(harness, permissionMode);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
@@ -1098,6 +1138,18 @@ const handleSendMsg = async (
         if (uploadsAhead.get(sessionId) === settled) uploadsAhead.delete(sessionId);
       }
     }
+    // A task moving agent moves ahead of its send, once its machine is awake,
+    // so a server from before #1414 refuses it rather than the old agent
+    // answering under the new one's name.
+    if (moving && !switching) {
+      await invoke("switch_agent", { sessionId, harness, model: modelId, effort, permissionMode: stance, fast }).catch(
+        (e) => {
+          throw String(e).includes("unknown command")
+            ? `Update this server to switch a task to ${AGENT_LABELS[harness]}.`
+            : e;
+        },
+      );
+    }
     // Nothing awaited between here and the dispatch, so a send queued behind
     // this one cannot overtake it.
     const outcome = await invoke<SendOutcome>("send_msg", {
@@ -1125,8 +1177,11 @@ const handleSendMsg = async (
       branch: isNewSession && !worktree && !placed ? branch : null,
       useWorktree: isNewSession && worktree,
       worktreeName: null,
-      baseRef: isNewSession && worktree ? baseRef : null,
+      // Placed sessions are a server's own picks, never this picker's.
+      baseRef: isNewSession && worktree ? (baseRef ?? (placed ? null : worktreeBranch)) : null,
       isNewSession,
+      device: DEVICE,
+      sentAt: localNow(),
     });
     if (heldAtSend) {
       void settleAfterSend(heldAtSend, sentAt).catch((e) => console.error("could not settle a held flag", e));
@@ -1161,9 +1216,12 @@ const handleSendMsg = async (
         if (sentPick?.efforts) unsentPicks.current.set(sessionId, { efforts: sentPick.efforts });
         else unsentPicks.current.delete(sessionId);
       }
+      // Only onto the agent the row already names: the agent itself moves on
+      // the server's word (`session_changed`, `agent_switched`), never on this
+      // send's, which the server may have answered on another agent.
       setSessionIndexItems((prev) =>
         prev.map((i) =>
-          i.sessionId === sessionId
+          i.sessionId === sessionId && i.harness === harness
             ? { ...i, model: modelId, effort, permissionMode: stance, fast, aside: false, modified: new Date().toISOString() }
             : i,
         ),
@@ -1418,6 +1476,7 @@ const handleNewSession = () => {
   setFastState(prefs.fast);
   setUseWorktreeState(prefs.useWorktree);
   setBranch(branches?.current ?? null);
+  setWorktreeBranch(null);
 };
 
 // Puts the composer's controls back to what the session was started with. Every
@@ -1468,6 +1527,9 @@ const restoreDraftControls = (draft: Draft) => {
   restoreSessionControls({ ...draft, sessionId: draft.id });
   setUseWorktreeState(draft.useWorktree);
   handleSelectProject(draft.projectPath);
+  // A `dray draft new --base` session id shows here too: it is what the
+  // draft starts from.
+  setWorktreeBranch(draft.base ?? null, draft.projectPath);
 };
 
 /// Answers whether the reader ended up on the session they asked for, which is
@@ -1602,6 +1664,20 @@ const detachSession = async (sessionId: string) => {
   }
 };
 
+/// Hands a task to `botId`'s chat on the task's own server (#1395), detach's
+/// reverse. The row comes back hidden under the chat, which takes it out of the
+/// sidebar and into the bot's Tasks; what it started follows on `session_changed`.
+const attachSession = async (sessionId: string, botId: string) => {
+  const fail = failUnlessLeft();
+  try {
+    const updated = await invoke<SessionIndexItem | null>("attach_session", { sessionId, bot: botId });
+    if (!updated) return;
+    setSessionIndexItems((prev) => prev.map((i) => (i.sessionId === sessionId ? updated : i)));
+  } catch (e) {
+    fail(e);
+  }
+};
+
 /// Puts a session's index entry, as the store now holds it, into both copies.
 /// Shared by the sidebar's own writes and by `session_changed`, which carries
 /// the ones `dray session settle` and friends make.
@@ -1645,6 +1721,7 @@ const applyIndexItem = (updated: SessionIndexItem) => {
       s.sessionId === sessionId
         ? {
             ...s,
+            harness: updated.harness,
             archived: updated.archived,
             pinned: updated.pinned,
             hidden: updated.hidden,
@@ -2014,7 +2091,8 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   // unconditionally it would show up under the archived filter too. The ref,
   // since this runs after the fork's round trip.
   if (!showArchivedRef.current) {
-    setSessionIndexItems((prev) => [...prev, snapshot]);
+    // `session_created` can land before this answer does.
+    setSessionIndexItems((prev) => [...prev.filter((i) => i.sessionId !== snapshot.sessionId), snapshot]);
   }
   // Claimed like every other selection path, or an eviction tick landing
   // before this renders sees both selection refs on the parent and drops the
@@ -2069,6 +2147,26 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   // running: the server decided, so each is asked for after the delete.
   const home = homeOf(sessionId);
   const children = hiddenChildren(sessionIndexItems, sessionId).filter((c) => homeOf(c.sessionId) === home);
+  forgetDeleted(sessionId);
+  await Promise.all(
+    children.map(async (c) => {
+      const kept = await invoke<SessionIndexItem | null>("session_index_item", { sessionId: c.sessionId }).catch(
+        () => undefined,
+      );
+      if (kept) applyIndexItem(kept);
+      else if (kept === null) await deleteSession(c.sessionId);
+    }),
+  );
+  await Promise.all(away.map((c) => deleteSession(c.sessionId)));
+  return true;
+};
+
+/// Lets go of everything held for a deleted session: its row, transcript and
+/// live state. Run by this app's own delete and by `session_deleted`, which
+/// says another client deleted it.
+const forgetDeleted = (sessionId: string) => {
+  // Its child dying is the last thing a deleted session says.
+  deletedRef.current.add(sessionId);
   setSessionIndexItems((prev) => prev.filter((i) => i.sessionId !== sessionId));
   setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
   retireStreamingBlock(sessionId);
@@ -2085,20 +2183,9 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   forgetClosedTabs(sessionId);
   forgetParkedTabs(sessionId);
 
-  if (selectedSessionId === sessionId) {
+  if (selectedSessionIdRef.current === sessionId) {
     handleNewSession();
   }
-  await Promise.all(
-    children.map(async (c) => {
-      const kept = await invoke<SessionIndexItem | null>("session_index_item", { sessionId: c.sessionId }).catch(
-        () => undefined,
-      );
-      if (kept) applyIndexItem(kept);
-      else if (kept === null) await deleteSession(c.sessionId);
-    }),
-  );
-  await Promise.all(away.map((c) => deleteSession(c.sessionId)));
-  return true;
 };
 
 const homeOf = (sessionId: string) => {
@@ -2423,6 +2510,17 @@ useEffect(() => {
           return;
         }
 
+        // A move made anywhere (`dray session model`, another window) lands
+        // here even where its `session_changed` was missed: logged, so a
+        // reconnect's catch-up carries it too.
+        if (agentEvent.payload.type === "agent_switched") {
+          const { to } = agentEvent.payload;
+          const moved = <T extends { sessionId: string; harness: Harness }>(s: T): T =>
+            s.sessionId === agentEvent.sessionId && s.harness !== to ? { ...s, harness: to } : s;
+          setSessions((prev) => prev.map(moved));
+          setSessionIndexItems((prev) => prev.map(moved));
+        }
+
         if (agentEvent.payload.type != "delta") {
             // The committed event supersedes its preview, and it arrives one
             // line *before* `block_stop` — so waiting for the stop leaves both
@@ -2610,6 +2708,24 @@ useEffect(() => {
               announce(agentEvent.sessionId, "asking", asking);
             }
 
+            if (agentEvent.payload.type === "secret_requested" && !agentEvent.payload.bot) {
+              const { requestId } = agentEvent.payload;
+              setSecretAsks((prev) => {
+                const cur = prev[agentEvent.sessionId] ?? [];
+                return cur.includes(requestId) ? prev : { ...prev, [agentEvent.sessionId]: [...cur, requestId] };
+              });
+              announce(agentEvent.sessionId, "asking", "Needs a secret");
+            }
+            if (agentEvent.payload.type === "secret_answered") {
+              const { requestId } = agentEvent.payload;
+              setSecretAsks((prev) => {
+                const cur = prev[agentEvent.sessionId];
+                if (!cur?.includes(requestId)) return prev;
+                return { ...prev, [agentEvent.sessionId]: cur.filter((id) => id !== requestId) };
+              });
+              if (!asksBySessionRef.current[agentEvent.sessionId]?.length) dismissNotice(agentEvent.sessionId, "asking");
+            }
+
             // The card is answered, so both the rail mark and the notice
             // pointing at it have nothing left to point at.
             if (agentEvent.payload.type === "permission_decided") {
@@ -2771,6 +2887,8 @@ const sessionsRef = useRef(sessions);
 sessionsRef.current = sessions;
 const asksBySessionRef = useRef(asksBySession);
 asksBySessionRef.current = asksBySession;
+const secretAsksRef = useRef(secretAsks);
+secretAsksRef.current = secretAsks;
 
 /// Appends what a session's log gained since `held` — what the socket to a
 /// `dray-serve` missed while down, or what a kept transcript missed while
@@ -2877,7 +2995,7 @@ const missedFromTail = async (sessionId: string, held: AgentEvent[]) => {
 /// statuses are that server's to say, and its socket never dropped.
 useEffect(() => {
   const listenerPromise = listen<LiveState>("live_state", ({ payload, server }) => {
-    const { asks, tasks } = payload;
+    const { asks, tasks, secrets = [] } = payload;
     for (const e of [...asks, ...tasks]) noteSession(e.sessionId, server);
     const ours = (sessionId: string) => serverOfSession(sessionId) === server;
     const without = <T,>(map: Record<string, T>): Record<string, T> =>
@@ -2901,10 +3019,16 @@ useEffect(() => {
         (open[ask.sessionId] ??= []).push(ask.payload.requestId);
       }
     }
-    for (const id of Object.keys(asksBySessionRef.current)) {
-      if (ours(id) && !open[id]) dismissNotice(id, "asking");
+    const secretOpen: Record<string, string[]> = {};
+    for (const card of secrets) {
+      noteSession(card.sessionId, server);
+      if (card.payload.type === "secret_requested") (secretOpen[card.sessionId] ??= []).push(card.payload.requestId);
+    }
+    for (const id of new Set([...Object.keys(asksBySessionRef.current), ...Object.keys(secretAsksRef.current)])) {
+      if (ours(id) && !open[id] && !secretOpen[id]) dismissNotice(id, "asking");
     }
     setAsksBySession((prev) => ({ ...without(prev), ...open }));
+    setSecretAsks((prev) => ({ ...without(prev), ...secretOpen }));
     setTasksBySession((prev) => ({
       ...without(prev),
       ...Object.fromEntries(
@@ -3326,6 +3450,7 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
       || s.sessionId === selectionRequestRef.current
       || status === "in_progress"
       || (asksBySessionRef.current[s.sessionId]?.length ?? 0) > 0
+      || (secretAsksRef.current[s.sessionId]?.length ?? 0) > 0
     );
   };
   setSessions((prev) => {
@@ -3687,6 +3812,29 @@ useEffect(() => {
   };
 }, []);
 
+// Another client deleted a session: a phone's row menu, or `dray`.
+const forgetDeletedRef = useRef(forgetDeleted);
+forgetDeletedRef.current = forgetDeleted;
+useEffect(() => {
+  const listenerPromise = listen<SessionDeletedEvent>("session_deleted", ({ payload }) => {
+    forgetDeletedRef.current(payload.sessionId);
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+/// A phone's Mark unread arrives as the entry, never as `session_status`,
+/// which reads `completed` as a turn finishing and announces it. Only the read
+/// mark's own move is taken: a turn's status still comes from `session_status`.
+const followReadMarkRef = useRef((_: SessionIndexItem) => {});
+followReadMarkRef.current = ({ sessionId, status }: SessionIndexItem) => {
+  const now = statusOf(sessionId);
+  if ((now === "idle" && status === "completed") || (now === "completed" && status === "idle")) {
+    setStatusBySession((prev) => ({ ...prev, [sessionId]: status }));
+  }
+};
+
 // `dray session settle`, `unsettle`, `set-aside` and their undoing, which reach
 // Rust over the orchestration socket, so the sidebar hears of them only here.
 const applyIndexItemRef = useRef(applyIndexItem);
@@ -3696,6 +3844,7 @@ reportWorktreeFailureRef.current = reportWorktreeFailure;
 useEffect(() => {
   const listenerPromise = listen<SessionIndexItem>("session_changed", (event) => {
     applyIndexItemRef.current(event.payload);
+    followReadMarkRef.current(event.payload);
   });
   // A held flag written once its server came back: the row as that server
   // answered, in case its own `session_changed` is still on the way.
@@ -3720,7 +3869,7 @@ const followModelPickRef = useRef((_: SessionIndexItem) => {});
 followModelPickRef.current = (item: SessionIndexItem) => {
   const pick = unsentPicks.current.get(item.sessionId);
   if (pick) {
-    const { model: _model, effort: _effort, efforts: _efforts, ...rest } = pick;
+    const { harness: _harness, model: _model, effort: _effort, efforts: _efforts, ...rest } = pick;
     unsentPicks.current.set(item.sessionId, rest);
   }
   if (item.sessionId === selectedSessionIdRef.current) restoreSessionControls(item);
@@ -3802,19 +3951,24 @@ const busy = selectedStatus === "in_progress";
 // The sessions standing still behind a card the reader has to answer. A set
 // rather than the id lists themselves: the sidebar only asks whether a row is
 // waiting, and passing the lists would re-render every row on each request.
+const allAsks = useMemo(() => {
+  const merged: Record<string, string[]> = { ...asksBySession };
+  for (const [id, ids] of Object.entries(secretAsks)) merged[id] = [...(merged[id] ?? []), ...ids];
+  return merged;
+}, [asksBySession, secretAsks]);
 const askingSessions = useMemo(
   () =>
     new Set(
-      Object.entries(asksBySession)
+      Object.entries(allAsks)
         .filter(([, ids]) => ids.length > 0)
         .map(([sessionId]) => sessionId),
     ),
-  [asksBySession],
+  [allAsks],
 );
 
 // The dock badge counts the same rows the rail marks, so it lives beside the
 // two maps that decide them rather than in `App`.
-useDockBadge(statusBySession, asksBySession, sessionIndexItems);
+useDockBadge(statusBySession, allAsks, sessionIndexItems);
 
 // Prompts typed into the running turn and not yet handed to the CLI. Not gated
 // on `busy` like the live state below: a queue only exists while a turn runs,
@@ -3914,6 +4068,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems: shownIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, worktreeBranch, setWorktreeBranch, refreshBranches, busy, backgroundTasks, liveTaskIds, tasksBySession, servingBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, attachSession, deleteSession, removeWorktree, ensureLoaded, prefetchTranscript, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }

@@ -1,6 +1,6 @@
 import { invoke, listen, LOCAL, serverOfSession } from "@/lib/transport";
 import { IS_MAC } from "@/lib/platform";
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore, type CSSProperties } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
@@ -733,6 +733,12 @@ export function stoppedServer(tab: BrowserTab, browser: string): StoppedServer |
   return { port: local, sessionId: serverOfSession(browser) === LOCAL ? browser : null, since, retrying };
 }
 
+/// The colour `tab`'s page shows, which its tab and URL row wear. None under a
+/// stopped server's page: Chromium's error page behind it reports its own.
+export function pageColour(tab: BrowserTab, browser: string): string | null {
+  return stoppedServer(tab, browser) ? null : (tab.background ?? null);
+}
+
 /// One of the session's dev servers, opened in this Mac's browser — `browser`'s
 /// tabs, which are a bot's for one of its tasks. Forwarded off the session's
 /// own machine either way. A failed forward reports where a failed open does.
@@ -1238,4 +1244,19 @@ export function browserTarget(url: string): "localhost" | "site" | null {
 export function trackBrowserOpen(url: string) {
   const target = browserTarget(url);
   if (target) void invoke("track_feature", { feature: "browser_open", target }).catch(() => {});
+}
+
+/// A surface painted in the page's colour, with the ink tokens flipped to suit
+/// it — a black page in light mode would otherwise draw grey on black. The URL
+/// row and the lit tab above it both wear it; `--tab-fill` is the tab's.
+export function tint(background: string): CSSProperties {
+  const [r, g, b] = background.match(/\d+/g)?.map(Number) ?? [255, 255, 255];
+  const dark = 0.2126 * r + 0.7152 * g + 0.0722 * b < 140;
+  return {
+    background,
+    ["--card" as string]: background,
+    ["--tab-fill" as string]: background,
+    ["--foreground" as string]: dark ? "white" : "black",
+    ["--muted-foreground" as string]: dark ? "rgb(255 255 255 / 0.6)" : "rgb(0 0 0 / 0.55)",
+  };
 }

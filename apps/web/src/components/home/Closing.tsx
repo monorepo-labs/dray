@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 
-import { DownloadButton, IPhoneButton } from "@/components/DownloadButton";
+import { DownloadButton, WindowsButton } from "@/components/DownloadButton";
 import { LinuxMenu } from "@/components/LinuxMenu";
 import { CARD_TITLE, LABEL as LABEL_TYPE, Title } from "@/components/home/Section";
 import { Stripes } from "@/components/home/Stripes";
@@ -36,13 +36,14 @@ export function Closing() {
 
         <div className="mt-12 grid gap-[2px] sm:grid-cols-2 lg:mt-20">
           <Way label="On your devices" title="Download the app.">
-            <div className="flex flex-wrap items-center gap-3">
-              <DownloadButton from="cta" className="inline-flex h-10 items-center gap-2 rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5" />
-              <LinuxMenu from="cta" className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-[6px] border border-white/30 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10" />
-              <IPhoneButton from="cta" className="inline-flex h-10 items-center gap-2 rounded-[6px] border border-white/30 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10" />
+            {/* Stacked full width on a phone, like the hero's. */}
+            <div className="flex flex-wrap items-center gap-3 max-sm:flex-col max-sm:items-stretch">
+              <DownloadButton from="cta" className="inline-flex h-10 items-center gap-2 max-sm:w-full max-sm:justify-center rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040] transition-opacity hover:opacity-90 [&>svg]:-mt-0.5" />
+              <LinuxMenu from="cta" className="inline-flex h-10 cursor-pointer items-center gap-2 max-sm:w-full max-sm:justify-center rounded-[6px] border border-white/30 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10" />
+              <WindowsButton from="cta" beta="text-white/70" className="inline-flex h-10 items-center gap-2 max-sm:w-full max-sm:justify-center rounded-[6px] border border-white/30 px-4 text-[14px] leading-5 font-medium text-white transition-colors hover:bg-white/10" />
             </div>
           </Way>
-          <Way label="On a server" title="Install the CLI.">
+          <Way label="On a server" title="Install the CLI." line="Run tasks on a remote Linux or macOS machine.">
             <CopyLine />
           </Way>
         </div>
@@ -69,12 +70,23 @@ export function Closing() {
 }
 
 /// One of the two ways in: a label, a line, and the thing to do at the foot.
-function Way({ label, title, children }: { label: string; title: string; children: React.ReactNode }) {
+function Way({
+  label,
+  title,
+  line,
+  children,
+}: {
+  label: string;
+  title: string;
+  line?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex min-h-[200px] min-w-0 flex-col justify-between gap-8 bg-white/10 p-6">
       <div className="flex flex-col gap-1.5">
         <p className={LABEL}>{label}</p>
         <h3 className={CARD_TITLE}>{title}</h3>
+        {line && <p className="text-[15px] leading-[22px] text-white/70">{line}</p>}
       </div>
       {children}
     </div>

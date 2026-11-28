@@ -117,9 +117,12 @@ impl ToolLine {
     }
 }
 
-/// The last two segments: enough to know a file by, beside the tool.
+/// The last two segments: enough to know a file by, beside the tool. Split on
+/// either separator rather than through `Path`, which drops `.` and `..` and
+/// would draw `./src/a.rs` whole where the Mac island draws `src/a.rs`; a path
+/// from an agent on Windows uses backslashes. Joined with `/` on both.
 fn shorten(path: &str) -> String {
-    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
     if parts.len() <= 2 { path.to_string() } else { parts[parts.len() - 2..].join("/") }
 }
 
@@ -332,6 +335,16 @@ mod tests {
         let line = ToolLine::new(&p);
         assert_eq!(line.beside.as_deref(), Some("c/d.rs"));
         assert!(line.hidden.is_none());
+    }
+
+    /// An agent on Windows hands back backslashes; the card still names the
+    /// file by its last two parts, and `./` never keeps a path whole.
+    #[test]
+    fn a_path_is_shortened_whichever_way_it_is_spelled() {
+        for (path, beside) in [(r"C:\work\src\main.rs", "src/main.rs"), ("./src/a.rs", "src/a.rs"), ("../x/y.rs", "x/y.rs")] {
+            let p = Permission { tool_name: "Write".into(), input: json!({ "file_path": path }), ..Default::default() };
+            assert_eq!(ToolLine::new(&p).beside.as_deref(), Some(beside), "{path}");
+        }
     }
 
     #[test]

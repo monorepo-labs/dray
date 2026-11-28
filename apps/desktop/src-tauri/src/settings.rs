@@ -28,10 +28,9 @@ static SETTINGS_LOCK: Mutex<()> = Mutex::const_new(());
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    /// The old in-app analytics switch, **read by nothing**: Settings offers no
-    /// opt-out any more, so a stored `false` is ignored and `DRAY_NO_ANALYTICS`
-    /// is the only way off. Kept so an older build sharing `~/.dray` still finds
-    /// the field it reads, and so a rewrite here carries its value through.
+    /// Settings' "Share usage analytics" switch. Here because the server and
+    /// `app_started` read it before any webview exists. A `false` stored
+    /// before #658 took the switch away counts again.
     #[serde(default = "enabled_by_default")]
     pub analytics_enabled: bool,
     /// A random id for this install, or `None` where nothing has ever been
@@ -185,9 +184,8 @@ pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> 
 
 /// This install's id, minted and persisted on first use.
 ///
-/// Every install gets one, a stored `analytics_enabled: false` included: the
-/// only opt-out is `DRAY_NO_ANALYTICS`, which [`crate::analytics`] checks before
-/// asking. Minting goes through [`update`], so a malformed file is recovered
+/// Only asked for once [`crate::analytics`] has found reporting on, so an
+/// install that turned it off before its first event never has one. Minting goes through [`update`], so a malformed file is recovered
 /// rather than silencing analytics for good, and an unreadable one is left
 /// untouched.
 ///

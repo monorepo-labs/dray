@@ -122,6 +122,10 @@ pub async fn save(list: &[Saved]) -> Result<(), String> {
     write(list).await
 }
 
+/// What every client hears after this server rewrites `servers.json` itself.
+/// The Mac app reloads its list on it from its own server.
+pub const SERVERS_WRITTEN: &str = "servers_written";
+
 /// The server's own write, made only while no app is connected to it. One
 /// that connected meanwhile read its list before this landed, so it is told
 /// to read again; [`crate::serve`] tells every app that connects the same.
@@ -130,6 +134,9 @@ async fn write(list: &[Saved]) -> Result<(), String> {
     let body = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
     store::write_atomic(&path, body).await.map_err(|e| format!("{e:#}"))?;
     tokio::spawn(crate::serve::host_call("reload_servers", Value::Null));
+    // Broadcast too: an app still connected but not answering as host — one
+    // whose host turn was taken by a connection now gone — hears this alone.
+    crate::serve::HUB.publish(SERVERS_WRITTEN, &Value::Null);
     tokio::spawn(announce_sharing());
     Ok(())
 }
@@ -404,14 +411,21 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
 }
 
 /// An admitted socket to `saved`. A kept login the server refuses — its token
-/// moved, its forward died — is dropped, so the next call logs in afresh.
+/// moved, its forward died with a dropped link or a restart there — is dropped
+/// and logged into afresh at once: failing the call instead made every machine
+/// read as holding nothing to a bare id's sweep after a laptop woke.
 async fn connect(saved: &Saved) -> Result<Socket, String> {
+    let was_kept = saved.ssh.is_some() && kept(&saved.id).is_some();
     let (url, token) = reach(saved).await?;
     match admit(&url, &token).await {
         Ok((ws, _)) => Ok(ws),
         Err(e) => {
             drop_login(&saved.id, &url);
-            Err(e)
+            if !was_kept {
+                return Err(e);
+            }
+            let (url, token) = reach(saved).await?;
+            admit(&url, &token).await.map(|(ws, _)| ws).inspect_err(|_| drop_login(&saved.id, &url))
         }
     }
 }
@@ -423,6 +437,30 @@ fn drop_login(id: &str, url: &str) {
     if tunnels.get(id).is_some_and(|t| format!("ws://127.0.0.1:{}", t.port) == url) {
         tunnels.remove(id);
     }
+}
+
+/// [`call`], refused where the link would carry `args` in the clear: a
+/// `ws://` address off this host. Loopback covers an SSH login's forward.
+pub async fn call_private(saved: &Saved, cmd: &str, args: Value) -> Result<Value, String> {
+    let (url, _) = reach(saved).await?;
+    if !private_url(&url) {
+        return Err(format!(
+            "{} is reached over unencrypted {url}, so no secret goes there. Reach it over SSH or a wss:// address.",
+            saved.name
+        ));
+    }
+    call(saved, cmd, args).await
+}
+
+/// `wss://`, or `ws://` to this host alone.
+pub(crate) fn private_url(url: &str) -> bool {
+    if url.starts_with("wss://") {
+        return true;
+    }
+    let Some(rest) = url.strip_prefix("ws://") else { return false };
+    let host = rest.split('/').next().unwrap_or_default();
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]")
 }
 
 /// Runs serve command `cmd` on `saved`: connect, ask, close.
@@ -711,6 +749,44 @@ pub async fn set_on(name: &str, on: bool) -> Result<Row, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kept login whose forward went dead — a dropped link, a restart there —
+    /// heals inside the call that finds it, rather than failing that call and
+    /// so reading to a bare id's sweep as a machine holding nothing.
+    #[tokio::test]
+    async fn a_kept_login_gone_stale_logs_in_again_within_the_call() {
+        let dead = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_port = dead.local_addr().unwrap().port();
+        drop(dead);
+        let live = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", live.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = live.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            ws.next().await;
+            ws.send(Message::text(json!({ "v": crate::serve::PROTOCOL }).to_string())).await.unwrap();
+            while ws.next().await.is_some() {}
+        });
+        // The fresh login fails at once (nothing on port 1), and so falls back
+        // to the Remote access address its last login read: the live server.
+        let saved = Saved {
+            id: format!("stale-{}", uuid::Uuid::new_v4().simple()),
+            name: "vps".into(),
+            url,
+            ssh: Some(ssh::Target { dest: "nobody@127.0.0.1".into(), port: Some(1) }),
+            off: false,
+            beta: false,
+            ignored: None,
+            boat: None,
+            cloud: None,
+            unknown: Default::default(),
+        };
+        tunnels().insert(saved.id.clone(), ssh::Tunnel::standing_in(dead_port));
+
+        let ws = connect(&saved).await;
+        assert!(ws.is_ok(), "{:?}", ws.err());
+        assert!(kept(&saved.id).is_none(), "the stale login is gone");
+    }
 
     /// A stopped machine's tasks can't be settled, so unsettled alone says
     /// nothing; only running, waiting or an open PR counts.

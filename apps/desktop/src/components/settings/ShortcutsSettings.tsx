@@ -40,7 +40,7 @@ import {
   useAnyModsOverride,
   useMods,
 } from "@/lib/digitChords";
-import { IS_LINUX, IS_MAC } from "@/lib/platform";
+import { HAS_ISLAND, IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// Who already answers `mods` plus one of the first `slots` digits: another
@@ -140,7 +140,8 @@ function DigitRow({ id, label, slots }: { id: DigitChordId; label: string; slots
               e.preventDefault();
               e.stopPropagation();
               peak.current = null;
-              if (!usableMods(next)) return setRefused("Hold ⌘, ⌃ or ⌥.");
+              // Off a Mac the OS owns Win or Super plus a digit, so those go unsuggested.
+              if (!usableMods(next)) return setRefused(IS_MAC ? "Hold ⌘, ⌃ or ⌥." : "Hold Ctrl or Alt.");
               const by = digitClash(next, slots, id);
               if (by) return setRefused(`Already used by ${by}.`);
               setMods(id, next);
@@ -201,7 +202,7 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
     rows: SHORTCUTS.filter((s) => s.group === group && matches(s.label, group) && offered(s.id)),
     digits: DIGIT_CHORDS.filter((c) => c.group === group && matches(c.label, group)),
   })).filter((g) => g.rows.length + g.digits.length > 0);
-  const islandShown = (IS_MAC || IS_LINUX) && matches("Open Dray Island", "Dray Island");
+  const islandShown = HAS_ISLAND && matches("Open Dray Island", "Dray Island");
 
   return (
     <div className="flex flex-col gap-5">
@@ -222,7 +223,7 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
       />
       {islandShown && (
         <p className="text-ui text-muted-foreground">
-          {/* Linux's screenshot key is fixed, so only the open key is a pick. */}
+          {/* Off a Mac the screenshot key is fixed, so only the open key is a pick. */}
           {IS_MAC ? "Dray Island's open and screenshot keys are under" : "Dray Island's open key is under"}{" "}
           <button
             type="button"
@@ -322,7 +323,7 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
                   >
                     {recording === id ? (
                       <span className="text-ui text-muted-foreground">
-                        {chordFor(id) === null ? "Press keys…" : "Press keys, ⌫ to remove"}
+                        {chordFor(id) === null ? "Press keys…" : `Press keys, ${IS_MAC ? "⌫" : "Backspace"} to remove`}
                       </span>
                     ) : chordFor(id) === null ? (
                       // `ShortcutKeys` draws nothing for an unbound id, which

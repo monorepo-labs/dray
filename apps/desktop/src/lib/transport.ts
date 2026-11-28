@@ -25,12 +25,22 @@ export type ServerEventCallback<T> = (event: ServerEvent<T>) => void;
 /// changed. `invoke` is the only thing that unwraps one.
 const SCHEME = "dray://";
 
+/// A Windows drive or UNC path carries its own root, so the slash after the
+/// server id is a separator and not the path's leading slash. Without this a
+/// remote Windows server's `C:\…` reads as relative and keys as a local path.
+const WINDOWS_ROOT = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+
 /// The server a path lives on, and the path as that server spells it.
 export function splitPath(path: string): { server: ServerId; path: string } {
   if (!path.startsWith(SCHEME)) return { server: LOCAL, path };
   const rest = path.slice(SCHEME.length);
   const slash = rest.indexOf("/");
-  return slash < 0 ? { server: rest, path: "/" } : { server: rest.slice(0, slash), path: rest.slice(slash) };
+  if (slash < 0) return { server: rest, path: "/" };
+  const qualified = rest.slice(slash);
+  return {
+    server: rest.slice(0, slash),
+    path: WINDOWS_ROOT.test(qualified.slice(1)) ? qualified.slice(1) : qualified,
+  };
 }
 
 export const serverOfPath = (path: string): ServerId => splitPath(path).server;
@@ -41,8 +51,8 @@ export const displayPath = (path: string): string => splitPath(path).path;
 /// `path` as the frontend keys it on `server`. Relative and already-qualified
 /// paths come back untouched.
 export function qualify(path: string, server: ServerId): string {
-  if (server === LOCAL || !path.startsWith("/")) return path;
-  return `${SCHEME}${server}${path}`;
+  if (server === LOCAL || (!path.startsWith("/") && !WINDOWS_ROOT.test(path))) return path;
+  return `${SCHEME}${server}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
 // ── sessions ──────────────────────────────────────────────────────────────────
@@ -90,11 +100,13 @@ const QUALIFIED = new Set([
   "list_session_index_items",
   "session_index_item",
   "detach_session",
+  "attach_session",
   "remove_session_worktree",
   "set_session_flags",
   "get_session_by_id",
   "fork_session",
   "send_msg",
+  "start_pr_session",
   "read_file",
   "list_bots",
   "create_bot",
@@ -221,6 +233,7 @@ export const APP_COMMANDS = new Set([
   "open_login_terminal",
   "run_agent_login",
   "update_agent_in_terminal",
+  "install_agent_in_terminal",
   "transcription_status",
   "download_transcription_model",
   "cancel_transcription_download",

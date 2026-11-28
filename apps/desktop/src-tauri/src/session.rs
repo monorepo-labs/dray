@@ -106,6 +106,89 @@ pub struct QueuedMessage {
     /// flush.
     #[serde(default)]
     pub issues: Vec<IssueRef>,
+    /// Dray's own prompt, which nobody typed: a bot's kickoff or review, or a
+    /// reaction told to the agent. No client draws it and a cancel never takes
+    /// it back, as its logged event draws nothing either.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    /// Where it was typed, for the tag the flush hands the agent. Held here
+    /// only: no client draws it.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub origin: Option<Origin>,
+}
+
+/// The device a reader typed a prompt on, named to the agent so it can fit its
+/// reply to the screen. Each client sends its own with `send_msg`; Dray's own
+/// prompts, relays and the CLI send none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Device {
+    Mac,
+    Windows,
+    Linux,
+    Iphone,
+    Ipad,
+    Android,
+    Island,
+    /// A name from a newer client. Read as no device rather than failing the send.
+    #[serde(other)]
+    Other,
+}
+
+impl Device {
+    fn name(self) -> Option<&'static str> {
+        Some(match self {
+            Device::Mac => "Mac app",
+            Device::Windows => "Windows app",
+            Device::Linux => "Linux app",
+            Device::Iphone => "iPhone",
+            Device::Ipad => "iPad",
+            Device::Android => "Android",
+            Device::Island => "Island",
+            Device::Other => return None,
+        })
+    }
+}
+
+/// Where a reader typed a prompt and, in a bot's chat, their local time then,
+/// told to the agent in one tag after the prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    pub device: Device,
+    /// `14:32`, or `Nov 25 09:10` where the reader's date is not `today`.
+    pub time: Option<String>,
+}
+
+impl Origin {
+    /// `sent_at` is the client's own clock with its offset (RFC 3339), so the
+    /// time is the reader's wall clock, not the server's. `today` is the date
+    /// the harness has, the server's: the reader's is named only where it differs.
+    pub fn new(device: Device, sent_at: Option<&str>, today: chrono::NaiveDate) -> Origin {
+        let time = sent_at.and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| {
+            match at.date_naive() == today {
+                true => at.format("%H:%M").to_string(),
+                false => at.format("%b %-d %H:%M").to_string(),
+            }
+        });
+        Origin { device, time }
+    }
+
+    /// The line the agent is given after the prompt, or `None` for an unknown device.
+    pub fn tag(&self) -> Option<String> {
+        let name = self.device.name()?;
+        Some(match &self.time {
+            Some(time) => format!("[sent from {name}, {time}]"),
+            None => format!("[sent from {name}]"),
+        })
+    }
+}
+
+impl QueuedMessage {
+    /// Whether the reader typed this, the only kind a client draws or cancels.
+    fn typed(&self) -> bool {
+        self.from.is_none() && !self.hidden
+    }
 }
 
 /// Held prompts, oldest first. Shared with the stdout task, which is where the
@@ -130,12 +213,12 @@ pub struct QueueChangedEvent {
 ///
 /// A relayed message — a task's report, another bot's or session's send — is
 /// left out: it is for the agent, and every client drew it as the reader's own
-/// bubble until its flush.
+/// bubble until its flush. So is Dray's own prompt ([`QueuedMessage::hidden`]).
 pub async fn publish_queue(session_id: &str, queued: &QueuedMessages, app: &Sink) {
     let held = queued.lock().await;
     let event = QueueChangedEvent {
         session_id: session_id.to_string(),
-        queued: held.iter().filter(|m| m.from.is_none()).cloned().collect(),
+        queued: held.iter().filter(|m| m.typed()).cloned().collect(),
     };
     if let Err(e) = app.emit("queue_changed", &event) {
         eprintln!("[queue emit err] {e}");
@@ -182,9 +265,39 @@ pub async fn model_spec(harness: Harness, model: &ModelId) -> Result<Option<Mode
         Harness::Pi => crate::harness::pi::models::find(model).await,
         Harness::Fx => crate::harness::fx::models::find(model).await,
         Harness::Grok => crate::harness::grok::models::find(model).await,
+        Harness::OpenCode => crate::harness::opencode::models::find(model).await,
         Harness::Codex => crate::harness::codex::models::find(model).await,
         _ => Some(find_model(model).with_context(|| format!("unknown model {model}"))?),
     })
+}
+
+/// [`model_spec`], refusing a model `harness` cannot run.
+///
+/// A model belongs to exactly one harness, and the pair reaches a send or a
+/// switch from places that each know only half of it — the composer's stored
+/// defaults and the `dray` CLI's own flags — so nothing upstream makes them
+/// agree. Refused rather than quietly repaired: a session running on a model
+/// nobody picked is the failure that looks like success.
+///
+/// The unset sentinel is exempt: it names no model, so there is nothing to be
+/// wrong about, and refusing it would refuse pi's own default. Codex answers
+/// the wider question itself: its lookup searches what Codex reported *and*
+/// the table, where `runs_on` knows only the table and would refuse a model
+/// newer than this build. pi's own list is the authority on pi too, plugin
+/// providers included; `runs_on` is the fallback for a probe that has not
+/// answered.
+pub async fn runnable_model_spec(harness: Harness, model: &ModelId) -> Result<Option<Model>> {
+    let spec = model_spec(harness, model).await?;
+    let runnable = match harness {
+        Harness::Codex => spec.is_some(),
+        Harness::Pi => spec.is_some() || runs_on(model, harness),
+        _ => runs_on(model, harness),
+    };
+    if !model.is_unset() && !runnable {
+        let named = spec.as_ref().map_or_else(|| model.to_string(), |m| m.label.clone());
+        bail!("{named} is not a {} model", harness.label());
+    }
+    Ok(spec)
 }
 
 /// Whether a send has to replace the child rather than write to it.
@@ -213,6 +326,72 @@ fn respawn_needed(
         return false;
     }
     auth_failed || (!busy && settings_changed)
+}
+
+/// Moves a task to another agent (#1414): stops the old child, records the
+/// move on the index and logs an `agent_switched` event. The conversation goes
+/// across at the next spawn, which reads that line back
+/// ([`crate::bots::mark_switch_if_unanswered`]). Each CLI resumes only its own
+/// sessions, so the old child cannot carry on, background tasks included.
+async fn move_agent(
+    slot: &mut Option<Session>,
+    item: SessionIndexItem,
+    to: Harness,
+    pick: crate::store::AgentPick,
+    app: &Sink,
+) -> Result<SessionIndexItem> {
+    if let Some(s) = slot.as_ref() {
+        if s.status.lock().await.turn_in_flight() {
+            bail!("Wait for this turn to finish before switching to {}.", to.label());
+        }
+    }
+    // A bot chat moves by starting a new session in its folder (`mark_new_chat`).
+    if crate::bots::bot_at(&item.cwd).await.is_some() {
+        bail!("a bot chat moves to another agent from its own picker");
+    }
+    if !crate::binpath::agent_available(to).await {
+        bail!("{} isn't installed. {}, then send again.", to.label(), to.install_advice());
+    }
+    let id = &item.session_id;
+    // Numbered off the old child's counter while one runs, since its reader
+    // can still log a late line after the kill.
+    let seq = match slot.take() {
+        Some(s) => {
+            // Its background tasks go too (a dev server, a `Monitor`): the next
+            // agent cannot see or stop them. Cleared off the panel here, since
+            // the old reader's settle skips a slot the next child already holds.
+            if !s.status.lock().await.background_task_ids().is_empty() {
+                let payload = AgentEventPayload::BackgroundTasksChanged { tasks: vec![] };
+                let cleared = AgentEvent::mint(id.clone(), item.harness, s.seq.fetch_add(1, Relaxed), None, None, payload);
+                app.emit("agent_event", &cleared).ok();
+            }
+            let seq = s.seq.fetch_add(1, Relaxed);
+            s.kill_tree().await?;
+            seq
+        }
+        None => next_seq_by_session_id(id).await?,
+    };
+    // A replay queued for a switch that never reached its agent (one logged
+    // out, say) speaks of that agent and its history; the next spawn builds
+    // this one's.
+    crate::bots::drop_task_handover(id);
+    // Only an agent that took part has a conversation here to go back to.
+    let remember = crate::bots::agent_joined(&item).await;
+    // Codex, fx and OpenCode keep one thread id on the index, so they always
+    // start fresh.
+    let resumed = item.other_agents.contains(&to) && !matches!(to, Harness::Codex | Harness::Fx | Harness::OpenCode);
+    let payload = AgentEventPayload::AgentSwitched { from: item.harness, to, resumed };
+    let event = AgentEvent::mint(id.clone(), to, seq, None, None, payload);
+    // The marker before the index: a marker whose agent the index never took
+    // is ignored at the next spawn, while an index moved with no marker would
+    // hand the new agent nothing.
+    append_session_event(id, event.clone()).await?;
+    app.emit("agent_event", &event)?;
+    let item = crate::store::set_session_agent(id, to, pick, remember)
+        .await?
+        .with_context(|| format!("unknown session {id}"))?;
+    app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
+    Ok(item)
 }
 
 /// Drives [`SessionStatus`] from the mapped event stream plus the user's own
@@ -490,6 +669,22 @@ impl StatusTracker {
     }
 }
 
+/// What a tree left detached at `branch` tells its agent, as
+/// `start_pr_session`'s line does for a pull request's head: another tree
+/// has the branch, so commits go up by `HEAD:<branch>`.
+async fn detached_push_line(project_path: &str, branch: &str) -> String {
+    match git::branch_remote(project_path, branch).await {
+        Some(remote) => format!(
+            "Another tree has {branch} checked out, so this one is detached at its tip. Commit here and push with \
+             `git push {remote} HEAD:refs/heads/{branch}`. If the push is refused, fetch and rebase onto {remote}/{branch} first."
+        ),
+        None => format!(
+            "Another tree has {branch} checked out, so this one is detached at its tip. Commit here; this repository \
+             has no remote to push to."
+        ),
+    }
+}
+
 /// Deletes the worktree an index entry names, if it names one.
 ///
 /// A session that never had a worktree is a no-op rather than an error: this
@@ -696,8 +891,7 @@ pub async fn settle_dead_child(
     // This close never passes through `ingest_event`, where a bot's child
     // reports; without this the bot would wait on a turn that is over.
     if died_mid_turn {
-        LAST_REPLY.lock().unwrap().remove(session_id);
-        POSTED.lock().unwrap().remove(session_id);
+        forget_turn(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
         crate::routines::turn_ended(session_id, None, false, app).await;
     }
@@ -850,6 +1044,13 @@ impl SessionManager {
     /// allocates nothing.
     async fn existing(&self, id: &str) -> Option<Slot> {
         self.sessions.lock().await.get(id).cloned()
+    }
+
+    /// Whether a child runs for `session_id`, so a fact it read at spawn may be
+    /// stale. A slot locked by a send counts: that send may be spawning one.
+    pub async fn has_child(&self, session_id: &str) -> bool {
+        let Some(slot) = self.existing(session_id).await else { return false };
+        slot.try_lock().map_or(true, |guard| guard.is_some())
     }
 
     /// Commits the server to exiting if nothing is running, and holds every
@@ -1007,11 +1208,12 @@ impl SessionManager {
         branch: Option<&str>,
         use_worktree: bool,
         worktree_name: Option<&str>,
-        // Where the worktree starts from, already resolved to a git ref by the
-        // caller — the orchestration socket turns a session id into one, and
-        // nothing below here knows sessions. `None` is the ordinary case and
-        // hands the tree to `claude -w`, which forks it from `origin/<default>`.
-        base_ref: Option<&str>,
+        // Where the worktree starts from, already resolved by the caller — the
+        // orchestration socket turns a session id into a branch, and nothing
+        // below here knows sessions. `None`, or the default branch picked, is
+        // the ordinary case and hands the tree to `claude -w`, which forks it
+        // from `origin/<default>`.
+        base: Option<&git::Base>,
         is_new_session: bool,
         // Set only for a session created over the orchestration socket. The
         // composer never has one, and it is recorded rather than acted on —
@@ -1028,6 +1230,10 @@ impl SessionManager {
         // are the user's own, and a `user_message` with a sender is drawn
         // differently.
         from: Option<MessageSender>,
+        // The client's device, and in a bot's chat its time, named to the agent
+        // beside the prompt. Only the `send_msg` command sets it: a relay, a
+        // routine or Dray's own prompt was typed on nothing.
+        origin: Option<Origin>,
         // Set by the auto-continue timer alone: the schedule it fires for. It
         // is claimed under this session's lock below, the lock a user's send
         // holds while it drops the schedule, so whichever goes first wins and
@@ -1036,35 +1242,19 @@ impl SessionManager {
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
-        let model_spec = model_spec(harness, &model).await?;
-
-        // A model belongs to exactly one harness, and the pair reaches here from
-        // two places that each know only half of it — the composer's stored
-        // defaults and the `dray` CLI's own flags — so nothing upstream makes
-        // them agree. Refused rather than quietly repaired: a session running on
-        // a model nobody picked is the failure that looks like success.
-        //
-        // The unset sentinel is exempt: it names no model, so there is nothing
-        // to be wrong about, and refusing it would refuse pi's own default.
-        // Codex answers the wider question itself: the lookup above
-        // searched what Codex reported *and* the table, where `runs_on`
-        // knows only the table and would refuse a model newer than this
-        // build.
-        // pi's own list is the authority on pi too, plugin providers included;
-        // `runs_on` is the fallback for a probe that has not answered.
-        let runnable = match harness {
-            Harness::Codex => model_spec.is_some(),
-            Harness::Pi => model_spec.is_some() || runs_on(&model, harness),
-            _ => runs_on(&model, harness),
+        // A task moves agent only through `switch_agent`, ahead of the send
+        // that picked it. A caller that read the index before a move (a relay,
+        // the auto-continue timer) sends on what the task runs now instead of
+        // moving it back.
+        let moved = match is_new_session {
+            true => None,
+            false => get_session_index_item(session_id).await?.filter(|i| i.harness != harness),
         };
-
-        if !model.is_unset() && !runnable {
-            let named = model_spec
-                .as_ref()
-                .map(|m| m.label.clone())
-                .unwrap_or_else(|| model.to_string());
-            bail!("{named} is not a {} model", harness.label());
-        }
+        let (harness, model, effort, permission_mode, fast) = match moved {
+            Some(i) => (i.harness, i.model, i.effort, i.permission_mode, i.fast),
+            None => (harness, model, effort, permission_mode, fast),
+        };
+        let model_spec = runnable_model_spec(harness, &model).await?;
 
         let effort = model_spec
             .as_ref()
@@ -1125,9 +1315,9 @@ impl SessionManager {
             // again once the CLI is installed.
             if !crate::binpath::agent_available(harness).await {
                 bail!(
-                    "{} isn't installed. Install it with `{}`, then send again.",
+                    "{} isn't installed. {}, then send again.",
                     harness.label(),
-                    harness.install_command(),
+                    harness.install_advice(),
                 );
             }
             require_dir(cwd, "The project folder").await?;
@@ -1144,13 +1334,27 @@ impl SessionManager {
             // sidebar row pointing at a directory that never existed and can
             // never start. `HEAD` where there is no remote, matching what the
             // CLI itself falls back to when the fetch fails.
-            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base_ref) {
-                (false, true, None) => {
-                    Some(git::default_base(cwd).await.unwrap_or_else(|| "HEAD".into()))
-                }
+            //
+            // The default branch picked by name is no base at all: it starts
+            // from `origin/<default>` as an unpicked one does.
+            //
+            // Fetched for `-w` too, though the CLI fetches again: the baseline
+            // below is read before the child starts, and read off a stale
+            // `origin/<default>` it counts every newer upstream commit as the
+            // first turn's work.
+            let base = match base {
+                Some(git::Base::Branch(b)) if git::is_default_branch(cwd, b).await => None,
+                other => other,
+            };
+            let default_base = match (use_worktree, base) {
+                (true, None) => git::fetched_default_base(cwd).await,
                 _ => None,
             };
-            let base_ref = base_ref.or(resolved_base.as_deref());
+            let resolved_base = match (harness.caps().creates_own_worktree, use_worktree, base) {
+                (false, true, None) => Some(git::Base::Fork(default_base.unwrap_or_else(|| "HEAD".into()))),
+                _ => None,
+            };
+            let base = base.or(resolved_base.as_ref());
 
             let worktree_name = if use_worktree {
                 Some(resolve_unclaimed_worktree_name(cwd, worktree_name).await?)
@@ -1188,14 +1392,30 @@ impl SessionManager {
             // Ahead of the index write, unlike the spawn below: a base git
             // cannot resolve has left nothing behind at all and the caller is
             // getting the error.
-            let owned_worktree = match (base_ref, &worktree_name) {
-                (Some(base), Some(name)) => {
-                    git::create_worktree(cwd, name, base).await?;
-                    true
+            // The branch a tree on an existing branch is on, and for one left
+            // detached, the line telling its agent how to push.
+            let tree = match (base, &worktree_name) {
+                (Some(git::Base::Pr(head)), Some(name)) => {
+                    // `start_pr_session` already put the push line in the prompt.
+                    git::create_worktree_on_branch(cwd, name, head).await?;
+                    Some((Some(head.branch.clone()), None))
                 }
-                (Some(_), None) => bail!("a base ref needs a worktree to check it out into"),
-                (None, _) => false,
+                (Some(git::Base::Branch(branch)), Some(name)) => {
+                    let made = git::create_worktree_from_branch(cwd, name, branch).await?;
+                    let push = match made {
+                        git::PrTree::Detached => Some(detached_push_line(cwd, branch).await),
+                        git::PrTree::OnBranch => None,
+                    };
+                    Some((Some(branch.clone()), push))
+                }
+                (Some(git::Base::Fork(base)), Some(name)) => {
+                    git::create_worktree(cwd, name, base).await?;
+                    Some((None, None))
+                }
+                (Some(_), None) => bail!("a base needs a worktree to check it out into"),
+                (None, _) => None,
             };
+            let owned_worktree = tree.is_some();
 
             // Indexed before the process spawns, so a session that fails to
             // start is still visible rather than vanishing without a trace.
@@ -1213,6 +1433,18 @@ impl SessionManager {
                 fast,
                 parent_session_id,
             );
+            // A tree on an existing branch is on that branch, not
+            // `worktree-<name>`, even detached, and the record is what every
+            // reader of a session's branch goes by.
+            let push_line = match tree {
+                Some((on_branch, push)) => {
+                    if on_branch.is_some() {
+                        item.branch = on_branch;
+                    }
+                    push
+                }
+                None => None,
+            };
             // Written with the entry rather than linked after it: the row
             // appears before the child spawns, and a tab that arrived a beat
             // later would be one more thing moving while the first turn starts.
@@ -1240,9 +1472,11 @@ impl SessionManager {
                 if owned_worktree {
                     // Logged, not propagated: the caller has to see what
                     // actually failed, not how the tidy-up went.
-                    if let Err(undo) =
-                        git::remove_worktree(cwd, &session_cwd, item.branch.as_deref()).await
-                    {
+                    // `worktree-<name>`, as settling names it, never the
+                    // record: a tree on a PR's head leaves that branch to
+                    // the reader either way, since it may be theirs.
+                    let made = worktree_name.as_deref().map(git::worktree_branch);
+                    if let Err(undo) = git::remove_worktree(cwd, &session_cwd, made.as_deref()).await {
                         eprintln!("could not roll back {session_cwd}: {undo}");
                     }
                 }
@@ -1279,8 +1513,8 @@ impl SessionManager {
             // inside its own baseline. A worktree the CLI has yet to create has
             // no directory to snapshot, so that case resolves the fork point the
             // tree will start from instead — slightly approximate, since the CLI
-            // fetches `origin/<default>` first and an upstream commit landing in
-            // between would read as this turn's work. A tree created above has
+            // fetches `origin/<default>` again and an upstream commit landing
+            // since the fetch above would read as this turn's work. A tree created above has
             // none of that: it is on disk and clean, so its snapshot is exact.
             let baseline = match (owned_worktree, worktree_name.is_some()) {
                 (false, true) => git::base_ref_tree(cwd).await,
@@ -1313,8 +1547,14 @@ impl SessionManager {
                 app,
             )
             .await?;
+            // After the title and the index's first-prompt reading, which
+            // describe the reader's words, not how the tree pushes.
+            let sent = match &push_line {
+                Some(line) => format!("{prompt}\n\n{line}"),
+                None => prompt.to_string(),
+            };
             if let Err(error) = session
-                .send_msg(prompt, attachment_paths, issues, baseline, from, app)
+                .send_msg(&sent, attachment_paths, issues, baseline, from, origin, app)
                 .await
             {
                 // Nothing has this session yet — it is inserted below — so
@@ -1373,6 +1613,22 @@ impl SessionManager {
             app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
             if !send {
                 return Ok(SendOutcome::default());
+            }
+        }
+
+        // A move that landed between the read above and this lock: the picks
+        // read there belong to the agent the task just left.
+        if let Some(item) = get_session_index_item(session_id).await?.filter(|i| i.harness != harness) {
+            bail!("This task just moved to {}. Send again.", item.harness.label());
+        }
+        // An idle child whose first turn since a switch ended before it said
+        // anything may have dropped that prompt, and the replay with it. A
+        // spawn below asks the same itself.
+        if let Some(s) = slot_guard.as_ref() {
+            if !s.status.lock().await.turn_in_flight() {
+                if let Some(item) = get_session_index_item(session_id).await? {
+                    crate::bots::mark_switch_if_unanswered(&item).await;
+                }
             }
         }
 
@@ -1493,18 +1749,18 @@ impl SessionManager {
 
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
-            touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
+            record_picks(session_id, model.clone(), effort, permission_mode, fast, app).await?;
 
             // Mid-turn only where the harness takes a live control while a
             // model call is open, verified against each CLI: Claude Code's and
             // pi's next call inside the turn runs on the new model, and grok
-            // takes the option. fx refuses ("Prompt already in progress"), so
+            // and OpenCode take the option. fx refuses ("Prompt already in progress"), so
             // its pick is deferred to the flush that opens the queued turn.
             // Codex steers a queued prompt into the running turn and ignores
             // its model, so nothing can move it — the composer locks those
             // controls mid-turn instead.
             let applied = !turn_in_flight
-                || matches!(s.harness, Harness::ClaudeCode | Harness::Grok | Harness::Pi);
+                || matches!(s.harness, Harness::ClaudeCode | Harness::Grok | Harness::Pi | Harness::OpenCode);
             if applied {
                 apply_live_controls(s, session_id, &model, model_spec.as_ref(), effort, permission_mode, fast, app)
                     .await?;
@@ -1535,8 +1791,8 @@ impl SessionManager {
                 // drain it at the next boundary inside the run, so there is
                 // nothing for Dray's queue to do here and no boundary for it to
                 // race for — whether or not a tool happens to be running now.
-                if matches!(s.stdin, Transport::Pi(_) | Transport::Grok(_)) {
-                    s.steer(prompt, attachment_paths, issues, from, app).await?;
+                if s.stdin.steers() {
+                    s.steer(prompt, attachment_paths, issues, from, origin, app).await?;
                     return Ok(SendOutcome {
                         issues: linked,
                         ..Default::default()
@@ -1566,7 +1822,7 @@ impl SessionManager {
                         });
                     }
                     if let Some(queued) = s
-                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), origin.clone(), app)
                         .await
                     {
                         return Ok(SendOutcome {
@@ -1586,7 +1842,7 @@ impl SessionManager {
                     }
                 } else {
                     if tool_in_flight {
-                        s.queue_and_flush(prompt, attachment_paths, issues, from, app)
+                        s.queue_and_flush(prompt, attachment_paths, issues, from, origin, app)
                             .await;
                         return Ok(SendOutcome {
                             issues: linked,
@@ -1599,7 +1855,7 @@ impl SessionManager {
                     // between has already run its flush. Queued then, the
                     // prompt waited on a boundary that never came.
                     if let Some(queued) = s
-                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), origin.clone(), app)
                         .await
                     {
                         return Ok(SendOutcome {
@@ -1615,7 +1871,7 @@ impl SessionManager {
             // but alive, so the narrower the gap the less of the user's own
             // editing lands on the turn's side of the diff.
             let baseline = git::snapshot_tree(&session_cwd).await;
-            s.send_msg(prompt, attachment_paths, issues, baseline, from, app)
+            s.send_msg(prompt, attachment_paths, issues, baseline, from, origin, app)
                 .await?;
             return Ok(SendOutcome {
                 issues: linked,
@@ -1623,7 +1879,7 @@ impl SessionManager {
             });
         }
 
-        touch_session_index_item(session_id, model, effort, permission_mode, fast).await?;
+        record_picks(session_id, model, effort, permission_mode, fast, app).await?;
 
         // A fork that hasn't spawned yet. The app's half happened when the user
         // asked for it — log copied, entry written — and this is the spawn that
@@ -1671,7 +1927,7 @@ impl SessionManager {
                 // in it yet to be surprised by.
                 if !tokio::fs::try_exists(&session_cwd).await.unwrap_or(false) {
                     let name = item.worktree_name.clone().expect("checked just above");
-                    let base = git::default_base(&item.project_path)
+                    let base = git::fetched_default_base(&item.project_path)
                         .await
                         .unwrap_or_else(|| "HEAD".into());
 
@@ -1697,6 +1953,13 @@ impl SessionManager {
         // comes back here, not through creation, after a restart.
         crate::bots::mark_welcome_if_unlogged(session_id, &session_cwd).await;
         crate::bots::mark_handover_if_unanswered(session_id, &session_cwd, harness).await;
+        // A task just moved to an agent with no conversation of its own here
+        // starts one, and an unspawned fork has nothing on that agent to fork.
+        let fresh = match indexed.as_ref() {
+            Some(item) => crate::bots::mark_switch_if_unanswered(item).await == Some(false),
+            None => false,
+        };
+        let cli_fork = cli_fork.filter(|_| !fresh);
 
         let mut session = Session::init(
             session_id,
@@ -1708,7 +1971,7 @@ impl SessionManager {
             &spawn_cwd,
             &session_cwd,
             pending_worktree.as_deref(),
-            is_new_session,
+            is_new_session || fresh,
             cli_fork,
             app,
         )
@@ -1723,7 +1986,7 @@ impl SessionManager {
         }
 
         if let Err(error) = session
-            .send_msg(prompt, attachment_paths, issues, baseline, from, app)
+            .send_msg(prompt, attachment_paths, issues, baseline, from, origin, app)
             .await
         {
             // Same reason as the creation path above: the insert is below, so
@@ -1832,8 +2095,18 @@ impl SessionManager {
         // `thread/fork` and `session recover` both name the parent's own id, so
         // a Codex or fx parent that never got one has nothing to fork — refused
         // before a row exists.
-        if matches!(parent.harness, Harness::Codex | Harness::Fx) && parent.thread_id.is_none() {
+        if matches!(parent.harness, Harness::Codex | Harness::Fx | Harness::OpenCode) && parent.thread_id.is_none() {
             bail!("this {} session has no conversation to fork yet", parent.harness.label());
+        }
+
+        // OpenCode files a session under the folder it was made in, and a fork
+        // or resume naming another `cwd` still runs in that one — measured, so a
+        // fork into a worktree would edit the parent's checkout.
+        if worktree && parent.harness == Harness::OpenCode {
+            bail!(
+                "OpenCode keeps a session in the folder it started in, so a fork can't move to a new \
+                 worktree. Fork it in place instead."
+            );
         }
 
         // Resolved against the project rather than the parent's own name, so a
@@ -1888,7 +2161,7 @@ impl SessionManager {
         // first send: a parent deleted in between would otherwise leave a fork
         // that fails every send. Safe while `fork_from` stands, since that is
         // what makes the first spawn fork this thread instead of resuming it.
-        if parent.harness == Harness::Codex {
+        if matches!(parent.harness, Harness::Codex | Harness::OpenCode) {
             item.thread_id = parent.thread_id.clone();
         }
         append_session_index_item(item.clone()).await?;
@@ -1933,7 +2206,9 @@ impl SessionManager {
         let spec = model_spec(s.harness, model).await?;
         match &s.stdin {
             Transport::Fx(fx) => fx.defer_controls(DeferredControls { model: spec, effort, mode, fast }),
-            _ if s.harness == Harness::ClaudeCode => {
+            // OpenCode queues like fx but takes a config option mid-prompt, so
+            // the pick goes out now rather than at the flush.
+            _ if matches!(s.harness, Harness::ClaudeCode | Harness::OpenCode) => {
                 apply_live_controls(s, session_id, model, spec.as_ref(), effort, mode, fast, app).await?
             }
             // pi and grok steer a prompt into the running turn rather than
@@ -2126,16 +2401,19 @@ impl SessionManager {
     /// [`post_event`](Self::post_event) for a note made outside any turn, such
     /// as an Undo: marked as posted it would leave the next silent turn
     /// counted as an answered one.
-    pub async fn log_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
+    /// Answers the event as logged, for a caller that keeps it.
+    pub async fn log_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<AgentEvent> {
         let slot = self.slot(session_id).await;
         let guard = slot.lock().await;
         let (harness, seq) = match guard.as_ref() {
             Some(s) => (s.harness, s.seq.fetch_add(1, Relaxed)),
             None => (harness, next_seq_by_session_id(session_id).await?),
         };
+        note_reaction(session_id, &payload);
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
         app.emit("agent_event", &event)?;
-        append_session_event(session_id, event).await
+        append_session_event(session_id, event.clone()).await?;
+        Ok(event)
     }
 
     /// The agent process's pid, for finding what it started (a dev server is a
@@ -2144,6 +2422,28 @@ impl SessionManager {
         let slot = self.existing(session_id).await?;
         let guard = slot.lock().await;
         guard.as_ref()?.child.id()
+    }
+
+    /// [`move_agent`] ahead of a send: the composer's `switch_agent`, and
+    /// `dray session model` naming another agent's model.
+    pub async fn switch_agent(
+        &self,
+        session_id: &str,
+        to: Harness,
+        pick: crate::store::AgentPick,
+        app: &Sink,
+    ) -> Result<SessionIndexItem> {
+        let slot = self.slot(session_id).await;
+        let mut guard = slot.lock().await;
+        // Read under the lock: two switches racing for it would each have
+        // read the agent before either moved it, and logged the move twice.
+        let item = get_session_index_item(session_id)
+            .await?
+            .with_context(|| format!("unknown session {session_id}"))?;
+        if item.harness == to {
+            return Ok(item);
+        }
+        move_agent(&mut guard, item, to, pick, app).await
     }
 
     /// Whether a turn is running in this session now. Fork and the CLI's
@@ -2164,6 +2464,7 @@ impl SessionManager {
     /// and a child left running behind a settled row was a dev server and a
     /// page nobody could see.
     pub async fn settle(&self, session_id: &str) -> Result<()> {
+        crate::secrets::forget(session_id).await;
         let running = self.take(session_id).await;
         // The tabs close whatever the kill answered: the session is already
         // out of the map, so nothing would come back to close them.
@@ -2171,7 +2472,7 @@ impl SessionManager {
             Some(session) => session.kill_tree().await,
             None => Ok(()),
         };
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         if !crate::is_server() {
             crate::cef::close_session(session_id);
         }
@@ -2186,7 +2487,7 @@ impl SessionManager {
         crate::share::close_session(session_id);
         // Settled is done with, so the profile goes too: an unsettled session's
         // browser starts signed out. Both, whichever browser made one.
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         crate::cef::automation::delete_profile(session_id);
         #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::automation::delete_profile(session_id);
@@ -2199,9 +2500,14 @@ impl SessionManager {
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
     ///
+    /// Every client hears [`SESSION_DELETED`](crate::orchestration::SESSION_DELETED)
+    /// once the entry is gone, and the worktree and files go after the answer:
+    /// `git worktree remove` on a tree holding `node_modules` and `target/`
+    /// took long enough that a phone's delete looked stuck (#1521).
+    ///
     /// `with_children` false leaves its hidden children be: a bot's task's
     /// sub-tasks outlive it ([`crate::bots::keeps_children`]).
-    pub async fn delete(&self, session_id: &str, with_children: bool) -> Result<bool> {
+    pub async fn delete(&self, session_id: &str, with_children: bool, sink: &Sink) -> Result<bool> {
         // A hidden child is listed nowhere on screen, so it goes with
         // it. Here rather than in the frontend, which holds one side of the
         // settled split and can miss a child sitting on the other.
@@ -2210,57 +2516,77 @@ impl SessionManager {
             false => Vec::new(),
         };
         for child in children {
-            Box::pin(self.delete(&child.session_id, true)).await?;
+            Box::pin(self.delete(&child.session_id, true, sink)).await?;
         }
 
         self.settle(session_id).await?;
 
-        // Best-effort for the same reason the attachments below are, and with
-        // one cost worth naming: a removal that fails here orphans the tree
-        // with no UI left to retry from, since the row it hung off is about to
-        // go. `git worktree remove` by hand is the recovery. Failing the
-        // delete instead would be worse — the session the user asked to be rid
-        // of would still be there.
-        //
-        // Deliberately *not* covered by the card the frontend raises when
-        // [`remove_worktree`] above is refused. That card corrects a "Deleted"
-        // the reader was shown and sends them back to the session to try again;
-        // here they were shown nothing to correct, and the session it would be
-        // keyed to is the one being deleted — so it would be a card about a row
-        // that is gone, whose button leads nowhere. Saying this properly means
-        // naming the orphaned path with no session behind it, which is a
-        // channel of its own and not this one.
-        if let Some(item) = get_session_index_item(session_id).await? {
-            if let Err(e) = remove_session_worktree(&item).await {
-                eprintln!("could not remove worktree for {session_id}: {e}");
-            }
+        let item = get_session_index_item(session_id).await?;
+        let existed = delete_session(session_id).await?;
+        let event = crate::orchestration::SessionDeletedEvent { session_id: session_id.to_string() };
+        if let Err(e) = sink.emit(crate::orchestration::SESSION_DELETED, &event) {
+            eprintln!("[delete emit err] {e}");
         }
+        let id = session_id.to_string();
+        tokio::spawn(async move { sweep_deleted(&id, item).await });
+        Ok(existed)
+    }
+}
 
-        // Best-effort: the images are a convenience for the transcript that is
-        // about to stop existing, so failing to remove them must not fail the
-        // delete the user asked for.
-        if let Err(e) = attachments::delete_session_attachments(session_id).await {
-            eprintln!("could not delete attachments for {session_id}: {e}");
+/// One deleted session's leftovers at a time: two `git worktree remove`s in one
+/// repo race on its worktree list, and a parent's delete sweeps its children's.
+static SWEEPS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// What a delete leaves on disk once its entry is gone: worktree, attachments,
+/// recordings, pi's own transcript. Each best-effort, since the session they
+/// served no longer exists to fail.
+async fn sweep_deleted(session_id: &str, item: Option<SessionIndexItem>) {
+    let _one_at_a_time = SWEEPS.lock().await;
+    // Best-effort for the same reason the attachments below are, and with
+    // one cost worth naming: a removal that fails here orphans the tree
+    // with no UI left to retry from, since the row it hung off has gone.
+    // `git worktree remove` by hand is the recovery. Failing the
+    // delete instead would be worse — the session the user asked to be rid
+    // of would still be there.
+    //
+    // Deliberately *not* covered by the card the frontend raises when
+    // [`remove_worktree`] above is refused. That card corrects a "Deleted"
+    // the reader was shown and sends them back to the session to try again;
+    // here they were shown nothing to correct, and the session it would be
+    // keyed to is the one being deleted — so it would be a card about a row
+    // that is gone, whose button leads nowhere. Saying this properly means
+    // naming the orphaned path with no session behind it, which is a
+    // channel of its own and not this one.
+    if let Some(item) = item {
+        if let Err(e) = remove_session_worktree(&item).await {
+            eprintln!("could not remove worktree for {session_id}: {e}");
         }
-        // Files on this disk whichever browser made them, so both are swept
-        // whether or not the app that filmed one is open.
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
-        crate::cef::automation::delete_recordings(session_id);
-        #[cfg(any(feature = "serve", feature = "desktop"))]
-        crate::headless::automation::delete_recordings(session_id);
-
-        // pi keeps its own transcript beside Dray's, because the *file* is its
-        // resume handle. Left behind it is a whole conversation on disk that
-        // nothing can ever reach again, the index entry naming it having just
-        // gone. Best-effort and unconditional: a non-pi session has no such
-        // file, and a missing one reads as done.
-        if let Err(e) = crate::store::delete_pi_session_file(session_id).await {
-            eprintln!("could not delete pi's session file for {session_id}: {e}");
-        }
-
-        delete_session(session_id).await
     }
 
+    // Best-effort: the images are a convenience for the transcript that is
+    // about to stop existing, so failing to remove them must not fail the
+    // delete the user asked for.
+    if let Err(e) = attachments::delete_session_attachments(session_id).await {
+        eprintln!("could not delete attachments for {session_id}: {e}");
+    }
+    // Files on this disk whichever browser made them, so both are swept
+    // whether or not the app that filmed one is open.
+    #[cfg(feature = "cef")]
+    crate::cef::automation::delete_recordings(session_id);
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    crate::headless::automation::delete_recordings(session_id);
+
+    // pi keeps its own transcript beside Dray's, because the *file* is its
+    // resume handle. Left behind it is a whole conversation on disk that
+    // nothing can ever reach again, the index entry naming it having just
+    // gone. Best-effort and unconditional: a non-pi session has no such
+    // file, and a missing one reads as done.
+    if let Err(e) = crate::store::delete_pi_session_file(session_id).await {
+        eprintln!("could not delete pi's session file for {session_id}: {e}");
+    }
+}
+
+impl SessionManager {
     /// Moves a session's unread mark: `Completed` → `Idle` on a read, `Idle` →
     /// `Completed` on an unread, anything else untouched. Returns the status as
     /// written, `None` for no change.
@@ -2321,6 +2647,9 @@ pub enum Transport {
     /// chose — grok honours `_meta.sessionId`, so there is no minted id to
     /// carry. See [`GrokSession`](crate::harness::grok::GrokSession).
     Grok(crate::harness::grok::GrokSession),
+    /// OpenCode's connection: ACP, addressed to the session OpenCode minted.
+    /// See [`OpenCodeSession`](crate::harness::opencode::OpenCodeSession).
+    OpenCode(crate::harness::opencode::OpenCodeSession),
 }
 
 impl Transport {
@@ -2340,8 +2669,21 @@ impl Transport {
     /// [`flush_one_per_turn`]. Every other transport has a tool boundary to hand
     /// a batch over at, seconds away, which is why this is a question about the
     /// transport rather than a flag on the session.
+    ///
+    /// OpenCode is here for fx's reason: a second `session/prompt` is refused,
+    /// and 1 has no interject. 2's `_session/steering` is [`Self::steers`].
     pub fn one_prompt_per_turn(&self) -> bool {
-        matches!(self, Transport::Fx(_))
+        matches!(self, Transport::Fx(_) | Transport::OpenCode(_))
+    }
+
+    /// Whether a prompt sent mid-turn goes into the running turn rather than
+    /// Dray's queue: pi and grok always, OpenCode from 2.
+    pub fn steers(&self) -> bool {
+        match self {
+            Transport::Pi(_) | Transport::Grok(_) => true,
+            Transport::OpenCode(session) => session.steers,
+            _ => false,
+        }
     }
 
     /// Opens a turn with one prompt, for the transports that take it as a
@@ -2358,6 +2700,9 @@ impl Transport {
             Transport::Grok(session) => {
                 Some(crate::harness::grok::start_turn(session, text, images).await)
             }
+            Transport::OpenCode(session) => {
+                Some(crate::harness::opencode::start_turn(session, text, images).await)
+            }
             _ => None,
         }
     }
@@ -2371,7 +2716,7 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) => {
+            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) | Transport::OpenCode(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -2502,7 +2847,6 @@ impl Session {
                     permission_mode,
                     cwd,
                     session_cwd,
-                    is_new_session,
                     app,
                 )
                 .await
@@ -2559,6 +2903,26 @@ impl Session {
                 )
                 .await
             }
+            Harness::OpenCode => {
+                // No `-w`, so the tree is made before this. A fork's first send
+                // carries `fork_from`, and the spawn makes the copy.
+                if worktree_name.is_some() {
+                    bail!("OpenCode cannot create a worktree — it has to be made first");
+                }
+
+                crate::harness::opencode::init(
+                    session_id,
+                    model,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    fork_from,
+                    app,
+                )
+                .await
+            }
             // A session some newer build wrote into the shared index. Its
             // transcript still reads and its row still draws — that is what the
             // tolerant read bought — but there is no CLI here to carry it on,
@@ -2584,6 +2948,7 @@ impl Session {
         issues: &[IssueRef],
         baseline: Option<String>,
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) -> Result<()> {
         let (_, runs) = deliver_prompt(
@@ -2597,6 +2962,7 @@ impl Session {
             crate::harness::pi::Delivery::WhenIdle,
             true,
             from,
+            origin,
             &self.seq,
             &self.stdin,
             app,
@@ -2653,6 +3019,7 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) -> QueuedMessage {
         let message = QueuedMessage {
@@ -2662,6 +3029,10 @@ impl Session {
             attachment_paths: attachment_paths.to_vec(),
             from,
             issues: issues.to_vec(),
+            // Peeked, not taken: the flush that logs it takes the mark, and
+            // logs it as a kickoff that draws nothing.
+            hidden: crate::bots::is_dray_prompt(&self.id, prompt),
+            origin,
         };
         self.queued.lock().await.push(message.clone());
         publish_queue(&self.id, &self.queued, app).await;
@@ -2692,13 +3063,14 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) -> Option<QueuedMessage> {
         let _turn = self.status.lock().await;
         if !_turn.turn_in_flight() {
             return None;
         }
-        Some(self.queue_msg(prompt, attachment_paths, issues, from, app).await)
+        Some(self.queue_msg(prompt, attachment_paths, issues, from, origin, app).await)
     }
 
     /// Takes back the newest held prompt, newest-first because that is the one
@@ -2711,7 +3083,7 @@ impl Session {
     pub async fn cancel_queued(&self, app: &Sink) -> Option<QueuedMessage> {
         let cancelled = {
             let mut held = self.queued.lock().await;
-            let newest = held.iter().rposition(|m| m.from.is_none());
+            let newest = held.iter().rposition(QueuedMessage::typed);
             newest.map(|i| held.remove(i))
         };
         if cancelled.is_some() {
@@ -2745,6 +3117,7 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) -> Result<()> {
         let sent = deliver_prompt(
@@ -2763,6 +3136,7 @@ impl Session {
             crate::harness::pi::Delivery::Steer,
             true,
             from,
+            origin,
             &self.seq,
             &self.stdin,
             app,
@@ -2794,9 +3168,10 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        origin: Option<Origin>,
         app: &Sink,
     ) {
-        self.queue_msg(prompt, attachment_paths, issues, from, app).await;
+        self.queue_msg(prompt, attachment_paths, issues, from, origin, app).await;
         flush_queued(
             &self.id,
             self.harness,
@@ -2848,6 +3223,14 @@ impl Session {
 
         if let Transport::Pi(client) = &self.stdin {
             crate::harness::pi::set_model(client, model).await?;
+            self.model = model.id.clone();
+            return Ok(());
+        }
+
+        // OpenCode drops effort on a model change and this sends it again, so
+        // the effort arm after this compares against what the child is on.
+        if let Transport::OpenCode(session) = &self.stdin {
+            self.effort = crate::harness::opencode::set_model(session, model, self.effort).await?;
             self.model = model.id.clone();
             return Ok(());
         }
@@ -2937,6 +3320,15 @@ impl Session {
             return Ok(());
         }
 
+        // OpenCode's `effort` option. `None` is OpenCode's own default.
+        if let Transport::OpenCode(session) = &self.stdin {
+            if let Some(effort) = effort {
+                crate::harness::opencode::set_effort(session, effort).await?;
+            }
+            self.effort = effort;
+            return Ok(());
+        }
+
         // pi's `set_thinking_level`. `None` is pi's own default, which nothing
         // here can spell, so it is recorded and left to the next respawn.
         if let Transport::Pi(client) = &self.stdin {
@@ -2995,6 +3387,11 @@ impl Session {
         // it, which is settle's problem rather than Stop's.
         if let Transport::Grok(session) = &self.stdin {
             return crate::harness::grok::cancel(session);
+        }
+
+        // The same notification; OpenCode aborts the running tool itself.
+        if let Transport::OpenCode(session) = &self.stdin {
+            return crate::harness::opencode::cancel(session);
         }
 
         // pi never reaches here: its Stop goes through
@@ -3138,6 +3535,14 @@ impl Session {
                     .context("this option carries no outcome to send")?;
                 session.client.respond(*rpc_id, outcome)?;
             }
+            // ACP's outcome envelope again, built by the button.
+            (Transport::OpenCode(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(*rpc_id, outcome)?;
+            }
             _ => {
                 write_line(
                     self.stdin.lines()?,
@@ -3220,6 +3625,12 @@ impl Session {
                 let result = crate::harness::grok::permissions::question_answer(&answers);
                 session.client.respond(*rpc_id, result)?;
             }
+            // OpenCode 2's `elicitation/create`: answers go back on the form's
+            // own field keys, held on the entry when the card was raised.
+            (Transport::OpenCode(session), Reply::Rpc(rpc_id)) => {
+                let result = crate::harness::opencode::questions::answer(&pending.input, &answers);
+                session.client.respond(*rpc_id, result)?;
+            }
             _ => {
                 write_line(
                     self.stdin.lines()?,
@@ -3278,6 +3689,13 @@ impl Session {
         // fx holds a `session.lock` per session, released on a clean exit.
         if let Transport::Fx(session) = &self.stdin {
             crate::harness::fx::shutdown(&mut self.child, session).await;
+            return Ok(());
+        }
+
+        // OpenCode's language and MCP servers are its children, and would
+        // outlive a kill of the parent alone.
+        if let Transport::OpenCode(_) = &self.stdin {
+            crate::harness::opencode::kill_tree(&mut self.child).await;
             return Ok(());
         }
 
@@ -3419,7 +3837,11 @@ async fn take_hidden(session_id: &str) -> Option<String> {
 /// words that follow as theirs.
 fn lead_in_around(hidden: Option<&str>, text: &str, after: bool) -> String {
     match hidden {
-        Some(hidden) if after => format!("{text}\n\n{}", hidden.trim_end()),
+        // A hand-over's closing cue points at words that now sit above it.
+        Some(hidden) if after => {
+            let hidden = hidden.replace(&format!("{}\n\n", crate::bots::NEW_MESSAGE_CUE), "");
+            format!("{text}\n\n{}", hidden.trim_end())
+        }
         Some(hidden) => format!("{hidden}{text}"),
         None => text.to_string(),
     }
@@ -3454,6 +3876,7 @@ async fn deliver_prompt(
     // per turn. No other transport is written to answer it, and none passes it.
     send: bool,
     from: Option<MessageSender>,
+    origin: Option<Origin>,
     seq: &Arc<AtomicU64>,
     transport: &Transport,
     app: &Sink,
@@ -3480,6 +3903,17 @@ async fn deliver_prompt(
     // joins whichever turn takes it, and that turn is the one that answers.
     handover.ask = crate::bots::talk::delivered(session_id, from.as_ref());
     let given = lead_in_around(handover.text.as_deref(), &text, slash && fx);
+    // After the prompt and never logged, so no transcript draws it and a resend
+    // of the logged text cannot carry it twice. Not on a slash command, whose
+    // arguments it would join, nor on a prompt nobody typed.
+    let tag = origin
+        .filter(|_| from.is_none() && !slash && !crate::bots::is_dray_prompt(session_id, prompt))
+        .and_then(|origin| origin.tag());
+    let given = match &tag {
+        Some(tag) if given.is_empty() => tag.clone(),
+        Some(tag) => format!("{given}\n\n{tag}"),
+        None => given,
+    };
 
     // Ahead of the event for a second reason, and this one is about failure
     // rather than content. Codex resolves a leading `/skill` by asking its own
@@ -3495,6 +3929,9 @@ async fn deliver_prompt(
             if let (Some(hidden), Some(items)) = (&handover.text, input.as_array_mut()) {
                 let at = usize::from(items.first().is_some_and(|i| i["type"] != "text"));
                 items.insert(at, json!({"type": "text", "text": hidden}));
+            }
+            if let (Some(tag), Some(items)) = (&tag, input.as_array_mut()) {
+                items.push(json!({"type": "text", "text": tag}));
             }
             Some((thread, input))
         }
@@ -3594,6 +4031,23 @@ async fn deliver_prompt(
         handover.sent();
         return Ok((given, true));
     }
+    // OpenCode 2 takes a prompt into the running turn through
+    // `_session/steering`. A turn that ended under the caller's check answers
+    // "promptRequired", and the prompt opens the next turn instead: written
+    // before the last turn's answer was read, it takes over the id that
+    // closes the turn, so the two read as one.
+    if let (Transport::OpenCode(session), crate::harness::pi::Delivery::Steer) = (transport, delivery) {
+        let injected = crate::harness::opencode::steer(session, &given, &prepared.images)
+            .await
+            .context(Undelivered)?;
+        if !injected {
+            crate::harness::opencode::start_turn(session, &given, &prepared.images)
+                .await
+                .context(Undelivered)?;
+        }
+        handover.sent();
+        return Ok((given, true));
+    }
     // fx and grok take a prompt as a request that blocks for the turn, so the
     // write is the send and the reader settles the answer.
     if let Some(sent) = transport.open_turn(&given, &prepared.images).await {
@@ -3676,6 +4130,86 @@ static LAST_REPLY: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>
 static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// The emoji each bot reacted with this turn. A reply saying only that emoji
+/// says it twice, whatever led the agent to write it, so it is dropped.
+static REACTED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Bot chats whose turn a silent tool (`react`, `no_reply_needed`) closed,
+/// with the ids of those calls not refused: one batch can hold both, and a
+/// refused `react` beside a `no_reply_needed` leaves the turn closed. Anything the agent writes after it is filler: a CLI
+/// that ignores `claude/endTurn`, or a batch holding an errored result, gives
+/// the model one more call, and it narrated the close ("(Turn ended without a
+/// reply.)"). Closed on the call itself, not on Dray's answer to it: the CLI
+/// runs the tool while the response is still streaming, and a stray token the
+/// model wrote after the call ("ↀ") could reach the pipe before the call did.
+static CLOSED: std::sync::LazyLock<std::sync::Mutex<HashMap<String, std::collections::HashSet<String>>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Drops what `session_id`'s turn noted for its close, for a turn that closes
+/// without a `TurnCompleted` reaching `ingest_event`: kept, it would count
+/// against the next turn.
+fn forget_turn(session_id: &str) {
+    LAST_REPLY.lock().unwrap().remove(session_id);
+    POSTED.lock().unwrap().remove(session_id);
+    REACTED.lock().unwrap().remove(session_id);
+    CLOSED.lock().unwrap().remove(session_id);
+}
+
+/// Records a reaction landing in `session_id`, for [`REACTED`].
+fn note_reaction(session_id: &str, payload: &AgentEventPayload) {
+    if let AgentEventPayload::Reaction { emoji, by_user: false, .. } = payload {
+        REACTED.lock().unwrap().insert(session_id.to_string(), emoji.clone());
+    }
+}
+
+/// Whether a main-thread event in `session_id` must be dropped: text after a
+/// silent tool closed the turn, its stream included so no preview flashes, or
+/// a reply only repeating this turn's reaction. A turn's close forgets both,
+/// and takes what they dropped out of its `final_text` so the turn still counts
+/// as silent.
+fn drops_echo(session_id: &str, payload: &mut AgentEventPayload) -> bool {
+    use crate::{bots::react::echoes, harness::claude_code::no_reply};
+    note_reaction(session_id, payload);
+    // A new turn opens on its own `init`, so a mark a dead child left behind
+    // — replaced before its cleanup ran `forget_turn` — never reaches it.
+    if matches!(payload, AgentEventPayload::TurnStarted(_)) {
+        CLOSED.lock().unwrap().remove(session_id);
+    }
+    let closed = CLOSED.lock().unwrap().contains_key(session_id);
+    let mut reacted = REACTED.lock().unwrap();
+    match payload {
+        AgentEventPayload::ToolCallStarted { call_id, name, .. } if no_reply::is_silent(name) => {
+            CLOSED.lock().unwrap().entry(session_id.to_string()).or_default().insert(call_id.clone());
+            false
+        }
+        // A refused `react` carries no `endTurn`, and the bot must answer it.
+        AgentEventPayload::ToolCallCompleted { call_id, result } if result.is_error => {
+            let mut closed = CLOSED.lock().unwrap();
+            if let Some(calls) = closed.get_mut(session_id) {
+                calls.remove(call_id.as_str());
+                if calls.is_empty() {
+                    closed.remove(session_id);
+                }
+            }
+            false
+        }
+        AgentEventPayload::Delta(_) => closed,
+        AgentEventPayload::AssistantText { text, .. } => {
+            closed || reacted.get(session_id).is_some_and(|e| echoes(text, e))
+        }
+        AgentEventPayload::TurnCompleted { final_text, .. } => {
+            let emoji = reacted.remove(session_id);
+            let echoed = matches!((&emoji, final_text.as_deref()), (Some(e), Some(t)) if echoes(t, e));
+            if CLOSED.lock().unwrap().remove(session_id).is_some() || echoed {
+                *final_text = None;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 /// Sends `text` to the session that started `session_id`, where it is a bot's.
 fn report(session_id: &str, text: String, app: &Sink) {
     let report = crate::orchestration::report_to_parent(session_id.to_string(), text, app.clone());
@@ -3722,6 +4256,11 @@ fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option
 }
 
 async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink, tracked: bool) {
+    // Never logged or drawn: the `block_stop` behind it retires its preview.
+    if agent_event.subagent.is_none() && drops_echo(ctx.session_id, &mut agent_event.payload) {
+        return;
+    }
+
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
     // stops an idle session's diff from absorbing everything that later
@@ -3738,6 +4277,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     if let AgentEventPayload::ToolCallCompleted { ref mut result, .. } = agent_event.payload {
         crate::attachments::archive_result_images(ctx.session_id, &mut result.images).await;
     }
+    crate::secrets::mask(&mut agent_event);
 
     // Read before the event is moved into the log below. These three are
     // the turn's boundaries in the sense that matters here: each is a point
@@ -4045,6 +4585,12 @@ async fn apply_live_controls(
     // the two cannot disagree: a pick neither respawns for nor applies would
     // be recorded in the index and never reach the child.
     let caps = s.harness.caps();
+    // fx carries the old model's level across a switch and lists it among the
+    // new one's, so the ladder it teaches leaves that level out until fx is
+    // seen taking it. Re-sent, fx either takes it, which teaches the ladder, or
+    // refuses it, which is reported. Left alone, the next send judged the
+    // level unsupported and dropped it from the index (#1492).
+    let reapply_effort = matches!(s.stdin, Transport::Fx(_)) && s.model != *model && model_spec.is_some();
 
     if caps.applies_model_in_place && s.model != *model {
         // Claude Code names a default, so the spec is there by
@@ -4064,12 +4610,13 @@ async fn apply_live_controls(
                     // adopted what fx answered, and every field written back
                     // is the session's own, since this returns before the
                     // effort, stance and fast arms run.
-                    touch_session_index_item(
+                    record_picks(
                         session_id,
                         s.model.clone(),
                         s.effort,
                         s.permission_mode,
                         s.fast,
+                        app,
                     )
                     .await?;
                     return Err(err);
@@ -4079,7 +4626,7 @@ async fn apply_live_controls(
             None => bail!("no model to switch the session to"),
         }
     }
-    if caps.applies_effort_in_place && s.effort != effort {
+    if caps.applies_effort_in_place && (s.effort != effort || (reapply_effort && effort.is_some())) {
         // A declined effort must not take the prompt down with it. fx
         // refuses one on a model that does no reasoning, and losing the
         // message over a level is a far worse answer than running the
@@ -4101,12 +4648,13 @@ async fn apply_live_controls(
             // the one that was asked for. Every other field is still
             // the pick: fast mode is applied below this block, so
             // recording the child's current value here would drop it.
-            touch_session_index_item(
+            record_picks(
                 session_id,
                 model.clone(),
                 s.effort,
                 permission_mode,
                 fast,
+                app,
             )
             .await?;
         }
@@ -4123,9 +4671,25 @@ async fn apply_live_controls(
                 return Err(err);
             }
             report_session_error(session_id, s.harness, &format!("{err:#}"), &s.seq, app).await;
-            touch_session_index_item(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast)
-                .await?;
+            record_picks(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast, app).await?;
         }
+    }
+    Ok(())
+}
+
+/// Records a send's picks on the index and tells every client where they
+/// changed: a phone's selector shows the index's model, and without this a
+/// pick sent from it fell back to the model the session had left.
+async fn record_picks(
+    session_id: &str,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    app: &Sink,
+) -> Result<()> {
+    if let Some(item) = touch_session_index_item(session_id, model, effort, permission_mode, fast).await? {
+        app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
     }
     Ok(())
 }
@@ -4335,6 +4899,7 @@ async fn flush_one_per_turn(
                 crate::harness::pi::Delivery::WhenIdle,
                 false,
                 message.from,
+                message.origin,
                 seq,
                 transport,
                 app,
@@ -4412,6 +4977,7 @@ async fn deliver_batch(
             crate::harness::pi::Delivery::WhenIdle,
             true,
             message.from,
+            message.origin,
             seq,
             transport,
             app,
@@ -4573,7 +5139,7 @@ pub async fn strand_queue_on_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::claude_code::{mapper::Mapper, parser};
+    use crate::harness::claude_code::{mapper::Mapper, no_reply, parser};
 
     #[test]
     fn a_lead_in_never_hides_a_leading_slash() {
@@ -4581,6 +5147,142 @@ mod tests {
         assert_eq!(lead_in_around(hidden, "hi", false), "[Since your last turn: x]\n\nhi");
         assert_eq!(lead_in_around(hidden, "/hello", true), "/hello\n\n[Since your last turn: x]");
         assert_eq!(lead_in_around(None, "/hello", true), "/hello");
+        // After the words, a hand-over no longer points at them as coming next.
+        let replay = Some("[Dray: …]\n\n<conversation>\nx\n</conversation>\n\nThe user's new message:\n\n");
+        assert_eq!(lead_in_around(replay, "/fix", true), "/fix\n\n[Dray: …]\n\n<conversation>\nx\n</conversation>");
+    }
+
+    #[test]
+    fn a_reply_repeating_this_turns_reaction_is_dropped() {
+        let session = "echo-test";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        let close = |t: &str| -> AgentEventPayload {
+            serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
+                .unwrap()
+        };
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "❤️".into(), by_user: false };
+
+        assert!(!drops_echo(session, &mut text("❤️")), "no reaction yet");
+        assert!(!drops_echo(session, &mut reaction.clone()));
+        assert!(drops_echo(session, &mut text("❤")));
+        assert!(!drops_echo(session, &mut text("❤️ anytime")));
+        let mut closing = close("❤️");
+        assert!(!drops_echo(session, &mut closing));
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: None, .. }));
+
+        assert!(!drops_echo(session, &mut text("❤️")), "the next turn has not reacted");
+        let mut closing = close("❤️");
+        drops_echo(session, &mut closing);
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: Some(_), .. }));
+    }
+
+    #[test]
+    fn nothing_written_after_a_silent_tool_closed_the_turn_is_drawn() {
+        let session = "closed-test";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        let close = |t: &str| -> AgentEventPayload {
+            serde_json::from_value(serde_json::json!({"type": "turn_completed", "status": "success", "finalText": t}))
+                .unwrap()
+        };
+        let delta = || {
+            AgentEventPayload::Delta(crate::events::DeltaEvent::TextDelta {
+                block: crate::events::BlockRef { message_id: "m".into(), index: 0 },
+                text: "(Turn".into(),
+            })
+        };
+
+        assert!(!drops_echo(session, &mut text("Checking.")), "the turn is still open");
+        assert!(!drops_echo(session, &mut delta()));
+        assert!(!drops_echo(session, &mut call("c1", "Bash")), "an ordinary tool closes nothing");
+        assert!(!drops_echo(session, &mut text("Ran it.")));
+        assert!(!drops_echo(session, &mut call("c2", no_reply::TOOL_NAME)), "the call itself is drawn");
+        // Before Dray has even answered the call: the CLI runs it mid-stream.
+        assert!(drops_echo(session, &mut delta()));
+        assert!(drops_echo(session, &mut text("ↀ")));
+        assert!(drops_echo(session, &mut text("(Turn ended without a reply.)")));
+        let mut closing = close("ↀ");
+        assert!(!drops_echo(session, &mut closing));
+        assert!(matches!(closing, AgentEventPayload::TurnCompleted { final_text: None, .. }));
+
+        assert!(!drops_echo(session, &mut text("Hi again.")), "the next turn is open");
+        drops_echo(session, &mut call("c3", no_reply::REACT_NAME));
+        forget_turn(session);
+        assert!(!drops_echo(session, &mut text("Resumed.")), "a dead child's close is forgotten");
+
+        drops_echo(session, &mut call("c4", no_reply::TOOL_NAME));
+        let mut opening = AgentEventPayload::TurnStarted(Default::default());
+        assert!(!drops_echo(session, &mut opening));
+        assert!(!drops_echo(session, &mut text("Answer.")), "a replacement child's turn opens clear");
+    }
+
+    #[test]
+    fn a_refused_reaction_leaves_the_turn_open_for_an_answer() {
+        let session = "refused-react";
+        let text = |t: &str| AgentEventPayload::AssistantText { block: None, text: t.into() };
+        drops_echo(session, &mut call("r1", no_reply::REACT_NAME));
+        assert!(!drops_echo(session, &mut result("other", true)), "another call's error reopens nothing");
+        assert!(drops_echo(session, &mut text("ↀ")));
+        assert!(!drops_echo(session, &mut result("r1", true)));
+        assert!(!drops_echo(session, &mut text("Noted, thanks.")), "the bot answers the refusal");
+
+        drops_echo(session, &mut call("r2", no_reply::REACT_NAME));
+        drops_echo(session, &mut result("r2", false));
+        assert!(drops_echo(session, &mut text("👍")), "a reaction that landed keeps the turn closed");
+        forget_turn(session);
+
+        drops_echo(session, &mut call("n1", no_reply::TOOL_NAME));
+        drops_echo(session, &mut call("r3", no_reply::REACT_NAME));
+        drops_echo(session, &mut result("r3", true));
+        assert!(drops_echo(session, &mut text("ↀ")), "the batch's no_reply_needed still closes it");
+        forget_turn(session);
+    }
+
+    fn call(id: &str, name: &str) -> AgentEventPayload {
+        serde_json::from_value(serde_json::json!({
+            "type": "tool_call_started", "callId": id, "name": name, "toolType": "mcp", "input": {},
+        }))
+        .unwrap()
+    }
+
+    fn result(id: &str, is_error: bool) -> AgentEventPayload {
+        serde_json::from_value(serde_json::json!({
+            "type": "tool_call_completed", "callId": id, "result": {"text": "", "isError": is_error},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_queued_dray_prompt_is_neither_drawn_nor_cancelled() {
+        let session = "queued-dray-prompt";
+        let note = "The user reacted 👍 (like) to your message";
+        crate::bots::mark_dray_prompt(session, note);
+        assert!(crate::bots::is_dray_prompt(session, note));
+        // Peeked, the mark is still there for the flush that logs it.
+        assert!(crate::bots::take_dray_prompt(session, note));
+        assert!(!crate::bots::is_dray_prompt(session, note));
+
+        let held = |hidden: bool| QueuedMessage {
+            id: "q".into(),
+            session_id: session.into(),
+            text: note.into(),
+            attachment_paths: vec![],
+            from: None,
+            issues: vec![],
+            hidden,
+            origin: None,
+        };
+        assert!(held(false).typed());
+        assert!(!held(true).typed());
+    }
+
+    #[test]
+    fn a_turn_its_child_died_in_forgets_its_reaction() {
+        let session = "echo-dead-child";
+        let reaction = AgentEventPayload::Reaction { message_id: "m".into(), emoji: "👍".into(), by_user: false };
+        assert!(!drops_echo(session, &mut reaction.clone()));
+        forget_turn(session);
+        let mut reply = AgentEventPayload::AssistantText { block: None, text: "👍".into() };
+        assert!(!drops_echo(session, &mut reply), "the resumed turn never reacted");
     }
 
     #[test]
@@ -4625,6 +5327,7 @@ mod tests {
     }
 
     /// A live child over `cat`, its tracker as given.
+    #[cfg(unix)]
     async fn child_with(manager: &SessionManager, id: &str, tracker: StatusTracker) -> Slot {
         let mut child = tokio::process::Command::new("cat")
             .stdin(std::process::Stdio::piped())
@@ -4650,9 +5353,78 @@ mod tests {
         slot
     }
 
+    /// The device tag reaches the agent after the prompt and never the logged
+    /// event, and is left off a relay, a slash command and an unknown device.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn the_device_tag_reaches_the_agent_and_not_the_transcript() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut child = tokio::process::Command::new("cat")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let transport = Transport::Lines(Arc::new(Mutex::new(child.stdin.take().unwrap())));
+        let mut echoed = BufReader::new(child.stdout.take().unwrap()).lines();
+        let logged = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = {
+            let logged = logged.clone();
+            Sink::new(move |_, event| logged.lock().unwrap().extend(event["payload"]["text"].as_str().map(String::from)))
+        };
+        let id = format!("device-tag-{}", Uuid::now_v7());
+        let seq = Arc::new(AtomicU64::new(0));
+        let relay = MessageSender { session_id: "t".into(), title: "T".into(), ..Default::default() };
+        let on = |device| Some(Origin { device, time: None });
+        let timed = Some(Origin { device: Device::Iphone, time: Some("14:32".into()) });
+        let sends = [
+            ("hi", None, on(Device::Iphone), "hi\n\n[sent from iPhone]"),
+            ("hi", None, on(Device::Mac), "hi\n\n[sent from Mac app]"),
+            ("hi", None, timed, "hi\n\n[sent from iPhone, 14:32]"),
+            ("done", Some(relay), on(Device::Android), "done"),
+            ("/compact", None, on(Device::Island), "/compact"),
+            ("hi", None, on(Device::Other), "hi"),
+            ("hi", None, None, "hi"),
+        ];
+        for (prompt, from, origin, given) in sends {
+            deliver_prompt(
+                &id, Harness::ClaudeCode, prompt, &[], &[], None, false,
+                crate::harness::pi::Delivery::WhenIdle, true, from, origin, &seq, &transport, &sink,
+            )
+            .await
+            .unwrap();
+            let line: serde_json::Value = serde_json::from_str(&echoed.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(line["message"]["content"], given);
+            assert_eq!(logged.lock().unwrap().last().unwrap(), prompt, "the transcript keeps the text as typed");
+        }
+        let log = crate::store::get_home_app_dir().await.unwrap().join("sessions").join(format!("{id}.jsonl"));
+        assert!(!std::fs::read_to_string(&log).unwrap().contains("sent from"));
+        let _ = std::fs::remove_file(log);
+    }
+
+    #[test]
+    fn a_device_from_a_newer_client_is_no_device() {
+        assert_eq!(serde_json::from_value::<Device>(json!("iphone")).unwrap(), Device::Iphone);
+        assert_eq!(Origin { device: Device::Ipad, time: None }.tag().unwrap(), "[sent from iPad]");
+        assert_eq!(serde_json::from_value::<Device>(json!("vision_pro")).unwrap(), Device::Other);
+        assert_eq!(Origin { device: Device::Other, time: None }.tag(), None);
+    }
+
+    /// The reader's own wall clock, and their date only where it is not the
+    /// harness's.
+    #[test]
+    fn a_bot_chat_tag_carries_the_readers_time() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 11, 24).unwrap();
+        let at = |sent| Origin::new(Device::Mac, Some(sent), today).tag().unwrap();
+        assert_eq!(at("2026-11-24T14:32:10+05:45"), "[sent from Mac app, 14:32]");
+        assert_eq!(at("2026-11-25T09:10:00-08:00"), "[sent from Mac app, Nov 25 09:10]");
+        assert_eq!(Origin::new(Device::Mac, Some("soon"), today).tag().unwrap(), "[sent from Mac app]");
+    }
+
     /// A task's report waits in the bot's queue unseen: no client draws it,
     /// and Esc takes back the reader's own prompt from under it.
     #[tokio::test]
+    #[cfg(unix)]
     async fn a_relayed_message_is_held_but_never_shown_or_cancelled() {
         let manager = SessionManager::default();
         let slot = child_with(&manager, "bot", StatusTracker::default()).await;
@@ -4664,8 +5436,8 @@ mod tests {
         let guard = slot.lock().await;
         let session = guard.as_ref().unwrap();
         let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None, routine: None, ..Default::default() };
-        session.queue_msg("mine", &[], &[], None, &sink).await;
-        session.queue_msg("done", &[], &[], Some(report), &sink).await;
+        session.queue_msg("mine", &[], &[], None, None, &sink).await;
+        session.queue_msg("done", &[], &[], Some(report), None, &sink).await;
 
         let last = shown.lock().unwrap().last().unwrap().clone();
         assert_eq!(last.as_array().unwrap().len(), 1);
@@ -4683,6 +5455,7 @@ mod tests {
     /// leave the queue empty for the direct send. While the turn still runs it
     /// queues, and the turn-end flush that follows drains it.
     #[tokio::test]
+    #[cfg(unix)]
     async fn a_prompt_is_never_queued_behind_a_turn_that_ended() {
         let manager = SessionManager::default();
         let mut running = StatusTracker::default();
@@ -4694,18 +5467,19 @@ mod tests {
 
         let stale = session.status.lock().await.turn_in_flight();
         assert!(stale, "the send's first read sees the turn running");
-        assert!(session.queue_if_in_flight("early", &[], &[], None, &sink).await.is_some());
+        assert!(session.queue_if_in_flight("early", &[], &[], None, None, &sink).await.is_some());
         assert_eq!(session.queued.lock().await.len(), 1, "held for the turn-end flush");
         session.queued.lock().await.clear();
 
         session.status.lock().await.on_event(&turn_completed());
-        assert!(session.queue_if_in_flight("late", &[], &[], None, &sink).await.is_none());
+        assert!(session.queue_if_in_flight("late", &[], &[], None, None, &sink).await.is_none());
         assert!(session.queued.lock().await.is_empty(), "nothing left for a flush that already ran");
     }
 
     /// Only a child with nothing running and nothing waiting on it is stopped,
     /// and its slot left empty for the next send to resume into.
     #[tokio::test]
+    #[cfg(unix)]
     async fn the_idle_sweep_stops_only_a_quiet_child() {
         let manager = SessionManager::default();
         let done = || {
@@ -4748,6 +5522,8 @@ mod tests {
             attachment_paths: vec![],
             from: None,
             issues: vec![],
+            hidden: false,
+            origin: None,
         });
 
         manager.reap_idle(Instant::now()).await;

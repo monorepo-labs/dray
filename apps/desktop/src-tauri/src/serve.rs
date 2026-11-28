@@ -172,6 +172,12 @@ pub async fn run(port: u16) -> Result<()> {
     if let Ok(exe) = std::env::current_exe() {
         let _ = STARTED_FROM.set((exe.clone(), stamp_of(&exe)));
     }
+    // Taken off the environment so no agent inherits it.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os(dray_proto::SELF_RESTART_ENV).is_some() {
+        std::env::remove_var(dray_proto::SELF_RESTART_ENV);
+        RESTARTS_ITSELF.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
     // A login shell, which a heavy profile makes slow, so not before the bind.
@@ -226,6 +232,7 @@ pub async fn run_mac() -> Result<()> {
     tokio::spawn(crate::remote_access::start(sink.clone()));
 
     // launchd, and Quit and stop sessions in dev, stop the server with SIGTERM.
+    #[cfg(unix)]
     tokio::spawn(async {
         use tokio::signal::unix::{signal, SignalKind};
         let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
@@ -236,6 +243,14 @@ pub async fn run_mac() -> Result<()> {
             _ = int.recv() => {}
         }
         shut_down(0).await;
+    });
+    // Windows has no SIGTERM; a stop there is `TerminateProcess`, which no
+    // handler sees. Ctrl-C reaches a server run in a console.
+    #[cfg(windows)]
+    tokio::spawn(async {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            shut_down(0).await;
+        }
     });
 
     eprintln!("dray --serve listening on 127.0.0.1:{port}, home {}", home.display());
@@ -487,12 +502,76 @@ async fn shut_down(code: i32) -> ! {
     // ponytail: a pid that exited in those 3s could be reused; a process
     // group per agent would make this one signal.
     for pid in tree.into_iter().filter(|&p| p != me) {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        crate::platform::kill(pid);
+    }
+    #[cfg(all(windows, not(feature = "desktop")))]
+    if code == RESTART_CODE {
+        respawn();
+    }
+    #[cfg(all(target_os = "linux", not(feature = "desktop")))]
+    if code == RESTART_CODE && RESTARTS_ITSELF.load(std::sync::atomic::Ordering::Relaxed) {
+        respawn();
     }
     // `_exit`, not `process::exit`: once a phone's dictation has loaded a
     // model, ggml-metal's atexit handler aborts (lib.rs's `RunEvent::Exit`
     // says how), which would end every stop and restart as 134, not `code`.
     unsafe { libc::_exit(code) }
+}
+
+/// Named to the server [`respawn`] starts: the pid it waits out before taking
+/// `serve.lock`, which the old one holds until it is gone.
+#[cfg(any(windows, target_os = "linux"))]
+const RESTART_AFTER: &str = "DRAY_RESTART_AFTER";
+
+/// A server [`dray_proto::SELF_RESTART_ENV`] marked: Linux with no systemd.
+#[cfg(target_os = "linux")]
+static RESTARTS_ITSELF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Where nothing brings back a server that exits [`RESTART_CODE`] — Windows,
+/// and Linux with no systemd — it starts its own successor, with the arguments
+/// it was given (a login `Run` command's `--log` and `--env` among them), its
+/// output where this one's went, and no window. Started after the tree is
+/// killed, or it would be killed with it.
+#[cfg(all(any(windows, target_os = "linux"), not(feature = "desktop")))]
+fn respawn() {
+    #[cfg(windows)]
+    let Ok(exe) = std::env::current_exe() else { return };
+    // The path taken at start: once an update renamed a new binary over it,
+    // Linux's `current_exe` names the deleted old one.
+    #[cfg(target_os = "linux")]
+    let Some(exe) = STARTED_FROM.get().map(|(exe, _)| exe.clone()) else { return };
+    let mut command = std::process::Command::new(exe);
+    command
+        .args(std::env::args_os().skip(1))
+        .env(RESTART_AFTER, std::process::id().to_string())
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(crate::platform::CREATE_NO_WINDOW | 0x0000_0200); // CREATE_NEW_PROCESS_GROUP
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        command.env(dray_proto::SELF_RESTART_ENV, "1").process_group(0);
+    }
+    if let Err(e) = command.spawn() {
+        eprintln!("[serve] could not start the next server: {e}");
+    }
+}
+
+/// Waits for the server this one replaces to exit, up to 30s, then forgets
+/// its pid so no agent inherits the variable.
+#[cfg(any(windows, target_os = "linux"))]
+async fn wait_for_predecessor() {
+    let Some(pid) = std::env::var(RESTART_AFTER).ok().and_then(|p| p.parse::<u32>().ok()) else { return };
+    std::env::remove_var(RESTART_AFTER);
+    for _ in 0..300 {
+        if !crate::platform::pid_alive(pid) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 /// Removes the browser profiles of deleted and settled sessions, the backlog
@@ -512,7 +591,7 @@ async fn sweep_browser_profiles() {
     // session made or unsettled meanwhile would lose a profile it just opened.
     // Only the renames are waited on; the removals run on.
     let _ = tokio::task::spawn_blocking(move || {
-        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        #[cfg(feature = "cef")]
         crate::cef::automation::sweep_profiles(&live);
         crate::headless::automation::sweep_profiles(&live);
     })
@@ -527,6 +606,8 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     // each other's socket and rewrite one index whole, each over the other.
     // A socket that answers is a Dray already living here.
     let home = store::get_home_app_dir().await?;
+    #[cfg(any(windows, target_os = "linux"))]
+    wait_for_predecessor().await;
     // Held for the life of the process. The socket check below alone lets
     // two servers starting at once both pass it, since neither has bound yet.
     let held = std::fs::OpenOptions::new()
@@ -535,12 +616,25 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
         .write(true)
         .open(home.join("serve.lock"))
         .context("could not open serve.lock")?;
-    if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&held), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if held.try_lock().is_err() {
         anyhow::bail!("a Dray server is already running on {}", home.display());
     }
     std::mem::forget(held);
     let socket = home.join(dray_proto::SOCKET_NAME);
-    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+    #[cfg(unix)]
+    let answers = std::os::unix::net::UnixStream::connect(&socket).is_ok();
+    // Opening a pipe instance is connecting to it, as a client would.
+    #[cfg(windows)]
+    // Every instance busy is a server just as surely as one answering.
+    let answers = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dray_proto::pipe_name(&socket.to_string_lossy()))
+    {
+        Ok(_) => true,
+        Err(e) => e.raw_os_error() == Some(231), // ERROR_PIPE_BUSY
+    };
+    if answers {
         anyhow::bail!(
             "a Dray is already running on {} ({} answers). Quit it, or start \
              dray-serve with DRAY_HOME set to a directory of its own.",
@@ -558,7 +652,10 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     sweep_browser_profiles().await;
     crate::auto_continue::rearm(&sink).await;
 
+    crate::remote_asks::forget_unanswered().await;
+    crate::secrets::start().await;
     tokio::spawn(crate::remote_reports::run(sink.clone()));
+    tokio::spawn(crate::remote_asks::run(sink.clone()));
     tokio::spawn(crate::stalls::run(sink.clone()));
     tokio::spawn(crate::held_flags::run(sink.clone()));
     tokio::spawn(crate::routines::run(sink.clone()));
@@ -752,6 +849,15 @@ fn same_token(given: &str, token: &str) -> bool {
             == 0
 }
 
+/// Who this server is, the same however it was reached: a phone pairing it
+/// directly and reaching it through a Mac that shares it (#1404) holds the
+/// token itself, so hashing that matches the two. One-way, so the welcome
+/// that carries it through a relay gives the token to no one.
+fn server_id(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(format!("dray-server\0{token}"))[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[derive(Deserialize)]
 struct Hello {
     v: u32,
@@ -786,8 +892,7 @@ struct HostOffer {
     browser: bool,
 }
 
-/// The app connected to its own server, and the calls waiting on it. One at a
-/// time: a second app on one home replaces the first.
+/// The app connected to its own server, and the calls waiting on it.
 struct Host {
     connection: u64,
     browser: bool,
@@ -795,24 +900,66 @@ struct Host {
     waiting: HashMap<u64, tokio::sync::oneshot::Sender<Result<Value, Value>>>,
 }
 
-static HOST: Mutex<Option<Host>> = Mutex::new(None);
+/// Every connection that offered to host, oldest first; the newest answers.
+///
+/// A list, not one slot, because connections can close out of order: an app
+/// relaunching, or a stalled connect finishing after its retry. With one slot
+/// the last to close emptied it while an app was still connected, so for the
+/// rest of that app's run `dray machine` edits landed in `servers.json` and its
+/// reload reached nobody: machines added never showed, nor their tasks (#1629).
+#[derive(Default)]
+struct Hosts(Vec<Host>);
+
+impl Hosts {
+    fn current(&mut self) -> Option<&mut Host> {
+        self.0.last_mut()
+    }
+
+    fn offer(&mut self, host: Host) {
+        self.0.push(host);
+    }
+
+    /// Drops `connection`'s offer, answering every call waiting on it.
+    fn leave(&mut self, connection: u64) -> Left {
+        let Some(at) = self.0.iter().position(|h| h.connection == connection) else { return Left::Unseen };
+        let was_current = at + 1 == self.0.len();
+        self.0.remove(at);
+        match (was_current, self.0.is_empty()) {
+            (false, _) => Left::Unseen,
+            (true, false) => Left::HandedOn,
+            (true, true) => Left::NoHost,
+        }
+    }
+}
+
+/// What a connection closing did to who hosts.
+#[derive(Debug, PartialEq)]
+enum Left {
+    /// Nothing anyone sees: it was not answering.
+    Unseen,
+    /// An earlier connection, still open, answers now.
+    HandedOn,
+    NoHost,
+}
+
+static HOSTS: Mutex<Hosts> = Mutex::new(Hosts(Vec::new()));
 static NEXT_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-fn host() -> std::sync::MutexGuard<'static, Option<Host>> {
-    HOST.lock().unwrap_or_else(|e| e.into_inner())
+fn host_list() -> std::sync::MutexGuard<'static, Hosts> {
+    HOSTS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Whether the connected app runs browser steps itself.
 pub fn host_browser() -> bool {
-    host().as_ref().is_some_and(|h| h.browser)
+    host_list().current().is_some_and(|h| h.browser)
 }
 
 /// Asks the app connected as host. `None` where no app is connected; an app
 /// that leaves mid-call answers an error, since the step may have half run.
 pub async fn host_call(cmd: &str, args: Value) -> Option<Result<Value, Value>> {
     let answer = {
-        let mut host = host();
-        let host = host.as_mut()?;
+        let mut hosts = host_list();
+        let host = hosts.current()?;
         let call = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (tx, rx) = tokio::sync::oneshot::channel();
         host.waiting.insert(call, tx);
@@ -959,13 +1106,20 @@ impl Live {
         // Always present, so a client tells a server that judges stalls from
         // one too old to, whose `live_state` has no such key.
         let stalls: Vec<&Value> = self.stalls.values().collect();
-        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "serving": serving, "boat": self.boat, "stalls": stalls })
+        // Logged cards, so apart from `asks`, which a client merges into the
+        // transcript: these are already there, and only mark who is waiting.
+        let secrets = crate::secrets::open_cards();
+        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "serving": serving, "boat": self.boat, "stalls": stalls, "secrets": secrets })
     }
 
     fn flags(&self) -> LiveFlags {
         let ids = |m: &HashMap<String, Value>| m.keys().cloned().collect();
         LiveFlags {
-            asking: self.asks.iter().filter_map(|a| a["sessionId"].as_str().map(String::from)).collect(),
+            asking: self.asks
+                .iter()
+                .filter_map(|a| a["sessionId"].as_str().map(String::from))
+                .chain(crate::secrets::asking())
+                .collect(),
             tasks: ids(&self.tasks),
             serving: ids(&self.serving),
         }
@@ -1457,7 +1611,7 @@ async fn servable(path: &str) -> Option<PathBuf> {
     if let Some(real) = servable_under(&store::get_home_app_dir().await.ok()?, path).await {
         return Some(real);
     }
-    let real = tokio::fs::canonicalize(path).await.ok()?;
+    let real = crate::platform::canonicalize(path).await.ok()?;
     let opened = OPENED_VIDEOS.lock().unwrap_or_else(|e| e.into_inner());
     opened.contains(&real).then_some(real)
 }
@@ -1481,10 +1635,10 @@ async fn read_file(path: &str) -> Result<files::FileBody, String> {
 }
 
 async fn servable_under(home: &std::path::Path, path: &str) -> Option<PathBuf> {
-    let real = tokio::fs::canonicalize(path).await.ok()?;
+    let real = crate::platform::canonicalize(path).await.ok()?;
     let browser = home.join("browser");
     for root in [home.join("attachments"), browser.join("recordings"), browser.join("shots")] {
-        if let Ok(root) = tokio::fs::canonicalize(&root).await {
+        if let Ok(root) = crate::platform::canonicalize(&root).await {
             if real.starts_with(&root) && real.is_file() {
                 return Some(real);
             }
@@ -1597,6 +1751,8 @@ async fn connection(
         "os": std::env::consts::OS,
         // This server judges its bots' "Waiting on you" cards (`bot_stalls`).
         "stalls": true,
+        // Never `id`: every client reads a frame's `id` as a call's, and a phone's fails on a string.
+        "identity": server_id(token),
     });
     // The welcome stays text whatever was asked: a client reads it before it
     // knows whether this server understood `deflate` at all.
@@ -1643,7 +1799,7 @@ async fn connection(
     let island = hello.as_ref().is_some_and(|h| h.client.as_deref() == Some("island"));
     let offer = hello.and_then(|h| h.host);
     if let Some(offer) = offer {
-        *host() = Some(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
+        host_list().offer(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
         let _ = sink.emit("host_changed", Value::Null);
         // This server writes the machine list itself while no app is
         // connected, so the copy the app read at launch may be stale (#760).
@@ -1717,19 +1873,23 @@ async fn connection(
     }
 
     // Dropping its waiters answers every call still out on it.
-    let mut host = host();
-    let left = host.as_ref().is_some_and(|h| h.connection == connection);
-    if left {
-        *host = None;
-    }
-    drop(host);
-    if left {
+    let left = host_list().leave(connection);
+    if left != Left::Unseen {
         // The island follows the app's links, so it drops them with the app.
         let _ = sink.emit("host_changed", Value::Null);
+    }
+    match left {
+        Left::Unseen => {}
+        // Edits made while the one leaving answered went to it, not this one.
+        Left::HandedOn => drop(tokio::spawn(host_call("reload_servers", Value::Null))),
         // Only the app reads boat timers, so its warnings go with it rather than
         // counting down on the island past a stop nobody is watching for.
         #[cfg(feature = "desktop")]
-        let _ = sink.emit("boat_alerts", json!({ "alerts": [] }));
+        Left::NoHost => {
+            let _ = sink.emit("boat_alerts", json!({ "alerts": [] }));
+        }
+        #[cfg(not(feature = "desktop"))]
+        Left::NoHost => {}
     }
     drop(replies);
     writer.abort();
@@ -1792,7 +1952,7 @@ fn answered(connection: u64, frame: Value) {
         None => Ok(frame.get("ok").cloned().unwrap_or(Value::Null)),
     };
     let waiter = frame["reply"].as_u64().and_then(|call| {
-        host().as_mut().filter(|h| h.connection == connection).and_then(|h| h.waiting.remove(&call))
+        host_list().0.iter_mut().find(|h| h.connection == connection).and_then(|h| h.waiting.remove(&call))
     });
     if let Some(waiter) = waiter {
         let _ = waiter.send(reply);
@@ -1961,11 +2121,20 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             harness: Harness, model: ModelId, effort: Option<Effort>,
             permission_mode: ApprovalPolicy, fast: bool, cwd: String,
             branch: Option<String>, use_worktree: bool, worktree_name: Option<String>,
-            base_ref: Option<String>, is_new_session: bool,
+            base_ref: Option<String>, is_new_session: bool, issue_ids: Option<Vec<String>>,
+            device: Option<crate::session::Device>, sent_at: Option<String>,
         ) => crate::send_msg(
             &session_id, &prompt, attachment_paths, harness, model, effort,
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
-            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
+            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, issue_ids, device, sent_at, sink,
+        ).await;
+        start_pr_session(
+            session_id: String, prompt: String, harness: Harness, model: ModelId,
+            effort: Option<Effort>, permission_mode: ApprovalPolicy, fast: bool, cwd: String,
+            pr_head: crate::git::PrHead, pr_number: u64, bot: Option<String>,
+        ) => crate::start_pr_session(
+            session_id, prompt, harness, model, effort, permission_mode, fast, cwd,
+            pr_head, pr_number, bot, sink,
         ).await;
         // The reader's own stop, settle and delete are noted for the task's bot
         // here, on the client wire: `dray` is how the bot does each itself.
@@ -1973,6 +2142,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             &session_id, Some(crate::bots::Act::Stopped), &sink.clone(), crate::interrupt_session(&session_id, sink),
         ).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
+        switch_agent(
+            session_id: String, harness: Harness, model: ModelId, effort: Option<Effort>,
+            permission_mode: ApprovalPolicy, fast: bool,
+        ) => crate::switch_agent(&session_id, harness, model, effort, permission_mode, fast, sink).await;
         cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
         respond_permission(session_id: String, request_id: String, option_id: String) =>
             crate::respond_permission(&session_id, &request_id, &option_id, sink).await;
@@ -1981,6 +2154,21 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // A phone's alerts (#1299), through the relay.
         push_register(handle: String, tag: String, off: Option<Vec<String>>) => crate::push::push_register(handle, tag, off).await;
         push_unregister(handle: String) => crate::push::push_unregister(handle).await;
+        react_to_message(session_id: String, message_id: String, emoji: String) =>
+            crate::bots::react::react_to_message(session_id, message_id, emoji, sink).await;
+        // The value rides this call alone and goes straight to a file.
+        answer_secret_request(
+            session_id: String, request_id: String, value: Option<String>, keep: bool,
+            use_saved: Option<bool>, always: Option<bool>, from: Option<String>,
+        ) => crate::secrets::answer_secret_request(session_id, request_id, value, keep, use_saved, always, from, sink).await;
+        set_secret_always(name: String, on: bool) => crate::secrets::set_secret_always(name, on, sink).await;
+        list_secrets() => crate::secrets::list_secrets().await;
+        save_secret(name: String, value: String) => crate::secrets::save_secret(name, value, sink).await;
+        delete_secret(name: String) => crate::secrets::delete_secret(name, sink).await;
+        approve_issue(session_id: String, card_id: String, number: u64) =>
+            crate::issues::card::approve_issue(session_id, card_id, number, sink).await;
+        send_issue_to_bot(bot_id: String, issue: crate::issues::IssueRef, note: Option<String>) =>
+            crate::issues::card::send_issue_to_bot(bot_id, issue, note, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
             crate::bots::reader_did(
@@ -2005,7 +2193,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             &session_id, Some(crate::bots::Act::Deleted), &sink.clone(), crate::delete_session(&session_id, sink),
         ).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
-            crate::fork_session(&session_id, &fork_id, worktree).await;
+            crate::fork_session(&session_id, &fork_id, worktree, sink).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
         session_keeps_children(session_id: String) => crate::session_keeps_children(&session_id).await;
         fx_subagent_events(session_id: String, agent: String) =>
@@ -2013,17 +2201,25 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         // `dray --machine` from an agent on the Mac that added this machine.
         orchestrate(
             line: String, origin: Option<String>, caller: Option<crate::orchestration::Caller>,
-            sender: Option<crate::events::MessageSender>,
+            sender: Option<crate::events::MessageSender>, ask: Option<String>,
         ) => ok(crate::orchestration::answer_forward(
-            crate::orchestration::Forward { line, origin, caller, sender }, sink,
+            crate::orchestration::Forward { line, origin, caller, sender, ask }, sink,
         ).await);
         // A bot's server collecting what its tasks here said (#958).
         parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
             crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        // A bot's server answering its task's ask for a secret: the value
+        // rides this call alone and goes straight to a one-time file.
+        secret_deliver(session_id: String, request_id: String, value: Option<String>) =>
+            crate::secrets::deliver(session_id, request_id, value, sink).await;
+        // An asking server collecting its questions' answers here (#1463).
+        bot_answers(asks: Vec<String>, ack: Vec<String>, undelivered: Vec<String>) =>
+            crate::remote_asks::take(asks, ack, undelivered, &sink).await;
         bot_stalls() => ok(live_stalls());
         worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
-        detach_session(session_id: String) => store::detach_session(&session_id).await;
+        detach_session(session_id: String) => crate::detach_session(&session_id, sink).await;
+        attach_session(session_id: String, bot: String) => crate::orchestration::attach_to_bot(&session_id, &bot, &sink).await.map_err(crate::Fail::from);
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
         reachable_sessions() => ok(crate::machines::reachable_sessions().await);
@@ -2051,6 +2247,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
             crate::accounts::sign_out_agent(harness, provider).await;
         check_agent_updates() => ok(crate::agent_updates::check_agent_updates().await);
         update_agent(harness: Harness) => crate::agent_updates::update_agent(harness).await;
+        install_agent(harness: Harness) => crate::agent_updates::install_agent(harness).await;
+        recheck_agent(harness: Harness) => ok(crate::agent_updates::recheck_agent(harness).await);
 
         // Projects and settings.
         list_projects() => crate::projects::list_projects().await;
@@ -2063,9 +2261,12 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         move_project(path: String, delta: isize) => crate::projects::move_project(&path, delta).await;
         retag_space(from: String, to: Option<String>) => crate::projects::retag_space(&from, to).await;
         analytics_identity() => ok(crate::analytics::analytics_identity().await);
+        analytics_setting() => ok(crate::analytics::analytics_setting().await);
+        set_analytics_enabled(on: bool) => crate::analytics::set_analytics_enabled(on).await;
         track_feature(feature: String, target: Option<crate::BrowserTarget>) => ok(crate::track_feature(feature, target));
         track_render_error(code: Option<u32>, frames: Vec<String>) => ok(crate::track_render_error(code, frames));
         track_active_day() => ok(crate::analytics::track_active_day());
+        track_sign_in_gate(step: crate::analytics::GateStep, reason: crate::analytics::GateReason) => ok(crate::analytics::track_sign_in_gate(step, reason));
         // The panel opening, which nothing else reaches the server for; counted
         // by `island_used` off the connection, so the call itself does nothing.
         island_opened() => ok(());
@@ -2120,6 +2321,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
         list_routines(bot_id: String) => crate::routines::list_routines(bot_id).await;
         set_routine_paused(id: String, paused: bool) => crate::routines::set_routine_paused(id, paused, sink).await;
         delete_routine(id: String) => crate::routines::delete_routine(id, sink).await;
+        update_routine(id: String, name: String, prompt: String) => crate::routines::update_routine(id, name, prompt, sink).await;
 
         // Assistants signed in to `/mcp`.
         mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;
@@ -2149,13 +2351,18 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
 
         // GitHub and issues.
         prs_for_branch(cwd: String, branch: String) => github::prs_for_branch(cwd, branch).await;
-        pr_marks(cwd: String) => github::pr_marks(cwd).await;
+        pr_marks(cwd: String, listing: Option<bool>) => github::pr_marks(cwd, listing).await;
+        pr_detail(cwd: String, number: u64) => github::pr_detail(cwd, number).await;
+        pr_search(owner: Option<String>, org: Option<bool>, filter: Option<github::PrSearchFilter>) =>
+            github::pr_search(owner, org, filter).await;
+        repo_checkouts(paths: Vec<String>, repos: Vec<String>) => crate::git::repo_checkouts(paths, repos).await;
         merge_pr(cwd: String, number: u64, method: MergeMethod, settle: Option<String>) =>
             github::merge_pr(cwd, number, method, settle, sink).await;
         delete_branch(cwd: String, number: u64) => github::delete_branch(cwd, number).await;
         reopen_pr(cwd: String, number: u64) => github::reopen_pr(cwd, number).await;
         mark_pr_ready(cwd: String, number: u64) => github::mark_pr_ready(cwd, number).await;
         recheck_gh() => ok(github::recheck_gh().await);
+        install_gh() => github::install_gh().await;
         merge_access(cwd: String) => ok(github::merge_access(cwd).await);
         get_integrations() => ok(issues::get_integrations().await);
         github_repo(cwd: String) => ok(issues::github_repo(cwd).await);
@@ -2173,6 +2380,31 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Answer {
 
 #[cfg(test)]
 mod tests {
+    fn host(connection: u64) -> super::Host {
+        let (frames, _) = tokio::sync::mpsc::unbounded_channel();
+        super::Host { connection, browser: false, frames, waiting: Default::default() }
+    }
+
+    /// #1629: an older host connection closing last must hand host back to the
+    /// app still connected, never leave no host behind it.
+    #[test]
+    fn a_host_leaving_hands_on_to_the_one_still_open() {
+        use super::{Hosts, Left};
+        let mut hosts = Hosts::default();
+        hosts.offer(host(1));
+        hosts.offer(host(2));
+        assert_eq!(hosts.current().map(|h| h.connection), Some(2), "the newest answers");
+        assert_eq!(hosts.leave(2), Left::HandedOn);
+        assert_eq!(hosts.current().map(|h| h.connection), Some(1));
+
+        hosts.offer(host(3));
+        assert_eq!(hosts.leave(1), Left::Unseen, "an older one leaving changes nothing seen");
+        assert_eq!(hosts.current().map(|h| h.connection), Some(3));
+        assert_eq!(hosts.leave(9), Left::Unseen, "a connection that never hosted");
+        assert_eq!(hosts.leave(3), Left::NoHost);
+        assert!(hosts.current().is_none());
+    }
+
     #[test]
     fn a_range_is_read_as_http_writes_it() {
         use super::{byte_span, ByteSpan::*};
@@ -2197,6 +2429,13 @@ mod tests {
         assert!(!relayed("GET /file?path=%2Fvia%3Dx HTTP/1.1"), "a path holding via= is not a via");
         assert!(!relayed("GET /file?path=%2Fa HTTP/1.1"));
         assert!(!relayed("GET /?via=69b4 HTTP/1.1"), "the socket's upgrade carries via in its hello");
+    }
+
+    /// The phone hashes the token it holds the same way (`serverId` in its
+    /// Store.swift, whose test pins this value too), or the copies never match.
+    #[test]
+    fn server_id_is_the_phones_hash_of_the_token() {
+        assert_eq!(super::server_id("test-token"), "4b3f3d0f73afd9cc");
     }
 
     use super::*;
@@ -2455,12 +2694,17 @@ mod tests {
         let landed = post("tok", "data.csv").await.text().await.unwrap();
         let uploads = store::get_home_app_dir().await.unwrap().join("attachments/uploads");
         assert!(Path::new(&landed).starts_with(&uploads), "{landed}");
-        assert!(landed.ends_with("/data.csv"));
+        assert!(Path::new(&landed).ends_with("data.csv"), "{landed}");
         assert_eq!(std::fs::read(&landed).unwrap(), body);
         std::fs::remove_dir_all(Path::new(&landed).parent().unwrap()).ok();
 
-        assert_eq!(post("nope", "data.csv").await.status(), 401);
-        assert_eq!(post("tok", "..").await.status(), 400);
+        // Refused before the body is read, and Windows resets a socket closed
+        // with unread data, so the client there reads a reset, not the status.
+        #[cfg(unix)]
+        {
+            assert_eq!(post("nope", "data.csv").await.status(), 401);
+            assert_eq!(post("tok", "..").await.status(), 400);
+        }
     }
 
     #[test]

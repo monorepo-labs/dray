@@ -5,9 +5,9 @@ import { invoke, serverOfPath } from "@/lib/transport";
 
 import { channel } from "@/lib/channel";
 import { useWindowFocused } from "@/lib/focus";
-import { markDisagrees, marksGaveUp, marksRepo, marksRetryDelay, pickPrMark, sameMark } from "@/lib/pr";
+import { asUnavailable, markDisagrees, marksGaveUp, marksRepo, marksRetryDelay, pickPrMark, sameMark } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
-import type { PrMark } from "@/types/events";
+import type { PrMark, PrUnavailable } from "@/types/events";
 
 /// How long a repo's answer counts as fresh. Longer than the panel's own 30s,
 /// because this feeds a mark rather than a view being read: the sidebar is on
@@ -64,7 +64,7 @@ const askedAt = new Map<string, number>();
 /// the same fact as "a read will answer for me". One issued before a write is
 /// discarded when it lands — see `outdated` — so a later caller that stands
 /// down behind it waits for an answer that never comes.
-const inFlight = new Map<string, { promise: Promise<boolean>; startedAt: number }>();
+const inFlight = new Map<string, { promise: Promise<boolean>; startedAt: number; listing: boolean }>();
 
 /// The GitHub repo each key's marks came from — see `marksRepo`. Keys sharing
 /// one are read once and all given the answer, or one repo checked out on this
@@ -76,6 +76,40 @@ const repoOf = new Map<string, string>();
 /// again: the poll reads only repos holding an open PR, and a repo whose reads
 /// all failed holds nothing.
 const failures = new Map<string, { count: number; at: number }>();
+/// Why each key's last read failed, until one lands. The sidebar draws nothing
+/// from it; the pull requests page says it under that repo's rows.
+const lastError = new Map<string, PrUnavailable>();
+/// Keys the pull requests page is listing. Their reads ask for each open PR's
+/// listing, which no other reader draws, so the sidebar's own polls stay as
+/// small as they were.
+const listed = new Set<string>();
+/// When each key's listings were last read. A sidebar read asks for none, so
+/// its answer keeps the listings the page last read (see `carryListings`) and
+/// this says how old those are.
+const listedAt = new Map<string, number>();
+/// A listed key whose open PRs lack listings, or carry ones older than a
+/// fresh read, wants a read that asks for them. What it holds is still drawn
+/// meanwhile, so the page paints at once on return.
+const lacksListing = (path: string) =>
+  listed.has(path) &&
+  [...(numbered.get(path)?.values() ?? [])].some(
+    (pr) => pr.state === "OPEN" && (!pr.listing || Date.now() - (listedAt.get(path) ?? 0) >= FRESH_MS),
+  );
+
+/// `prs` with each open PR's listing taken from `before` where this read asked
+/// for none. The sidebar re-reads the page's repos while the page is closed,
+/// and dropping their listings left it blank on return until a read landed.
+function carryListings(prs: PrMark[], before: Map<number, PrMark> | undefined): PrMark[] {
+  if (!before) return prs;
+  return prs.map((pr) => {
+    const listing = !pr.listing && pr.state === "OPEN" ? before.get(pr.number)?.listing : undefined;
+    return listing ? { ...pr, listing } : pr;
+  });
+}
+
+/// The GitHub repo a key was last read as, `host/owner/name`, outside React:
+/// for deciding what to read before the hook has run.
+export const knownRepo = (key: string): string | undefined => repoOf.get(key);
 
 const EMPTY: Map<string, PrMark> = new Map();
 
@@ -168,6 +202,8 @@ export function usePrMarks(
   /// Of `repoPaths`, the ones still read while the window is in the background,
   /// every `BACKGROUND_POLL_MS`, since what they decide is not on screen.
   backgroundPaths: readonly string[] = [],
+  /// Of `repoPaths`, the ones the pull requests page lists.
+  listedPaths: readonly string[] = [],
 ) {
   // The effect depends on the *set*, not on the array identity a caller mints
   // fresh every render. The paths themselves are read off a ref rather than out
@@ -211,10 +247,13 @@ export function usePrMarks(
         // nothing scheduled at all — and the entry it would have replaced stays
         // on screen with no stamp and no poll to correct it, since a stale
         // merged mark is exactly what holds `anyOpen` off.
-        if (force || outdated(path, running.startedAt)) deferred.push(path);
+        // So is a read that did not ask for listings while the page now
+        // lists this repo: its answer draws no row there.
+        const wantsListing = sharing(path).some((key) => listed.has(key));
+        if (force || outdated(path, running.startedAt) || (wantsListing && !running.listing)) deferred.push(path);
         return false;
       }
-      return force || Date.now() - (fetchedAt.get(path) ?? 0) >= FRESH_MS;
+      return force || Date.now() - (fetchedAt.get(path) ?? 0) >= FRESH_MS || lacksListing(path);
     });
     if (stale.length === 0 && deferred.length === 0) return;
 
@@ -247,12 +286,14 @@ export function usePrMarks(
         let answer: Map<string, PrMark>;
         let all: PrMark[];
         const asked = Date.now();
+        const withListing = sharing(path).some((key) => listed.has(key));
         try {
-          all = await invoke<PrMark[]>("pr_marks", { cwd: path });
+          all = await invoke<PrMark[]>("pr_marks", { cwd: path, listing: withListing });
           answer = marksByBranch(all);
         } catch (error) {
           if (marksGaveUp(error)) failures.delete(path);
           else failures.set(path, { count: (failures.get(path)?.count ?? 0) + 1, at: Date.now() });
+          lastError.set(path, asUnavailable(error));
           // A failed read changes nothing at all — it neither writes rows nor
           // stamps, and both halves of that are load-bearing.
           //
@@ -289,11 +330,14 @@ export function usePrMarks(
         if (repo) repoOf.set(path, repo);
         for (const key of sharing(path)) {
           failures.delete(key);
+          lastError.delete(key);
           if (outdated(key, startedAt) || startedAt < (answeredAt.get(key) ?? 0)) continue;
           answeredAt.set(key, startedAt);
           const before = cache.get(key);
           cache.set(key, answer);
-          numbered.set(key, new Map(all.map((pr) => [pr.number, pr])));
+          const prs = withListing ? all : carryListings(all, numbered.get(key));
+          numbered.set(key, new Map(prs.map((pr) => [pr.number, pr])));
+          if (withListing) listedAt.set(key, asked);
           fetchedAt.set(key, Date.now());
           askedAt.set(key, asked);
 
@@ -316,7 +360,7 @@ export function usePrMarks(
         return true;
       })();
 
-      inFlight.set(path, { promise: attempt, startedAt });
+      inFlight.set(path, { promise: attempt, startedAt, listing: sharing(path).some((key) => listed.has(key)) });
       const done = await attempt;
       // Only if it is still ours: a later read may already have claimed the
       // slot while this one was settling.
@@ -350,9 +394,16 @@ export function usePrMarks(
     setByRepo(new Map(cache));
   }, []);
 
+  // Before the read below, which asks the set what to request.
+  const listedKey = [...listedPaths].sort().join("\n");
+  useEffect(() => {
+    listed.clear();
+    for (const path of listedKey ? listedKey.split("\n") : []) listed.add(path);
+  }, [listedKey]);
+
   useEffect(() => {
     void load(false);
-  }, [key, load]);
+  }, [key, listedKey, load]);
 
   // The panel's read is the faster one while its tab is open — 15s against
   // 30s here — so it is the first to see a check land or a merge go through.
@@ -485,6 +536,32 @@ export function usePrMarks(
       },
       [byRepo],
     ),
+    /// Every pull request a key's last read held, open and merged, or nothing
+    /// before its first read. The pull requests page lists from it.
+    marksIn: useCallback(
+      (repoPath: string): PrMark[] | undefined => {
+        void byRepo; // re-made on every read, so a caller re-renders on one
+        const marks = numbered.get(repoPath);
+        return marks && [...marks.values()];
+      },
+      [byRepo],
+    ),
+    /// The GitHub repo a key was last read as, `host/owner/name`.
+    repoOf: useCallback(
+      (repoPath: string): string | undefined => {
+        void byRepo;
+        return repoOf.get(repoPath);
+      },
+      [byRepo],
+    ),
+    /// Why a key's last read failed, while no read since has landed.
+    errorFor: useCallback(
+      (repoPath: string): PrUnavailable | undefined => {
+        void byRepo;
+        return lastError.get(repoPath);
+      },
+      [byRepo],
+    ),
     /// When a repo's marks were asked for, or nothing before its first read.
     readAt: useCallback(
       (repoPath: string): number | undefined => {
@@ -513,7 +590,10 @@ export function usePrMarks(
     }, []),
     /// Re-reads every repo currently on screen. Called when a turn ends — that
     /// is when a pull request appears.
-    refresh: useCallback(() => void load(true), [load]),
+    refresh: useCallback(() => load(true), [load]),
+    /// Re-reads `paths` alone: the pull requests page's ↻, which has no
+    /// business spending a `gh` on every repo the sidebar holds.
+    refreshRepos: useCallback((paths: string[]) => load(true, paths), [load]),
     /// Re-reads one repo, for an agent saying it changed a pull request there.
     /// One repo and not every one on screen: agents push and comment all day,
     /// across every machine, and each of those re-reading the lot was most of
@@ -565,5 +645,48 @@ export function usePrMarks(
       fetchedAt.clear();
       void load(true);
     }, [load]),
+  };
+}
+
+/// The repo key the composer's `#` menu is listing pull requests from, or
+/// `null`. `App`'s one `usePrMarks` reads and lists it beside the page's keys,
+/// so the menu shares the page's cache, poll and `gh` budget rather than
+/// running a reader of its own.
+let mentionKey: string | null = null;
+const mentionKeyChanged = channel<void>();
+
+export const readPrMentionKey = () => mentionKey;
+export const subscribePrMentionKey = mentionKeyChanged.subscribe;
+
+/// Open pull requests in one repo for the `#` menu, newest activity first, and
+/// whether they are still coming. Keeps `key` listed while `active`.
+export function usePrMentions(
+  key: string | null,
+  active: boolean,
+): { prs: PrMark[]; loading: boolean; error?: PrUnavailable } {
+  useEffect(() => {
+    if (!active || !key) return;
+    mentionKey = key;
+    mentionKeyChanged.emit();
+    return () => {
+      if (mentionKey !== key) return;
+      mentionKey = null;
+      mentionKeyChanged.emit();
+    };
+  }, [key, active]);
+
+  const [, redraw] = useState(0);
+  useEffect(() => prMarksChanged.subscribe(() => redraw((n) => n + 1)), []);
+
+  if (!active || !key) return { prs: [], loading: false };
+  const marks = numbered.get(key);
+  const error = lastError.get(key);
+  const open = [...(marks?.values() ?? [])].filter((pr) => pr.state === "OPEN");
+  // A read made before the menu asked carries no titles, so it is no answer yet.
+  if (!marks || open.some((pr) => !pr.listing)) return { prs: [], loading: !error, error };
+  return {
+    prs: open.sort((a, b) => (b.listing?.updatedAt ?? "").localeCompare(a.listing?.updatedAt ?? "")),
+    loading: false,
+    error,
   };
 }

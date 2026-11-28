@@ -3,6 +3,7 @@ import { memo, useRef, type ComponentProps } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useCopied } from "@/hooks/useCopied";
+import { textWithChips } from "@/lib/chipCopy";
 import { serializeTable, type TableFormat } from "@/lib/markdownTable";
 
 /// The copy control's formats, in menu order. Markdown first because it is
@@ -17,7 +18,7 @@ const FORMATS: { format: TableFormat; label: string }[] = [
 /// one place the rows already sit resolved, whatever plugins rewrote them.
 function cells(table: HTMLTableElement): string[][] {
   return Array.from(table.rows, (row) =>
-    Array.from(row.cells, (cell) => (cell.textContent ?? "").trim().replace(/\s+/g, " ")),
+    Array.from(row.cells, (cell) => textWithChips(cell).trim().replace(/\s+/g, " ")),
   );
 }
 

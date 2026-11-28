@@ -11,6 +11,7 @@ struct PullRequest: Decodable, Identifiable {
     let isDraft: Bool
     let author: String
     let baseRefName: String
+    var headRefName: String? = nil
     let mergeable: String
     let mergeStateStatus: String
     let reviewDecision: String?
@@ -19,6 +20,7 @@ struct PullRequest: Decodable, Identifiable {
     let additions: Int
     let deletions: Int
     let changedFiles: Int
+    var updatedAt: String? = nil
 
     var id: Int { number }
     var verdict: MergeVerdict {
@@ -34,6 +36,42 @@ struct PullRequest: Decodable, Identifiable {
         state == "OPEN" && !isDraft && verdict != .conflict
             && (failingChecks > 0 || checks.contains { $0.state == "pending" })
     }
+}
+
+/// `pr_detail`'s answer, `github.rs`'s `PrDetail`: what a PR's own page shows
+/// past `PullRequest`. Its own read, once per page, since adding it to the
+/// polled one costs GitHub a point more each time.
+struct PrDetail: Decodable {
+    let body: String
+    let createdAt: String
+    var authorAvatar: String? = nil
+    /// `color` is `rrggbb`, which `Color(trackerHex:)` reads.
+    let labels: [IssueLabel]
+    /// One entry per person or team, a re-request already over its old verdict.
+    let reviewers: [PrReviewer]
+}
+
+/// A tracker or PR label. Here rather than in Issues.swift because Dray Island
+/// compiles this file and not that one.
+struct IssueLabel: Codable, Hashable {
+    let name: String
+    let color: String
+}
+
+struct PrReviewer: Decodable, Hashable {
+    let name: String
+    let avatar: String?
+    /// `requested`, `approved`, `changes_requested` or `commented`; a new word reads as itself.
+    let state: String
+}
+
+/// A PR description as markdown the app draws: an HTML `<img>` becomes an image
+/// line of its own, since GitHub's drag-in screenshots arrive as tags, then
+/// `commentText` drops the rest of the HTML and bot markers.
+func prBody(_ body: String) -> String {
+    let img = try! NSRegularExpression(pattern: #"<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["'][^>]*>"#, options: .caseInsensitive)
+    let swapped = img.stringByReplacingMatches(in: body, range: NSRange(body.startIndex..., in: body), withTemplate: "\n![]($1)\n")
+    return commentText(swapped)
 }
 
 struct PrCheck: Decodable, Hashable {
@@ -80,16 +118,19 @@ struct PrUnavailable: Decodable, Equatable {
 /// `work_status`'s answer, read for the branch a checkout is on.
 struct WorkStatus: Decodable {
     let branch: String?
+    /// Uncommitted paths: whether the Changes screen offers Uncommitted.
+    var dirty: Int? = nil
 }
 
 /// The branch a session's work lands on; `sessionBranch` in `pr.ts`, whose
 /// comment carries the why. HEAD wins while the session has a checkout of its
 /// own, a relocated session's shared checkout never answers, and the rest is
-/// the guess made at creation.
+/// the branch recorded at creation — a pull request's head for a tree made on
+/// one — with `worktree-<name>` only where nothing was recorded.
 func sessionBranch(branch: String?, worktreeName: String?, worktreeRemoved: Bool, observed: String?) -> String? {
     if worktreeRemoved { return branch }
     if let observed, !observed.isEmpty { return observed }
-    return worktreeName.map { "worktree-\($0)" } ?? branch
+    return branch ?? worktreeName.map { "worktree-\($0)" }
 }
 
 enum MergeVerdict: Equatable {

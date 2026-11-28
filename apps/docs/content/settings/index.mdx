@@ -1,6 +1,6 @@
 ---
 title: Settings
-description: Open Settings with the gear or ⌘, and find what each tab holds — appearance, spaces, servers, accounts, transcription, integrations, shortcuts, Dray Island, the composer's buttons, break reminders, the changelog and About.
+description: Open Settings with the gear or ⌘, sign out of your Dray account, and find what each tab holds — appearance, spaces, servers, agents, transcription, integrations, shortcuts, Dray Island, the composer's buttons, break reminders, the changelog and About.
 sidebar:
   order: 0
 ---
@@ -12,11 +12,17 @@ Settings is a page that takes over the whole window. Your sessions keep running 
 - Click the gear in the sidebar's top strip, or
 - press `⌘,` from anywhere, even with the sidebar collapsed.
 
-The tabs run down the left where the sidebar usually is. Click one, or use the arrow keys to move between them.
+The tabs run down the left where the sidebar usually is, under your account. Click one, or use the arrow keys to move between them.
 
 To leave, press `Escape` or click the back arrow in the top left, where the gear was. If a menu or a shortcut recorder is open, the first `Escape` closes that, and the next one leaves.
 
-{/* screenshot: the Settings page with the tab list on the left and Appearance open */}
+{/* screenshot: the Settings page with the account card above the tab list and Appearance open */}
+
+## Your account
+
+The card at the top of the tab list is your Dray account: your picture or initials, name and email. Click it to see how you signed in ("Signed in with GitHub", for example) and to **Sign out…**. Dray asks "Sign out of Dray?" first; signing out takes you to the sign-in page. A Mac linked to an organization stays linked. See [Sign in](/get-started/install#sign-in).
+
+If you skipped signing in, the card reads **Sign in** instead. Click it to open the sign-in page.
 
 ## The tabs
 
@@ -24,16 +30,16 @@ To leave, press `Escape` or click the back arrow in the top left, where the gear
 |---|---|
 | Appearance | Theme, light or dark, zoom, and where the side panel sits. See [Appearance](/settings/appearance). |
 | Spaces | Make, rename and remove spaces, and file projects into them. See [Spaces](/using-dray/spaces). |
-| Servers | This Mac's background server, remote access, and the other machines you run sessions on. |
-| Accounts | Which account each agent and `gh` is signed in as, and how to sign in or out. See [Accounts](/settings/accounts). |
+| Servers | This machine's background server, remote access, pairing a phone, and the other machines you run sessions on. |
+| Agents | Which account each agent and `gh` is signed in as, and how to sign in or out. See [Agents and accounts](/settings/accounts). |
 | Transcription | Dictation models and your microphone. See [Dictation](/settings/dictation). |
 | Integrations | Which app opens files, the in-app browser's Chromium, and a connected issue tracker. |
 | Shortcuts | Every keyboard shortcut, each one changeable. See [Shortcuts](/settings/shortcuts). |
-| Island | Dray Island, on a Mac running macOS 15 or later: turn it on, and set its shortcut, position, layout and screenshot key. |
+| Island | Dray Island: turn it on, and set its shortcut, position and layout. On a Mac it needs macOS 15 or later. |
 | Composer | The buttons above the composer: switch the built-in ones on or off, add your own, and reorder them. |
-| Breaks | Break reminders, and how often they come. |
+| Breaks | Break reminders, how often they come, and which cards a break shows. |
 | Changelog | Every release and what changed in it. |
-| About | Updates, the beta channel, and how to support or reach the author. |
+| About | Updates, the beta channel, the analytics switch, and how to support or reach the author. |
 
 ## Spaces
 
@@ -41,13 +47,19 @@ Spaces has two lists. **Spaces** is where you make, rename and remove a space. *
 
 ## Servers
 
-The **This Mac** row is the background server that runs your sessions on this Mac, with Dray open or closed. Its **Turn on remote access** button gives it a public address that another Mac can connect to; **Stop remote access** turns that off. While it is on, the row shows the address with **Copy address** and **Copy token** buttons. See [Remote access](/reference/remote-access).
+Under the tab's title: "Ask your bot or any session to set one up for you. No need to add each by hand." An agent can add a server for you with `dray machine add`. See [Servers](/cli/servers).
 
-**Add server** connects a Linux machine you can SSH into, or any running `dray serve` by its address and token. Each server row has **Rename**, **Check for updates**, **Join beta** or **Leave beta**, and **Remove**. The full walk-through is on [Connect a server](/server).
+The first row is this machine's background server, the one that runs your sessions with Dray open or closed. Its **Turn on remote access** button gives it a public address that another machine can connect to; **Stop remote access** turns that off. While it is on, the row shows the address with buttons to copy the address and the token, and a QR code button, **Pair a phone**, for the Dray app on iPhone. See [Remote access](/reference/remote-access).
 
-## Accounts
+**Add server**, at the top right, connects a Linux machine you can SSH into, or any running `dray serve` by its address and token. The full walk-through is on [Connect a server](/server). Each server has a switch to connect or disconnect it, and a `⋯` menu with **Rename**, **Check for updates**, **Join beta** or **Leave beta**, and **Remove**. When a newer version is out for a server, its row says "Update available" with **Update** and **Ignore**.
 
-One block per agent, plus GitHub. Each shows who is signed in and offers Sign in, Reauthorize or Sign out. The switch beside each agent's name hides it from the agent picker in the composer. See [Accounts](/settings/accounts).
+**Remove** asks in the row before it forgets the server. If tasks there last looked unfinished (running, waiting on you, or with an unmerged PR), the row names them first. Removing clears those tasks from this device; anything running keeps running on the server.
+
+With at least one server added, **Share these servers** lets your phone, or a Mac paired with this one, reach every server in the list through this machine, with no pairing of its own. It is off until you turn it on.
+
+## Agents
+
+One block per agent, plus GitHub. Under the tab's title: "Manage each harness's sign-in. Switch one off to hide it from the model picker." Each block shows who is signed in and offers Sign in, Reauthorize or Sign out. The switch beside each agent's name hides it from the agent picker in the composer. See [Agents and accounts](/settings/accounts).
 
 ## Transcription
 
@@ -55,7 +67,7 @@ Download a model for dictation, pick your microphone, and choose whether other a
 
 ## Integrations
 
-- **Open files with** — the app a filename from the chat opens in when you ⌘-click it. Lists the editors Dray finds installed, plus Finder. Finder selects the file rather than opening it, and is used whenever no editor is picked or the pick fails. Markdown files open in Dray's own panel instead.
+- **Open files with** — the app a filename from the chat opens in when you ⌘-click it. Lists the editors Dray finds installed, plus Finder (your file manager on Linux). Finder selects the file rather than opening it, and is used whenever no editor is picked or the pick fails. Markdown files open in Dray's own panel instead.
 - **Browser** — the Chromium that Dray's built-in browser runs on. It is not shipped with the app; Dray downloads it after install. The row shows its progress, offers **Retry** if the download failed, and **Remove** to take the space back. A removed copy downloads again the next time Dray starts.
 - **Issue tracker** — shown only when Linear is connected. It names the workspace and your user, and **Disconnect** makes Dray forget the key. Sessions keep the issues they are tagged with. Connecting happens on the Issues page; see [Issues](/settings/issues).
 
@@ -63,17 +75,37 @@ Download a model for dictation, pick your microphone, and choose whether other a
 
 Search, rebind, unbind or reset any shortcut. See [Shortcuts](/settings/shortcuts).
 
+## Island
+
+Under the tab's title: "Right-click the island to change these from the island itself."
+
+- **Dray Island**: the switch. The island is a composer that floats over every app, for prompts, dictation and answering cards.
+- **Shortcut**: the key you press and let go on its own to open the island. Press it again while it is open to dictate.
+- **Position** and **Layout**: where it sits on screen, and whether the orb sits beside the input (**Compact**) or alone above it (**Expanded**).
+- On a Mac only: **Open with** (**Single tap** or **Double tap**), **Screenshot key**, a global shortcut that takes a screenshot into the draft from any app, and **Messages**, which shows or hides the messages above the draft.
+
+## Composer
+
+Under the tab's title: "The buttons that rise out of the composer's top edge on hover. Each sends its prompt as if you had typed it." Switch the built-in buttons on or off, drag rows to reorder them, and **Add button** to make your own.
+
+## Breaks
+
+**Break reminders** asks you to get up, walk and stretch. The switch turns them on and off, and **Preview** shows one now. **Remind every** is 30, 45, 60 or 90 minutes. Under **Cards**, click a card to turn it on or off. Each break picks one of those still on at random, and the last one on stays on.
+
+A break fills the window with a one-minute countdown. **I'm back** is the way out, and it, like `Escape`, waits 10 seconds before it works.
+
 ## Changelog
 
-The release notes for every version, newest first. **View changelog** in About opens the same list.
+The release notes for every version, newest first. **View changelog** in About opens the same list, and so does **View all** on the What's new card.
 
 ## About
 
-- **Updates** — **Check for updates**, then **Restart to update** once a new version has downloaded. While any session is mid-turn, the restart button is held until the turn finishes.
-- **Beta updates** — **Turn on** to get new versions early, before they are fully tested. **Turn off** goes back to stable. Both ask you to confirm.
-- **What's new** — **View changelog** opens the Changelog tab.
-- **Support** — **Sponsor** and **Star on GitHub**, with the people who already sponsor Dray.
-- **Feedback** — **Open an issue** on GitHub, or **Message me**.
+- **Updates**: **Check for updates**, then **Restart to update** once a new version has downloaded. While any session is mid-turn, the restart button is held until the turn finishes.
+- **Beta updates**: **Turn on** to get new versions early, before they are fully tested. **Turn off** goes back to stable. Both ask you to confirm.
+- **What's new**: **View changelog** opens the Changelog tab.
+- **Share usage analytics**: turn off to stop Dray sending anonymous usage events. Shown off and locked when `DRAY_NO_ANALYTICS` is set. See [Privacy](/reference/privacy#turn-analytics-off).
+- **Support**: **Sponsor** and **Star on GitHub**, with the people who already sponsor Dray.
+- **Feedback**: **Open an issue** on GitHub, or **Message me**.
 
 ## Limits
 

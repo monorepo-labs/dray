@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "pnpm.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

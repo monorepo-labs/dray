@@ -5,7 +5,7 @@ import Orb from "@/components/Orb";
 import EventRow from "@/components/chat/EventRow";
 import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/format";
-import { subagentBrief } from "@/lib/tools";
+import { runSettings, subagentBrief } from "@/lib/tools";
 import { canOpenTab, isShellRun, opensTab, type SubagentRun } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, ToolResult } from "@/types/events";
@@ -254,6 +254,8 @@ export function RunRow({
   // behind a click instead: it is long, and the title already says what it is.
   const step = !shell && running ? run.status : null;
   const command = shell ? spawnCommand(run) : null;
+  const settings =
+    run.spawn?.payload.type === "tool_call_started" ? runSettings(run.spawn.payload.input) : "";
 
   // Only a run the harness still holds can be stopped. `taskId` is null until a
   // lifecycle event names it, and a dead child's tasks died with it — either way
@@ -319,6 +321,11 @@ export function RunRow({
               >
                 {title}
               </span>
+              {settings && (
+                <span className="ml-1.5 shrink-0 font-mono text-muted-foreground/70">
+                  {settings}
+                </span>
+              )}
             </span>
             {step && (
               <span className="flex min-w-0 text-xs">

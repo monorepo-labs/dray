@@ -1,24 +1,28 @@
-import { fileSrc, qualify, serverOfSession } from "@/lib/transport";
-import { memo, useMemo } from "react";
-import { Streamdown, type Components, type ThemeInput } from "streamdown";
+import { fileSrc, qualify } from "@/lib/transport";
+import { memo, useMemo, useState } from "react";
+import { Streamdown, defaultComponents, type Components, type ThemeInput } from "streamdown";
 
 import FileLink from "@/components/chat/FileLink";
+import ImageGallery, { GalleryPicture, useGallerySlot } from "@/components/chat/ImageGallery";
 import { MarkdownTable } from "@/components/chat/MarkdownTable";
 import ProofImage from "@/components/chat/ProofImage";
 import VideoPlayer from "@/components/chat/VideoPlayer";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { createSharedCodePlugin, streamingCodePlugin } from "@/lib/codePlugin";
 import type { CodeThemePair } from "@/lib/codeTheme";
-import { useChatSession } from "@/hooks/useChatSession";
+import { pathServer, useChatSession } from "@/hooks/useChatSession";
 import { absolutePath, isFilePath, isRelativePath } from "@/lib/filePath";
 import { basename } from "@/lib/format";
 import { SEGMENT_COLOR } from "@/lib/highlight";
 import { openLink } from "@/lib/openLink";
 import {
+  FILE_CODE_CLASS,
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
+  IMAGE_ROW_CLASS,
   LOCAL_IMAGE_CLASS,
   REHYPE_PLUGINS,
+  REHYPE_PLUGINS_WITH_FILE_LINKS,
   REHYPE_PLUGINS_WITH_FILE_PATHS,
 } from "@/lib/markdownPlugins";
 import { cn } from "@/lib/utils";
@@ -38,7 +42,11 @@ type MarkdownProps = {
   /// else this renders — an issue description, a PR review comment — the paths
   /// come from somebody else's checkout, so a link there would offer to open a
   /// file the reader has not got.
-  linkFilePaths?: boolean;
+  ///
+  /// `"written"` opens only the file links the author wrote and loads local
+  /// images, for a markdown file read on its own machine: its prose is the
+  /// author's, so a path in a sentence stays text.
+  linkFilePaths?: boolean | "written";
   className?: string;
 };
 
@@ -125,7 +133,11 @@ function MarkdownImpl({
     () => ({
       table: MarkdownTable,
       a: Anchor,
-      ...(linkFilePaths ? { span: FilePathSpan } : null),
+      ...(linkFilePaths === "written"
+        ? { span: DocPathSpan }
+        : linkFilePaths
+          ? { span: FilePathSpan, div: ImageRowDiv, img: MarkdownImage }
+          : null),
       ...components,
     }),
     [linkFilePaths, components],
@@ -138,7 +150,13 @@ function MarkdownImpl({
       plugins={plugins}
       components={overrides}
       controls={CONTROLS}
-      rehypePlugins={linkFilePaths ? REHYPE_PLUGINS_WITH_FILE_PATHS : REHYPE_PLUGINS}
+      rehypePlugins={
+        linkFilePaths === "written"
+          ? REHYPE_PLUGINS_WITH_FILE_LINKS
+          : linkFilePaths
+            ? REHYPE_PLUGINS_WITH_FILE_PATHS
+            : REHYPE_PLUGINS
+      }
       shikiTheme={shikiTheme}
       lineNumbers={false}
       className={cn(
@@ -256,8 +274,15 @@ function FilePathSpan({
   children,
   "data-line": dataLine,
   "data-alt": dataAlt,
+  trusted = false,
   ...props
-}: React.ComponentProps<"span"> & { "data-line"?: string; "data-alt"?: string }) {
+}: React.ComponentProps<"span"> & {
+  "data-line"?: string;
+  "data-alt"?: string;
+  /// The span's path is a link a document's author wrote, so any shape opens:
+  /// `guide.md` and `docs/` name neighbours there, where in prose they are words.
+  trusted?: boolean;
+}) {
   // The path rides `title`, since a converted markdown link's text is its own
   // label rather than the path. Re-checked here rather than trusted: the class
   // is a plain attribute, and raw HTML in agent output can carry one.
@@ -265,31 +290,44 @@ function FilePathSpan({
   // A relative path resolves against the session's own working directory, the
   // one thing the prose does not carry; inert without one, since a path
   // resolved against wherever the app happens to run opens the wrong file.
-  const { cwd, sessionId } = useChatSession();
+  const session = useChatSession();
+  const { cwd } = session;
+  const server = pathServer(session);
   if (classes.includes(LOCAL_IMAGE_CLASS) && title) {
     const path = absolutePath(title, cwd);
     const label = <span className="text-muted-foreground">{dataAlt || title}</span>;
     if (!path) return label;
     return (
-      <ProofImage path={qualify(path, serverOfSession(sessionId))} alt={dataAlt} fallback={label} />
+      <ProofImage path={qualify(path, server)} alt={dataAlt} fallback={label} />
     );
   }
-  if (classes.includes(FILE_PATH_CLASS) && title && (isFilePath(title) || isRelativePath(title))) {
+  const opens = trusted
+    ? classes.includes(FILE_LINK_CLASS)
+    : isFilePath(title ?? "") || isRelativePath(title ?? "");
+  if (classes.includes(FILE_PATH_CLASS) && title && opens) {
     const path = absolutePath(title, cwd);
     const line = Number(dataLine);
     const written = classes.includes(FILE_LINK_CLASS);
+    const asWritten = written || classes.includes(FILE_CODE_CLASS);
     // A bare path is drawn the way the reader's own mention is — `@`, the
     // filename and its locator, the directory on the tooltip — since the two
     // name the same thing and a deep path is most of a line. A link the agent
-    // *wrote* keeps the label it wrote. The locator is what is left of the
-    // marked text past the path, so `:12` and `#L12` come through as typed.
+    // *wrote* keeps the label it wrote, and inline code its text, since that
+    // is copied as a literal. The locator is what is left of the marked text
+    // past the path, so `:12` and `#L12` come through as typed.
     const label = textOf(children);
     const locator = label?.startsWith(title) ? label.slice(title.length) : "";
     const name = basename(title);
-    const body = written ? children : `@${name}${locator}`;
+    const body = asWritten ? children : `@${name}${locator}`;
+    // The face is not what was written, so a copy reads the text it replaced.
+    const copy = asWritten ? undefined : (label ?? title);
     if (!path) {
       return (
-        <span className={written ? undefined : SEGMENT_COLOR.mention} title={title}>
+        <span
+          className={asWritten ? undefined : SEGMENT_COLOR.mention}
+          title={title}
+          data-copy={copy}
+        >
           {body}
         </span>
       );
@@ -299,12 +337,13 @@ function FilePathSpan({
         path={path}
         line={Number.isInteger(line) && line > 0 ? line : undefined}
         writtenAsLink={written}
-        className={written ? undefined : SEGMENT_COLOR.mention}
+        copy={copy}
+        className={asWritten ? undefined : SEGMENT_COLOR.mention}
       >
         {body}
       </FileLink>
     );
-    const qualified = qualify(path, serverOfSession(sessionId));
+    const qualified = qualify(path, server);
     // A recording plays and a screenshot shows where the agent names it, so
     // checking its work is looking, not finding a file.
     if (RECORDING.test(path)) {
@@ -331,6 +370,34 @@ function FilePathSpan({
       {children}
     </span>
   );
+}
+
+/// Every `div` in a message, passed through unless `rehypeImageRows` marked it a
+/// row of pictures.
+function ImageRowDiv({ className, node: _node, ...props }: React.ComponentProps<"div"> & { node?: unknown }) {
+  if (className?.split(" ").includes(IMAGE_ROW_CLASS)) {
+    return <ImageGallery>{props.children}</ImageGallery>;
+  }
+  return <div className={className} {...props} />;
+}
+
+const DefaultImage = defaultComponents.img as React.ComponentType<React.ComponentProps<"img">>;
+
+/// A web image in a message: a gallery tile where it stands on its own, and
+/// Streamdown's own inline image where it sits in a sentence, a badge's case.
+function MarkdownImage(props: React.ComponentProps<"img"> & { node?: unknown }) {
+  const { src, alt } = props;
+  // Streamdown's stand-in for an image still streaming in; its own img draws it.
+  const ready = typeof src === "string" && src !== "streamdown:incomplete-image";
+  const [failed, setFailed] = useState(false);
+  const open = useGallerySlot(ready && !failed ? { src, name: alt || "image" } : null);
+  // A failed load goes back to Streamdown too, which says the image is unavailable.
+  if (!open || !ready || failed) return <DefaultImage {...props} />;
+  return <GalleryPicture src={src} alt={alt} onOpen={open} onError={() => setFailed(true)} />;
+}
+
+function DocPathSpan(props: React.ComponentProps<typeof FilePathSpan>) {
+  return <FilePathSpan {...props} trusted />;
 }
 
 /// The one text node a marked span holds, or `null` where it holds anything

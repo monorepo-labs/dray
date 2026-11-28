@@ -86,7 +86,8 @@ Three rows bind one set of modifier keys over a run of digits: **Jump to session
 | Reopen closed tab | `⌘⇧T` |
 | Scroll chat to bottom | `⌘↓` |
 | Open issues | `⌘I` |
-| Search issues | `⌘⇧F` |
+| Open pull requests | `⌘P` |
+| Search issues or pull requests | `⌘⇧F` |
 | Go to tab (9 is the last) | `⌘1` … `⌘9` |
 
 ### Composer
@@ -113,12 +114,14 @@ Three rows bind one set of modifier keys over a run of digits: **Jump to session
 | Open the notification | `⌘G` |
 | Delete worktree from notification | `⌘⇧D` |
 
-Three pairs share a default because they never apply at the same time. `⌘⇧F` searches issues on the Issues page and toggles fast mode in the composer everywhere else. `⌘S` saves a doc in a session's docs tab and saves a draft on the new-task composer. `⌘⇧T` reopens a closed tab in a session and toggles the worktree on the new-task composer.
+Three pairs share a default because they never apply at the same time. `⌘⇧F` searches the Issues and Pull requests pages and toggles fast mode in the composer everywhere else. `⌘S` saves a doc in a session's docs tab and saves a draft on the new-task composer. `⌘⇧T` reopens a closed tab in a session and toggles the worktree on the new-task composer.
+
+`⌘E` toggles the right panel in a session. On the Issues and Pull requests pages it opens and closes the page's details pane instead.
 
 In Dray, the app draws `⇧` as the word **Shift**, so `⌘⇧↑` appears as `⌘ Shift ↑`.
 
 ## Limits
 
-- A shortcut works only where its action applies. `⌘G` does nothing with no card on screen, and Send queued prompts now only on an fx session with prompts waiting.
+- A shortcut works only where its action applies. `⌘G` does nothing with no card on screen, and Send queued prompts now only on an fx or OpenCode session with prompts waiting.
 - `⌘W` closes a tab or pane, never the window.
 - While the built-in browser has focus, only some keys reach Dray, so a shortcut you moved onto an unusual key may not work there.

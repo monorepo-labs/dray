@@ -9,9 +9,24 @@ fn main() {
 
     // Before `tauri_build`, which checks that every bundled resource exists.
     transcribe_libs();
+    delay_load_cef();
 
     #[cfg(feature = "desktop")]
     tauri_build::build()
+}
+
+/// Windows resolves a linked DLL before `main`, so a binary importing
+/// libcef.dll would not start until Chromium is downloaded. Delay-loaded, the
+/// import resolves on the first `cef_*` call, by which time `cef/win.rs` has
+/// mapped the library from wherever it lives. `delayimp` comes from
+/// `cef-dll-sys`.
+fn delay_load_cef() {
+    let windows = env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows");
+    if windows && env::var_os("CARGO_FEATURE_CEF").is_some() {
+        // The app alone: `dray-helper` calls nothing of CEF's off a Mac, and
+        // the linker warns about a delay-load with no imports.
+        println!("cargo:rustc-link-arg-bin=dray=/DELAYLOAD:libcef.dll");
+    }
 }
 
 /// Where the bundle puts the libraries, relative to the binary: Tauri installs

@@ -2,7 +2,7 @@
 title: Drafts
 description: Save a task for later with dray draft, list saved drafts, and start or remove them.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 A draft is a task saved for later: a prompt plus the picks it will start with, and no session behind it yet. Nothing runs and no worktree exists until it starts. It is the same thing ⌘S saves from the new-task composer.
@@ -22,9 +22,9 @@ Prints the draft's id.
 | `--project <path>` | The repo it will run in. Defaults to the repo you are in, then the calling session's project. |
 | `--model <alias>` | The model. Defaults to the calling session's. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max` or `ultra`. |
-| `--harness <name>` | `claude_code`, `codex`, `pi`, `fx` or `grok`. |
+| `--harness <name>` | `claude_code`, `codex`, `pi`, `fx`, `grok` or `opencode`. |
 | `--fast` | Run at the agent's faster tier once started. |
-| `--base <session\|ref>` | Start its worktree from existing work once started: a session id, a branch, or any git ref. Committed work only. |
+| `--base <session\|ref>` | Start its worktree from existing work once started: a session id, a branch, or any git ref, read as [`dray session new`](/cli/sessions#start-from-existing-work) reads it. Committed work only. |
 
 The picks inherit from the calling session exactly as [`dray session new`](/cli/sessions#what-a-new-session-inherits) does. A draft made here always starts in its own worktree. A `--base` that cannot be found is refused when you save, and checked again when the draft starts.
 
@@ -58,6 +58,10 @@ dray draft rm <draft-id>
 ```
 
 Deletes the draft.
+
+## On another machine
+
+`dray --machine <name> draft …` saves, lists, starts and removes drafts on another machine from `dray machine ls`. A draft started from a bot, or anything a bot started, runs hidden and reports back like any of its tasks.
 
 ## Limits
 

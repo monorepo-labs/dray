@@ -1,37 +1,42 @@
 import { createCipheriv, createDecipheriv, createHash, createPrivateKey, randomBytes, sign } from "node:crypto";
 import http2 from "node:http2";
 
-import { pool } from "./db";
-
 /// The push relay (#1299). A Dray server hands an alert here and this sends it
-/// through APNs, the one place the APNs key lives. A server never sees a
-/// phone's APNs token: the phone trades it here for a sealed handle, and only
-/// a handle this relay sealed can be sent to.
+/// through APNs to an iPhone or FCM to an Android phone, the one place either
+/// key lives. A server never sees a phone's token: the phone trades it here for
+/// a sealed handle, and only a handle this relay sealed can be sent to.
 
 export type PushEnv = "sandbox" | "production";
+
+/// What a handle reaches: an iPhone through APNs in one of its environments, or an Android phone through FCM.
+export type Phone = { platform: "apns"; token: string; env: PushEnv } | { platform: "fcm"; token: string };
 
 /// The iPhone app's bundle id: every push is pinned to it, so a handle can only ever reach Dray.
 const TOPIC = "com.yogesh.dray.ios";
 
-/// Whether the relay is set up at all; without these it answers 503.
-export function pushReady(): boolean {
-  return !!(process.env.APNS_KEY && process.env.APNS_KEY_ID && process.env.PUSH_HANDLE_SECRET);
+/// Whether the relay can reach a platform at all; without its keys a register or send for it answers 503.
+export function pushReady(platform: Phone["platform"]): boolean {
+  if (!process.env.PUSH_HANDLE_SECRET) return false;
+  return platform === "apns" ? !!(process.env.APNS_KEY && process.env.APNS_KEY_ID) : !!process.env.FCM_SERVICE_ACCOUNT;
 }
 
 function sealKey(): Buffer {
   return createHash("sha256").update(process.env.PUSH_HANDLE_SECRET ?? "").digest();
 }
 
-/// A phone's APNs token, encrypted and authenticated under the relay's own secret.
-export function seal(token: string, env: PushEnv): string {
+/// A phone's token, encrypted and authenticated under the relay's own secret.
+/// The first letter says where it goes: `s` and `p` for APNs' two
+/// environments, `a` for FCM, so a handle sealed before Android still opens.
+export function seal(phone: Phone): string {
   const iv = randomBytes(12);
   const c = createCipheriv("aes-256-gcm", sealKey(), iv);
-  const body = Buffer.concat([c.update(`${env === "sandbox" ? "s" : "p"}${token}`), c.final()]);
+  const mark = phone.platform === "fcm" ? "a" : phone.env === "sandbox" ? "s" : "p";
+  const body = Buffer.concat([c.update(`${mark}${phone.token}`), c.final()]);
   return "dph_" + Buffer.concat([iv, body, c.getAuthTag()]).toString("base64url");
 }
 
-/// The token inside a handle, or null for one this relay did not seal.
-export function unseal(handle: string): { token: string; env: PushEnv } | null {
+/// The phone inside a handle, or null for one this relay did not seal.
+export function unseal(handle: string): Phone | null {
   if (!handle.startsWith("dph_")) return null;
   const raw = Buffer.from(handle.slice(4), "base64url");
   if (raw.length < 12 + 16 + 2) return null;
@@ -39,33 +44,11 @@ export function unseal(handle: string): { token: string; env: PushEnv } | null {
     const d = createDecipheriv("aes-256-gcm", sealKey(), raw.subarray(0, 12));
     d.setAuthTag(raw.subarray(raw.length - 16));
     const text = Buffer.concat([d.update(raw.subarray(12, raw.length - 16)), d.final()]).toString();
-    return { env: text[0] === "s" ? "sandbox" : "production", token: text.slice(1) };
+    if (text[0] === "a") return { platform: "fcm", token: text.slice(1) };
+    return { platform: "apns", env: text[0] === "s" ? "sandbox" : "production", token: text.slice(1) };
   } catch {
     return null;
   }
-}
-
-/// Counts one call against `what` in a fixed window and answers whether it is
-/// over `max`. Postgres, since a serverless instance's memory is not shared.
-export async function overLimit(what: string, max: number, windowSecs: number): Promise<boolean> {
-  const id = createHash("sha256").update(`${windowSecs}:${what}`).digest("hex");
-  const now = Math.floor(Date.now() / 1000);
-  const start = now - (now % windowSecs);
-  const { rows } = await pool.query<{ count: number }>(
-    `insert into push_rate (id, "windowStart", count) values ($1, $2, 1)
-     on conflict (id) do update set
-       count = case when push_rate."windowStart" = excluded."windowStart" then push_rate.count + 1 else 1 end,
-       "windowStart" = excluded."windowStart"
-     returning count`,
-    [id, start],
-  );
-  if (Math.random() < 0.01) await pool.query(`delete from push_rate where "windowStart" < $1`, [now - 86400]);
-  return rows[0].count > max;
-}
-
-/// The caller's address as Vercel's edge reports it.
-export function callerOf(req: Request): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
 }
 
 let held: { jwt: string; at: number } | null = null;

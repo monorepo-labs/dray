@@ -14,7 +14,7 @@ use tokio::{fs, sync::Notify};
 
 /// Chrome for Testing's version. Every hash below is of that version's zip as
 /// downloaded and checked by hand; Google publishes md5 and crc32c only.
-pub const VERSION: &str = "155.0.8059.39";
+pub const VERSION: &str = "158.0.8127.88";
 const CDN: &str = "https://storage.googleapis.com/chrome-for-testing-public";
 
 struct Zip {
@@ -25,23 +25,29 @@ struct Zip {
 
 const LINUX_X64: Zip = Zip {
     platform: "linux64",
-    size: 124_203_329,
-    sha256: "39dcb8c46550632a3d911850ab3b8af840b4e3f6d8622faa2018eb8756278786",
+    size: 132_091_593,
+    sha256: "63401333cc587645bfaeea7f0c90958b327d249251e23954a47f30112ca23d5b",
 };
 const LINUX_ARM64: Zip = Zip {
     platform: "linux-arm64",
-    size: 124_553_121,
-    sha256: "9fb86f7c0b2734c5febc0bbb4e85f37da43553f3f8a7970949828c5713e87e94",
+    size: 129_942_265,
+    sha256: "9f89b7ef6574e4bbf6ddda9f17f1fab5626e93d6f7d852653232d0d3554df975",
 };
 const MAC_ARM64: Zip = Zip {
     platform: "mac-arm64",
-    size: 102_429_510,
-    sha256: "b3e093c06001c41e68decbc8dd4a62f9efe4bf4e4dd247a686ea531863448d75",
+    size: 105_060_087,
+    sha256: "69320f6869c4defbbdac8b8fa83aef65dc63975e83bbd06899b75dbea5c464b3",
 };
 const MAC_X64: Zip = Zip {
     platform: "mac-x64",
-    size: 107_758_350,
-    sha256: "6338a784c691f42dd1ed6aeeef650171c7d72cf74bdb8450d0079864e72a8074",
+    size: 112_314_759,
+    sha256: "dc1ac31965cb2ec7794aed8c66127aceea304ae15353cd56fc4b8bde44091548",
+};
+
+const WIN_X64: Zip = Zip {
+    platform: "win64",
+    size: 127_879_225,
+    sha256: "e935ea2d4633495b5e9ab7bc66bcd982806329c0ee9ecbafc1ac9596a3b34cdb",
 };
 
 fn zip() -> Option<&'static Zip> {
@@ -50,6 +56,7 @@ fn zip() -> Option<&'static Zip> {
         ("linux", "aarch64") => Some(&LINUX_ARM64),
         ("macos", "aarch64") => Some(&MAC_ARM64),
         ("macos", "x86_64") => Some(&MAC_X64),
+        ("windows", "x86_64") => Some(&WIN_X64),
         _ => None,
     }
 }
@@ -88,7 +95,7 @@ async fn dir() -> Result<PathBuf> {
 }
 
 fn binary_in(version_dir: &Path, zip: &Zip) -> PathBuf {
-    version_dir.join(zip.root()).join("chrome-headless-shell")
+    version_dir.join(zip.root()).join(if cfg!(windows) { "chrome-headless-shell.exe" } else { "chrome-headless-shell" })
 }
 
 /// The binary, if it is on disk; otherwise a download is started (or a
@@ -231,7 +238,7 @@ mod tests {
     fn urls_are_chrome_for_testing_s() {
         assert_eq!(
             LINUX_ARM64.url(),
-            "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.39/linux-arm64/chrome-headless-shell-linux-arm64.zip"
+            "https://storage.googleapis.com/chrome-for-testing-public/158.0.8127.88/linux-arm64/chrome-headless-shell-linux-arm64.zip"
         );
         for z in [&LINUX_X64, &LINUX_ARM64, &MAC_ARM64, &MAC_X64] {
             assert_eq!(z.sha256.len(), 64);
@@ -244,6 +251,7 @@ mod tests {
     /// modes still land and the binary runs. ~100MB, so ignored.
     #[tokio::test]
     #[ignore]
+    #[cfg(unix)]
     async fn unpacks_the_real_archive() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("dray-headless-{}", std::process::id()));

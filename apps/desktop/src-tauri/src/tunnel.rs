@@ -13,8 +13,11 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use opentunnel::{Client, ClientOptions, Routes, State, Storage, Tunnel};
+use opentunnel::{Client, ClientOptions, Event, Routes, State, Status, Storage, Tunnel};
 use sha2::{Digest, Sha256};
+use tokio::sync::watch;
+
+use crate::netwatch::Change;
 
 pub const REMOTE: &str = "remote";
 pub const SHARE: &str = "share";
@@ -29,6 +32,10 @@ const PROVISION_WAIT: Duration = Duration::from_secs(5 * 60);
 
 struct Live {
     tunnel: Tunnel,
+    /// `tunnel`'s status, kept across [`reconnect`] swapping it, so a watcher
+    /// never sees the old one stop.
+    status: std::sync::Arc<watch::Sender<Status>>,
+    relay: tokio::task::JoinHandle<()>,
     hostname: String,
     token: String,
     /// Every route asked for. The tunnel's status names only those attached.
@@ -99,14 +106,14 @@ pub async fn warm(profile: &'static str) {
     let _live = slot(profile).lock().await;
     let client = match client().await {
         Ok(client) => client,
-        Err(e) => return eprintln!("tunnel: could not warm {profile}: {e:#}"),
+        Err(e) => return log(profile, &format!("could not warm: {e:#}")),
     };
     if matches!(client.get(profile), Ok(Some(_))) {
         return;
     }
     match ensure(&client, profile).await {
-        Ok(_) => eprintln!("tunnel: {profile} provisioned"),
-        Err(e) => eprintln!("tunnel: could not warm {profile}: {e:#}"),
+        Ok(_) => log(profile, "provisioned"),
+        Err(e) => log(profile, &format!("could not warm: {e:#}")),
     }
 }
 
@@ -119,14 +126,25 @@ pub async fn expose(profile: &'static str, label: &str, target: String) -> Resul
             let client = client().await?;
             let identity = ensure(&client, profile).await?;
             let tunnel = client.connect(profile, Routes::new())?;
-            *live = Some(Live { tunnel, hostname: identity.hostname, token: identity.token, routes: Routes::new() });
+            log_events(profile, identity.hostname.clone(), tunnel.subscribe());
+            let status = std::sync::Arc::new(watch::channel(tunnel.status()).0);
+            let relay = relay(tunnel.status_watch(), status.clone());
+            *live = Some(Live {
+                tunnel,
+                status,
+                relay,
+                hostname: identity.hostname,
+                token: identity.token,
+                routes: Routes::new(),
+            });
+            follow_network();
         }
         let entry = live.as_mut().expect("set above");
         let name = route_name(&entry.token, label);
         entry.routes.insert(name.clone(), target.clone().into());
         entry.tunnel.set_routes(entry.routes.clone())?;
         let url = format!("https://{name}.{}", entry.hostname);
-        (name, url, entry.tunnel.status_watch())
+        (name, url, entry.status.subscribe())
     };
     let attached = tokio::time::timeout(READY_WAIT, async {
         loop {
@@ -180,9 +198,104 @@ pub async fn withdraw(profile: &'static str, label: &str, target: Option<&str>) 
     }
 }
 
+/// One timestamped line in the server log, the only record of a tunnel's
+/// life: an outage is diagnosed afterwards by lining these up with the Mac's
+/// own network log.
+pub fn log(profile: &str, what: &str) {
+    eprintln!("[tunnel {profile} {}] {what}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z"));
+}
+
+/// Writes `profile`'s tunnel lifecycle to the server log until the tunnel
+/// ends. Events carry no token.
+fn log_events(profile: &'static str, hostname: String, mut events: tokio::sync::broadcast::Receiver<Event>) {
+    use tokio::sync::broadcast::error::RecvError;
+    tokio::spawn(async move {
+        loop {
+            let line = match events.recv().await {
+                Ok(Event::Connecting { attempt }) => format!("connecting to the relay, attempt {attempt}"),
+                Ok(Event::Connected { session, routes }) => {
+                    let at: Vec<_> = routes.iter().map(|r| format!("https://{r}.{hostname}")).collect();
+                    format!("connected, session {session}, serving {}", at.join(" "))
+                }
+                Ok(Event::Disconnected { reason }) => format!("dropped: {reason}"),
+                Ok(Event::Reconnecting { attempt, delay_ms }) => format!("reconnecting in {delay_ms}ms, attempt {attempt}"),
+                Ok(Event::ConnectionOpened { conn, peer, .. }) => format!("visitor {conn} from {peer}"),
+                Ok(Event::ConnectionClosed { conn, error: Some(e), .. }) => format!("visitor {conn} closed: {e}"),
+                Ok(Event::ConnectionClosed { .. }) => continue,
+                Ok(Event::CertificateRenewed { expiry }) => format!("certificate renewed, expires {expiry}"),
+                Ok(Event::Stopped { error }) => format!("stopped: {}", error.unwrap_or_else(|| "closed".into())),
+                Err(RecvError::Lagged(n)) => format!("{n} events not logged"),
+                Err(RecvError::Closed) => return,
+            };
+            log(profile, &line);
+        }
+    });
+}
+
 /// `profile`'s tunnel state as it moves, while it has one.
-pub async fn status(profile: &str) -> Option<tokio::sync::watch::Receiver<opentunnel::Status>> {
-    slot(profile).lock().await.as_ref().map(|entry| entry.tunnel.status_watch())
+pub async fn status(profile: &str) -> Option<watch::Receiver<Status>> {
+    slot(profile).lock().await.as_ref().map(|entry| entry.status.subscribe())
+}
+
+/// Copies `from` into `to` until `from`'s tunnel ends, or the task is aborted.
+fn relay(mut from: watch::Receiver<Status>, to: std::sync::Arc<watch::Sender<Status>>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            to.send_replace(from.borrow_and_update().clone());
+            if from.changed().await.is_err() {
+                return;
+            }
+        }
+    })
+}
+
+/// Reconnects the tunnels whenever the network moves, for the life of the
+/// process. Started with the first tunnel.
+fn follow_network() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let mut changes = crate::netwatch::changes();
+        tokio::spawn(async move {
+            while let Some(change) = changes.recv().await {
+                for profile in [REMOTE, SHARE] {
+                    reconnect(profile, change).await;
+                }
+            }
+        });
+    });
+}
+
+/// Whether `change` calls for starting a tunnel in `state` over. A dropped
+/// tunnel only waits out opentunnel's backoff, up to 30s, before its next
+/// try. A connected one carries every visitor and is left alone, unless the
+/// machine slept long enough that the relay has ended its session.
+fn stale(state: &State, change: Change) -> bool {
+    match state {
+        State::Reconnecting | State::Connecting => true,
+        State::Connected => change == Change::Woke,
+        State::WaitingRoutes | State::Stopped => false,
+    }
+}
+
+/// Starts `profile`'s tunnel over at once where [`stale`] says so, under the
+/// same identity and routes, so its address stays. opentunnel has no "try
+/// now" short of a new [`Tunnel`]; dropping the old one stops it.
+async fn reconnect(profile: &'static str, change: Change) {
+    let mut live = slot(profile).lock().await;
+    let Some(entry) = live.as_mut() else { return };
+    if !stale(&entry.tunnel.status().state, change) {
+        return;
+    }
+    let tunnel = match client().await.and_then(|c| Ok(c.connect(profile, entry.routes.clone())?)) {
+        Ok(tunnel) => tunnel,
+        Err(e) => return log(profile, &format!("{change}, could not reconnect: {e:#}")),
+    };
+    log(profile, &format!("{change}, reconnecting now"));
+    log_events(profile, entry.hostname.clone(), tunnel.subscribe());
+    // Aborted first, so the old tunnel's stop never reaches a watcher.
+    entry.relay.abort();
+    entry.relay = relay(tunnel.status_watch(), entry.status.clone());
+    entry.tunnel = tunnel;
 }
 
 #[cfg(test)]
@@ -197,6 +310,18 @@ mod tests {
         assert_ne!(a, route_name("other", "remote"), "another tunnel, another name");
         assert_eq!(a.len(), 16);
         assert!(opentunnel::Route::new("127.0.0.1:1").validate(&a).is_ok(), "a name the relay takes");
+    }
+
+    #[test]
+    fn only_a_dropped_tunnel_or_a_long_sleep_starts_over() {
+        for change in [Change::Network, Change::Woke] {
+            assert!(stale(&State::Reconnecting, change), "waiting out a backoff");
+            assert!(stale(&State::Connecting, change), "an attach begun before the network came back");
+            assert!(!stale(&State::Stopped, change), "remote access starts a stopped one itself");
+            assert!(!stale(&State::WaitingRoutes, change));
+        }
+        assert!(!stale(&State::Connected, Change::Network), "visitors ride it");
+        assert!(stale(&State::Connected, Change::Woke), "the relay ended it while asleep");
     }
 
     #[test]

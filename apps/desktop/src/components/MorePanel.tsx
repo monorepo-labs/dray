@@ -1,5 +1,7 @@
+import { useState } from "react";
+
 import AttachmentList from "@/components/AttachmentsPanel";
-import RoutinesSection from "@/components/RoutinesSection";
+import RoutinesSection, { RoutineDetails } from "@/components/RoutinesSection";
 import SubagentPanel from "@/components/SubagentPanel";
 import TodoList from "@/components/chat/TodoList";
 import type { HeldLog } from "@/lib/olderMedia";
@@ -30,8 +32,26 @@ export default function MorePanel({
   live: boolean;
   subagents: React.ComponentProps<typeof SubagentPanel>;
   /// A bot chat's routines; absent outside one.
-  routines?: React.ComponentProps<typeof RoutinesSection>;
+  routines?: Omit<React.ComponentProps<typeof RoutinesSection>, "onOpen"> &
+    Pick<React.ComponentProps<typeof RoutineDetails>, "onSave">;
 }) {
+  const [openRoutineId, setOpenRoutineId] = useState<string | null>(null);
+  // Read off the live list, so a routine deleted, or another bot's chat
+  // opened, falls back to the sections.
+  const openRoutine = routines?.routines.find((r) => r.id === openRoutineId);
+  if (routines && openRoutine) {
+    return (
+      <RoutineDetails
+        key={openRoutine.id}
+        routine={openRoutine}
+        now={routines.now}
+        onSave={routines.onSave}
+        error={routines.error}
+        onBack={() => setOpenRoutineId(null)}
+      />
+    );
+  }
+
   return (
     // One scroller for the tab, not one per section. With the checklist
     // uncapped a section of its own would take whatever it needed and leave the
@@ -50,7 +70,7 @@ export default function MorePanel({
       {attachments && <AttachmentList logs={attachments} />}
 
       {/* Under the attachments, so Load more pushes it down; kept below on purpose. */}
-      {routines && routines.routines.length > 0 && <RoutinesSection {...routines} />}
+      {routines && routines.routines.length > 0 && <RoutinesSection {...routines} onOpen={setOpenRoutineId} />}
     </div>
   );
 }

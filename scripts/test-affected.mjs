@@ -30,7 +30,8 @@ const changed = [...new Set([...lines(git("diff", "--name-only", "--no-renames",
 const present = [...lines(git("ls-files")), ...untracked].filter((f) => existsSync(f));
 
 // The GPUI rewrite is an unshipped experiment; nothing here tests it, --full included.
-const skipped = ["apps/gpui"];
+// The island builds for Linux and Windows alone (X11 or Win32), so a Mac skips it.
+const skipped = ["apps/gpui", ...(["linux", "win32"].includes(process.platform) ? [] : ["apps/island-linux"])];
 const suites = [
   ...present
     .filter((f) => f.endsWith("/Cargo.toml") && !skipped.includes(posix.dirname(f)))
@@ -94,19 +95,25 @@ for (const f of changed) {
 
 const affected = (s) => all || s.whole || s.files.size > 0 || s.deps.some(affected);
 const plan = suites.filter(affected).sort((a, b) => (a.kind === "cargo") - (b.kind === "cargo"));
+// Dray Island compiles a dozen iOS files by path (apps/island/project.yml), so an
+// iOS change can break the release's island build with nothing else noticing.
+const islandSource = (f) => /^apps\/(island|ios\/Dray)\/.*\.swift$|^apps\/island\/project\.yml$/.test(f);
+if (process.platform === "darwin" && (all || changed.some(islandSource)))
+  plan.push({ dir: "apps/island", cmd: ["sh", "-c",
+    "xcodegen generate --quiet && xcodebuild -quiet -project DrayIsland.xcodeproj -scheme DrayIsland -derivedDataPath build CODE_SIGNING_ALLOWED=NO build"] });
 
 console.log(`base ${base.slice(0, 10)}, ${changed.length} changed file(s)${all ? ", running everything" : ""}`);
 if (!plan.length) console.log("nothing to test");
 const results = [];
 for (const s of plan) {
   const related = s.kind === "vitest" && !all && !s.whole;
-  const cmd =
+  const cmd = s.cmd ?? (
     s.kind === "cargo"
       ? ["cargo", "test"]
       : related
         ? ["pnpm", "exec", "vitest", "related", "--run", "--passWithNoTests",
            ...[...s.files].map((f) => f.slice(s.dir.length + 1))]
-        : ["pnpm", "run", "test"];
+        : ["pnpm", "run", "test"]);
   console.log(`\n▶ ${s.dir}: ${cmd.join(" ")}`);
   if (args.includes("--dry-run")) continue;
   const start = Date.now();

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "mainBinaryName": "dray-app",
+  "bundle": {
+    "publisher": "Dray",
+    "shortDescription": "Desktop app for coding agents",
+    "externalBin": ["target/cli/dray-cli", "target/island-linux/dray-island"],
+    "windows": {
+      "nsis": { "installMode": "currentUser", "installerHooks": "windows/hooks.nsh" },
+      "wix": { "fragmentPaths": ["windows/run-key.wxs"], "componentRefs": ["DrayRunKey"] }
+    }
+  }
+}

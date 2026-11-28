@@ -2,11 +2,15 @@
 //! from the right panel's split button, or one file from a transcript row.
 //!
 //! macOS reads `.app` bundles and hands paths over with `open(1)`; Linux reads
-//! `.desktop` files and runs their `Exec` ([`linux`]). Both draw from one
+//! `.desktop` files and runs their `Exec` ([`linux`]); Windows looks where
+//! installers put each `.exe` ([`windows`]). All three draw from one
 //! [`KNOWN`] table. Any other platform answers an empty list.
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(windows)]
+#[path = "apps/windows.rs"]
+mod windows;
 
 use std::{
     collections::HashMap,
@@ -65,7 +69,7 @@ struct Known {
     /// `Cloudflare WARP.app` is not `Warp.app`, and a contains-check lists it
     /// as a terminal that then ignores the directory. `None` for an app Dray
     /// only knows on Linux.
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     bundle: Option<&'static str>,
     /// Linux `.desktop` file ids, tried before [`Known::bins`]: distro, Flatpak
     /// and Snap packages each name the same app differently.
@@ -82,8 +86,12 @@ struct Known {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     term: Term,
     /// See [`ExternalApp::folders`].
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     files_only: bool,
+    /// Where a Windows installer puts the program, tried in order. `%VAR%`
+    /// opens a path and `*` stands for one directory level; see [`windows`].
+    #[cfg_attr(not(windows), allow(dead_code))]
+    windows: &'static [&'static str],
 }
 
 /// A Linux terminal's argv for "start in this directory" and "run this".
@@ -101,15 +109,24 @@ pub(crate) struct Term {
 const NO_TERM: Term = Term { dir: None, exec: None };
 
 const fn editor(bundle: &'static str, name: &'static str) -> Known {
-    Known { bundle: Some(bundle), desktop: &[], bins: &[], name, kind: ExternalAppKind::Editor, term: NO_TERM, files_only: false }
+    Known { bundle: Some(bundle), ..other(ExternalAppKind::Editor, name) }
 }
 
 const fn terminal(bundle: &'static str, name: &'static str) -> Known {
-    Known { bundle: Some(bundle), desktop: &[], bins: &[], name, kind: ExternalAppKind::Terminal, term: NO_TERM, files_only: false }
+    Known { bundle: Some(bundle), ..other(ExternalAppKind::Terminal, name) }
+}
+
+/// A row with no Mac bundle: an app Dray knows on Linux or Windows alone.
+const fn other(kind: ExternalAppKind, name: &'static str) -> Known {
+    Known { bundle: None, desktop: &[], bins: &[], name, kind, term: NO_TERM, files_only: false, windows: &[] }
 }
 
 const fn linux(kind: ExternalAppKind, name: &'static str) -> Known {
-    Known { bundle: None, desktop: &[], bins: &[], name, kind, term: NO_TERM, files_only: false }
+    other(kind, name)
+}
+
+const fn windows(kind: ExternalAppKind, name: &'static str) -> Known {
+    other(kind, name)
 }
 
 impl Known {
@@ -126,6 +143,11 @@ impl Known {
 
     const fn args(mut self, dir: Option<&'static str>, exec: Option<&'static str>) -> Self {
         self.term = Term { dir, exec };
+        self
+    }
+
+    const fn on_windows(mut self, paths: &'static [&'static str]) -> Self {
+        self.windows = paths;
         self
     }
 }
@@ -148,34 +170,97 @@ use ExternalAppKind::{Editor as E, Files as F, Terminal as T};
 /// An app absent from this table costs one entry, never the list.
 const KNOWN: &[Known] = &[
     editor("Visual Studio Code.app", "VS Code")
-        .on_linux(&["code.desktop", "com.visualstudio.code.desktop", "code_code.desktop"], &["code"]),
+        .on_linux(&["code.desktop", "com.visualstudio.code.desktop", "code_code.desktop"], &["code"])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe",
+            r"%ProgramFiles%\Microsoft VS Code\Code.exe",
+        ]),
     editor("Visual Studio Code - Insiders.app", "VS Code Insiders")
-        .on_linux(&["code-insiders.desktop", "com.visualstudio.code.insiders.desktop"], &["code-insiders"]),
-    editor("Cursor.app", "Cursor").on_linux(&["cursor.desktop", "cursor_cursor.desktop"], &["cursor"]),
-    editor("Windsurf.app", "Windsurf").on_linux(&["windsurf.desktop"], &["windsurf"]),
-    editor("Zed.app", "Zed").on_linux(&["dev.zed.Zed.desktop", "zed.desktop"], &["zed", "zeditor"]),
+        .on_linux(&["code-insiders.desktop", "com.visualstudio.code.insiders.desktop"], &["code-insiders"])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\Microsoft VS Code Insiders\Code - Insiders.exe",
+            r"%ProgramFiles%\Microsoft VS Code Insiders\Code - Insiders.exe",
+        ]),
+    editor("Cursor.app", "Cursor").on_linux(&["cursor.desktop", "cursor_cursor.desktop"], &["cursor"])
+        .on_windows(&[r"%LOCALAPPDATA%\Programs\cursor\Cursor.exe", r"%ProgramFiles%\cursor\Cursor.exe"]),
+    editor("Windsurf.app", "Windsurf").on_linux(&["windsurf.desktop"], &["windsurf"])
+        .on_windows(&[r"%LOCALAPPDATA%\Programs\Windsurf\Windsurf.exe", r"%ProgramFiles%\Windsurf\Windsurf.exe"]),
+    editor("Zed.app", "Zed").on_linux(&["dev.zed.Zed.desktop", "zed.desktop"], &["zed", "zeditor"])
+        .on_windows(&[r"%LOCALAPPDATA%\Programs\Zed\Zed.exe", r"%ProgramFiles%\Zed\Zed.exe"]),
     editor("Zed Preview.app", "Zed Preview").on_linux(&["dev.zed.Zed-Preview.desktop"], &[]),
     editor("Sublime Text.app", "Sublime Text")
-        .on_linux(&["sublime_text.desktop", "com.sublimetext.three.desktop"], &["subl"]),
+        .on_linux(&["sublime_text.desktop", "com.sublimetext.three.desktop"], &["subl"])
+        .on_windows(&[
+            r"%ProgramFiles%\Sublime Text\sublime_text.exe",
+            r"%ProgramFiles%\Sublime Text 3\sublime_text.exe",
+        ]),
     editor("Nova.app", "Nova"),
     editor("BBEdit.app", "BBEdit"),
     editor("Xcode.app", "Xcode"),
     editor("IntelliJ IDEA.app", "IntelliJ IDEA")
-        .on_linux(&["jetbrains-idea.desktop", "com.jetbrains.IntelliJ-IDEA-Ultimate.desktop"], &[]),
+        .on_linux(&["jetbrains-idea.desktop", "com.jetbrains.IntelliJ-IDEA-Ultimate.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\IntelliJ IDEA Ultimate\bin\idea64.exe",
+            r"%ProgramFiles%\JetBrains\IntelliJ IDEA 2*\bin\idea64.exe",
+        ]),
     editor("IntelliJ IDEA CE.app", "IntelliJ IDEA CE")
-        .on_linux(&["jetbrains-idea-ce.desktop", "com.jetbrains.IntelliJ-IDEA-Community.desktop"], &[]),
-    editor("WebStorm.app", "WebStorm").on_linux(&["jetbrains-webstorm.desktop"], &[]),
-    editor("PyCharm.app", "PyCharm").on_linux(&["jetbrains-pycharm.desktop"], &[]),
+        .on_linux(&["jetbrains-idea-ce.desktop", "com.jetbrains.IntelliJ-IDEA-Community.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\IntelliJ IDEA Community Edition\bin\idea64.exe",
+            r"%ProgramFiles%\JetBrains\IntelliJ IDEA Community Edition*\bin\idea64.exe",
+        ]),
+    editor("WebStorm.app", "WebStorm").on_linux(&["jetbrains-webstorm.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\WebStorm\bin\webstorm64.exe",
+            r"%ProgramFiles%\JetBrains\WebStorm*\bin\webstorm64.exe",
+        ]),
+    editor("PyCharm.app", "PyCharm").on_linux(&["jetbrains-pycharm.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\PyCharm Professional\bin\pycharm64.exe",
+            r"%ProgramFiles%\JetBrains\PyCharm 2*\bin\pycharm64.exe",
+        ]),
     editor("PyCharm CE.app", "PyCharm CE")
-        .on_linux(&["jetbrains-pycharm-ce.desktop", "com.jetbrains.PyCharm-Community.desktop"], &[]),
-    editor("GoLand.app", "GoLand").on_linux(&["jetbrains-goland.desktop"], &[]),
-    editor("RustRover.app", "RustRover").on_linux(&["jetbrains-rustrover.desktop"], &[]),
-    editor("CLion.app", "CLion").on_linux(&["jetbrains-clion.desktop"], &[]),
-    editor("PhpStorm.app", "PhpStorm").on_linux(&["jetbrains-phpstorm.desktop"], &[]),
-    editor("RubyMine.app", "RubyMine").on_linux(&["jetbrains-rubymine.desktop"], &[]),
-    editor("DataGrip.app", "DataGrip").on_linux(&["jetbrains-datagrip.desktop"], &[]),
+        .on_linux(&["jetbrains-pycharm-ce.desktop", "com.jetbrains.PyCharm-Community.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\PyCharm Community\bin\pycharm64.exe",
+            r"%ProgramFiles%\JetBrains\PyCharm Community Edition*\bin\pycharm64.exe",
+        ]),
+    editor("GoLand.app", "GoLand").on_linux(&["jetbrains-goland.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\GoLand\bin\goland64.exe",
+            r"%ProgramFiles%\JetBrains\GoLand*\bin\goland64.exe",
+        ]),
+    editor("RustRover.app", "RustRover").on_linux(&["jetbrains-rustrover.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\RustRover\bin\rustrover64.exe",
+            r"%ProgramFiles%\JetBrains\RustRover*\bin\rustrover64.exe",
+        ]),
+    editor("CLion.app", "CLion").on_linux(&["jetbrains-clion.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\CLion\bin\clion64.exe",
+            r"%ProgramFiles%\JetBrains\CLion*\bin\clion64.exe",
+        ]),
+    editor("PhpStorm.app", "PhpStorm").on_linux(&["jetbrains-phpstorm.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\PhpStorm\bin\phpstorm64.exe",
+            r"%ProgramFiles%\JetBrains\PhpStorm*\bin\phpstorm64.exe",
+        ]),
+    editor("RubyMine.app", "RubyMine").on_linux(&["jetbrains-rubymine.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\RubyMine\bin\rubymine64.exe",
+            r"%ProgramFiles%\JetBrains\RubyMine*\bin\rubymine64.exe",
+        ]),
+    editor("DataGrip.app", "DataGrip").on_linux(&["jetbrains-datagrip.desktop"], &[])
+        .on_windows(&[
+            r"%LOCALAPPDATA%\Programs\DataGrip\bin\datagrip64.exe",
+            r"%ProgramFiles%\JetBrains\DataGrip*\bin\datagrip64.exe",
+        ]),
     editor("Android Studio.app", "Android Studio")
-        .on_linux(&["android-studio.desktop", "jetbrains-studio.desktop"], &["android-studio"]),
+        .on_linux(&["android-studio.desktop", "jetbrains-studio.desktop"], &["android-studio"])
+        .on_windows(&[
+            r"%ProgramFiles%\Android\Android Studio\bin\studio64.exe",
+            r"%LOCALAPPDATA%\Programs\Android Studio\bin\studio64.exe",
+        ]),
     editor("VimR.app", "VimR"),
     editor("MacVim.app", "MacVim"),
     linux(E, "Kate").on_linux(&["org.kde.kate.desktop"], &["kate"]),
@@ -190,12 +275,14 @@ const KNOWN: &[Known] = &[
     terminal("Warp.app", "Warp").on_linux(&["dev.warp.Warp.desktop"], &["warp-terminal"]),
     terminal("WezTerm.app", "WezTerm")
         .on_linux(&["org.wezfurlong.wezterm.desktop"], &["wezterm"])
-        .args(Some("start --cwd"), Some("--")),
+        .args(Some("start --cwd"), Some("--"))
+        .on_windows(&[r"%ProgramFiles%\WezTerm\wezterm-gui.exe"]),
     terminal("Terminal.app", "Terminal"),
     linux(T, "Kitty").on_linux(&["kitty.desktop"], &["kitty"]).args(Some("--directory"), Some("")),
     linux(T, "Alacritty")
         .on_linux(&["Alacritty.desktop", "alacritty.desktop", "org.alacritty.Alacritty.desktop"], &["alacritty"])
-        .args(Some("--working-directory"), Some("-e")),
+        .args(Some("--working-directory"), Some("-e"))
+        .on_windows(&[r"%ProgramFiles%\Alacritty\alacritty.exe"]),
     linux(T, "Ptyxis")
         .on_linux(&["org.gnome.Ptyxis.desktop"], &["ptyxis"])
         .args(Some("--new-window --working-directory="), Some("--")),
@@ -215,6 +302,18 @@ const KNOWN: &[Known] = &[
         .on_linux(&["org.codeberg.dnkl.foot.desktop", "foot.desktop"], &["foot"])
         .args(Some("--working-directory="), Some("")),
     linux(T, "XTerm").on_linux(&["xterm.desktop", "debian-xterm.desktop"], &["xterm"]).args(None, Some("-e")),
+    windows(E, "Notepad++")
+        .on_windows(&[r"%ProgramFiles%\Notepad++\notepad++.exe", r"%ProgramFiles(x86)%\Notepad++\notepad++.exe"])
+        .files_only(),
+    windows(T, "Windows Terminal").on_windows(&[r"%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe"]),
+    windows(T, "PowerShell").on_windows(&[r"%ProgramFiles%\PowerShell\7\pwsh.exe"]),
+    windows(T, "Windows PowerShell").on_windows(&[r"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"]),
+    windows(T, "Command Prompt").on_windows(&[r"%SystemRoot%\System32\cmd.exe"]),
+    windows(T, "Git Bash")
+        .on_windows(&[
+            r"%ProgramFiles%\Git\git-bash.exe",
+            r"%LOCALAPPDATA%\Programs\Git\git-bash.exe",
+        ]),
     // Linux's stand-ins for Finder. One is listed, the reader's default where
     // it is one of these — see `linux::detect`.
     linux(F, "Files").on_linux(&["org.gnome.Nautilus.desktop"], &["nautilus"]),
@@ -223,16 +322,18 @@ const KNOWN: &[Known] = &[
     linux(F, "Thunar").on_linux(&["thunar.desktop", "Thunar.desktop"], &["thunar"]),
     linux(F, "Caja").on_linux(&["caja.desktop", "caja-browser.desktop"], &["caja"]),
     linux(F, "PCManFM").on_linux(&["pcmanfm.desktop"], &["pcmanfm"]),
+    // Windows' Finder, on every machine.
+    windows(F, "File Explorer").on_windows(&[r"%SystemRoot%\explorer.exe"]),
 ];
 
 /// Finder, which is in none of the scanned directories and on every mac.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const FINDER: &str = "/System/Library/CoreServices/Finder.app";
 
 /// Where a `.app` bundle lives. One `read_dir` each and no `mdfind`: Spotlight
 /// can be off or still indexing, and the common case is an app that is not
 /// installed at all — where a per-app query is a spawn that answers nothing.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn search_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/Applications"),
@@ -250,7 +351,7 @@ fn search_dirs() -> Vec<PathBuf> {
 }
 
 /// Bundle file name to its path, for every `.app` in `dirs`.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn installed(dirs: &[PathBuf]) -> HashMap<String, PathBuf> {
     let mut found = HashMap::new();
     for dir in dirs {
@@ -280,7 +381,7 @@ static ICONS: LazyLock<Mutex<HashMap<PathBuf, Option<String>>>> =
 ///
 /// `CFBundleIconFile` may or may not carry the extension, so both spellings are
 /// tried; `AppIcon` is the fallback for a bundle that names none.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn icns_path(bundle: &Path) -> Option<PathBuf> {
     let resources = bundle.join("Contents/Resources");
 
@@ -309,7 +410,7 @@ fn icns_path(bundle: &Path) -> Option<PathBuf> {
 
 /// The bundle's icon as a `data:` PNG, read through `sips` — on every mac, and
 /// the only thing here that turns an `.icns` into something a webview draws.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn read_icon(bundle: &Path) -> Option<String> {
     if let Ok(cache) = ICONS.lock() {
         if let Some(hit) = cache.get(bundle) {
@@ -354,7 +455,7 @@ fn read_icon(bundle: &Path) -> Option<String> {
 /// Finder sits at the end rather than the front on purpose: it is the entry
 /// every machine has, so leading with it puts the least specific answer where
 /// the eye lands first.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn resolve(installed: &HashMap<String, PathBuf>, finder: &Path) -> Vec<ExternalApp> {
     let mut apps: Vec<ExternalApp> = KNOWN
         .iter()
@@ -383,7 +484,7 @@ fn resolve(installed: &HashMap<String, PathBuf>, finder: &Path) -> Vec<ExternalA
     apps
 }
 
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn detect() -> Vec<ExternalApp> {
     let mut apps = resolve(&installed(&search_dirs()), Path::new(FINDER));
     for app in &mut apps {
@@ -402,7 +503,9 @@ fn detect() -> Vec<ExternalApp> {
 pub async fn list_open_apps() -> Vec<ExternalApp> {
     #[cfg(target_os = "linux")]
     let detect = linux::detect;
-    if !cfg!(any(target_os = "macos", target_os = "linux")) {
+    #[cfg(windows)]
+    let detect = windows::detect;
+    if !cfg!(any(target_os = "macos", target_os = "linux", windows)) {
         return Vec::new();
     }
     tokio::task::spawn_blocking(detect)
@@ -421,6 +524,8 @@ pub async fn list_open_apps() -> Vec<ExternalApp> {
 pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return linux::open_in_app(&app_path, &path).await;
+    #[cfg(windows)]
+    return windows::open_in_app(&app_path, &path).await;
     #[allow(unreachable_code)]
     let out = tokio::process::Command::new("open")
         .arg("-a")
@@ -449,20 +554,20 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
 /// and it outlives Dray on purpose: it talks to the background server, which
 /// does too — so the launch also pings it, and an island left on a binary an
 /// update replaced restarts onto the new one. A build with no island inside it
-/// (`tauri dev`) only writes the pick. On Linux the island is the app's child
+/// (`tauri dev`) only writes the pick. On Linux and Windows the island is the app's child
 /// instead, and quits with it: see `island.rs`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn configure_island(key: String) -> Result<(), String> {
     if !matches!(key.as_str(), "control" | "option" | "command" | "off") {
         return Err(format!("unknown island key {key}"));
     }
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::configure(&key).await;
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     configure_mac_island(key).await
 }
 
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn configure_mac_island(key: String) -> Result<(), String> {
     use tokio::process::Command;
     async fn run(cmd: &mut Command) -> Result<std::process::Output, String> {
@@ -621,9 +726,9 @@ mod x11_idle {
 /// island the reader quit never swallows the banner that would have replaced it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn island_running() -> bool {
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::running();
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     tokio::process::Command::new("pgrep")
         .args(["-x", "Dray Island"])
         .output()
@@ -649,13 +754,13 @@ pub async fn island_done(
         return Err("not a session id".into());
     }
     // Linux's island is this app's child, and hears it on the pipe it holds.
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::done(&session_id, note, rows);
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     island_done_mac(session_id, note.unwrap_or_default(), rows).await
 }
 
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn island_done_mac(session_id: String, note: String, rows: Option<serde_json::Value>) -> Result<(), String> {
     let dir = island_done_dir().ok_or("no home directory")?;
     tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
@@ -693,7 +798,7 @@ async fn island_done_mac(session_id: String, note: String, rows: Option<serde_js
 /// Whether the running island reads `<id>.<n>` events and their notes: one
 /// that does writes its pid beside the inbox at launch (`Delegate.eventsMarker`),
 /// so an island an update left running on its old binary answers no.
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn island_reads_events(dir: &std::path::Path) -> bool {
     let Ok(pid) = tokio::fs::read_to_string(dir.with_file_name("events-pid")).await else { return false };
     let Ok(out) = tokio::process::Command::new("pgrep").args(["-x", "Dray Island"]).output().await else {
@@ -703,7 +808,7 @@ async fn island_reads_events(dir: &std::path::Path) -> bool {
 }
 
 /// The island's inbox for finished sessions; `Delegate.doneDir` in the island names it too.
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 fn island_done_dir() -> Option<std::path::PathBuf> {
     Some(std::env::home_dir()?.join("Library/Caches/com.yogesh.dray.island/done"))
 }
@@ -712,7 +817,7 @@ fn island_done_dir() -> Option<std::path::PathBuf> {
 /// writes the first three as well (a pinch writes the transcript too), so they
 /// are read back rather than kept here, and `captureTaken` is the island's
 /// alone: the chord it could not register.
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 const ISLAND_PREFS: [&str; 6] =
     ["island.placement", "island.mode", "island.transcript", "island.tap", "island.captureKey", "island.captureTaken"];
 
@@ -733,13 +838,13 @@ fn island_pref_valid(name: &str, value: &str) -> bool {
 /// The island's stored picks, by name; an absent one is the island's default.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn island_prefs() -> std::collections::HashMap<String, String> {
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::prefs();
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     island_prefs_mac().await
 }
 
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn island_prefs_mac() -> std::collections::HashMap<String, String> {
     let reads = ISLAND_PREFS.map(|name| async move {
         let out = tokio::process::Command::new("defaults")
@@ -760,13 +865,13 @@ pub async fn set_island_pref(name: String, value: String) -> Result<(), String> 
     if !island_pref_valid(&name, &value) {
         return Err(format!("not an island setting: {name} = {value}"));
     }
-    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
     return crate::island::set_pref(&name, &value);
-    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    #[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
     set_island_pref_mac(name, value).await
 }
 
-#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+#[cfg(not(all(feature = "desktop", any(target_os = "linux", windows))))]
 async fn set_island_pref_mac(name: String, value: String) -> Result<(), String> {
     use tokio::process::Command;
     let out = Command::new("defaults")
@@ -841,8 +946,22 @@ pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), St
     run_in_terminal(&command, &cwd).await
 }
 
+/// A PowerShell line in a console window of its own, left open on its last
+/// words. Windows alone: the vendors' Windows installers are PowerShell.
+#[cfg(windows)]
+pub(crate) async fn run_in_powershell(command: &str) -> Result<(), String> {
+    windows::run_in_powershell(command).await
+}
+
+/// `url` in the default browser, from Rust, where the frontend's opener is
+/// not the one asking.
+#[cfg(windows)]
+pub(crate) async fn open_url(url: &str) -> Result<(), String> {
+    windows::open_url(url).await
+}
+
 /// Runs one shell line in a terminal at `cwd`: Terminal.app on a Mac, the
-/// reader's own on Linux.
+/// reader's own on Linux, a Git Bash console on Windows.
 ///
 /// **The caller owns what is in that line**, and every one of them composes it
 /// from a closed set — this harness's [`Harness::login_args`], or an
@@ -854,9 +973,11 @@ pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), St
 pub(crate) async fn run_in_terminal(command: &str, cwd: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     return linux::run_in_terminal(command, cwd).await;
+    #[cfg(windows)]
+    return windows::run_in_terminal(command, cwd).await;
     #[allow(unreachable_code)]
     if !cfg!(target_os = "macos") {
-        return Err("Opening a terminal needs macOS or Linux. Copy the command instead.".to_string());
+        return Err("Opening a terminal needs macOS, Linux or Windows. Copy the command instead.".to_string());
     }
 
     // Terminal runs a `.command` from the reader's home, not from the script's
@@ -941,7 +1062,12 @@ mod tests {
             for id in known.desktop {
                 assert!(id.ends_with(".desktop"), "{id} is not a desktop file id");
             }
-            assert!(known.bundle.is_some() || !known.desktop.is_empty() || !known.bins.is_empty());
+            for path in known.windows {
+                assert!(path.to_lowercase().ends_with(".exe"), "{path} is not a program");
+            }
+            assert!(
+                known.bundle.is_some() || !known.desktop.is_empty() || !known.bins.is_empty() || !known.windows.is_empty()
+            );
             assert!(!known.name.is_empty());
         }
     }
@@ -1016,6 +1142,8 @@ mod tests {
     fn report_detected_apps() {
         #[cfg(target_os = "linux")]
         let detect = linux::detect;
+        #[cfg(windows)]
+        let detect = windows::detect;
         for app in detect() {
             println!(
                 "{:?}\t{}\t{}\ticon={}",

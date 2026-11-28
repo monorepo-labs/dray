@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 
+import { GalleryPicture, useGallerySlot } from "@/components/chat/ImageGallery";
 import ImageLightbox from "@/components/chat/ImageLightbox";
 import { basename } from "@/lib/format";
 import { fileSrc, invoke } from "@/lib/transport";
@@ -15,6 +16,8 @@ type Read = { path: string; src: string | null; failed: boolean };
 /// `path` is qualified for the session's server. It loads through `fileSrc`
 /// first, which serves attachments and recordings alone, then through
 /// `read_file`'s `data:` URL, the Files view's own route to any other file.
+///
+/// Inside an `ImageGallery` it is one tile of the row and opens the row's viewer.
 export default function ProofImage({
   path,
   alt = "",
@@ -29,8 +32,10 @@ export default function ProofImage({
   const [read, setRead] = useState<Read | null>(null);
   const reading = read?.path === path ? read : null;
 
+  const src = reading?.failed ? null : reading ? reading.src : fileSrc(path);
+  const openInGallery = useGallerySlot(src ? { src, name: basename(path) } : null);
+
   if (reading?.failed) return <>{fallback}</>;
-  const src = reading ? reading.src : fileSrc(path);
   if (!src) return null;
 
   const settle = (next: Read) => setRead((cur) => (cur?.path === path ? next : cur));
@@ -48,6 +53,10 @@ export default function ProofImage({
     );
   };
 
+  if (openInGallery) {
+    return <GalleryPicture src={src} alt={alt} onOpen={openInGallery} onError={onError} />;
+  }
+
   return (
     <span className="mt-1.5 block w-fit max-w-full overflow-hidden rounded-xl border border-border">
       <img
@@ -57,7 +66,7 @@ export default function ProofImage({
         decoding="async"
         onClick={() => setOpen(true)}
         onError={onError}
-        className="block max-h-96 max-w-full cursor-zoom-in"
+        className="block max-h-72 max-w-full cursor-zoom-in"
       />
       <ImageLightbox
         images={[{ src, name: basename(path) }]}

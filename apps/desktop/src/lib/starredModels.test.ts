@@ -116,7 +116,7 @@ describe("starsToAdd", () => {
   const astra = model("gpt6_astra");
   const sol = model("gpt-6-sol");
   const luna = model("gpt-6-luna", { secondary: true });
-  const newest = model("gpt-6.1-sol");
+  const newest = model("gpt-6.2-sol");
   const ids = (...xs: string[]) => xs as ModelId[];
 
   it("seeds a first landing and records every row it showed", () => {
@@ -131,8 +131,8 @@ describe("starsToAdd", () => {
     const was = ids("gpt6_astra", "gpt-6-sol", "gpt-6-luna");
     const next = starsToAdd("codex", "", [newest, astra, sol, luna], ids("gpt6_astra"), was, true);
     // 6 Sol was offered before and left unstarred, so it stays that way.
-    expect(next.add).toEqual(["gpt-6.1-sol"]);
-    expect(next.offered).toEqual([...was, "gpt-6.1-sol"]);
+    expect(next.add).toEqual(["gpt-6.2-sol"]);
+    expect(next.offered).toEqual([...was, "gpt-6.2-sol"]);
     expect(starsToAdd("codex", "", [newest, astra], [], next.offered, true).add).toEqual([]);
   });
 
@@ -143,8 +143,8 @@ describe("starsToAdd", () => {
   /// Seeded before the record existed: only the harness's default is owed.
   it("stars the default alone on a shortlist with no record", () => {
     const next = starsToAdd("codex", "", [newest, astra, sol], ids("gpt6_astra"), undefined, true);
-    expect(next.add).toEqual(["gpt-6.1-sol"]);
-    expect(next.offered).toEqual(["gpt-6.1-sol", "gpt6_astra", "gpt-6-sol"]);
+    expect(next.add).toEqual(["gpt-6.2-sol"]);
+    expect(next.offered).toEqual(["gpt-6.2-sol", "gpt6_astra", "gpt-6-sol"]);
     expect(starsToAdd("codex", "", [astra, sol], [], undefined, true).add).toEqual([]);
   });
 

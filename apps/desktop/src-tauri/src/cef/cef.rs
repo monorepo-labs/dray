@@ -11,7 +11,9 @@
 //! **On Linux a tab is an X11 window, not an `NSView`** (`x11.rs`), libcef.so
 //! is opened at run time rather than linked (`libcef.rs`), and the app's own
 //! binary is every Chromium subprocess (`subprocess`). The pump is the same:
-//! `run_on_main_thread` lands on GTK's main loop there.
+//! `run_on_main_thread` lands on GTK's main loop there. **Windows is Linux's
+//! shape with a child `HWND` for the view** (`win.rs`) and libcef.dll
+//! delay-loaded rather than opened by hand.
 //!
 //! **One native view is ever visible: the presented session's active tab.**
 //! The frontend says which session is presented and where (`browser_layout`),
@@ -54,6 +56,9 @@ mod libcef;
 #[cfg(target_os = "linux")]
 #[path = "x11.rs"]
 mod x11;
+#[cfg(windows)]
+#[path = "win.rs"]
+mod win;
 
 #[cfg(target_os = "macos")]
 const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
@@ -100,6 +105,25 @@ const SWEEP_EVERY: Duration = Duration::from_secs(60);
 /// Capped, since a parked tab keeps running as if on screen.
 static WARM: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
 const WARM_TABS: usize = 4;
+
+/// The size each recorded tab's view had before a recording parked it at its
+/// own, put back once the recording ends. Left at the recording's, the page
+/// took 1440×900 again at its next relayout — a zoom, a resize — long after
+/// `record stop` (#1632). In the platform's own units.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+static UNPARKED: Mutex<BTreeMap<i32, (f64, f64)>> = Mutex::new(BTreeMap::new());
+
+/// Notes `id`'s size before its first park for a recording; later parks keep
+/// the first, which is the size the reader left it at.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn note_unparked(id: i32, size: impl FnOnce() -> Option<(f64, f64)>) {
+    let mut sizes = UNPARKED.lock().unwrap();
+    if !sizes.contains_key(&id) {
+        if let Some(size) = size() {
+            sizes.insert(id, size);
+        }
+    }
+}
 
 struct Tab {
     id: i32,
@@ -203,6 +227,13 @@ fn paths() -> Option<Paths> {
     Some(Paths { framework: crate::chromium::installed_framework()? })
 }
 
+/// Windows has no helpers either, but a dev layout: the runtime `cef-dll-sys`
+/// built against.
+#[cfg(windows)]
+fn paths() -> Option<Paths> {
+    Some(Paths { framework: dev_framework().or_else(crate::chromium::installed_framework)? })
+}
+
 #[cfg(target_os = "macos")]
 fn paths() -> Option<Paths> {
     let exe = std::env::current_exe().ok()?;
@@ -225,14 +256,34 @@ fn dev_framework() -> Option<PathBuf> {
     None
 }
 
+/// Under `tauri dev`, the runtime `cef-dll-sys` unpacked and built against,
+/// and nothing to fetch. Its copy "beside the binary" lands in
+/// `target/debug/build` under cargo's build-dir layout, so the SDK is read
+/// where it lies.
+#[cfg(windows)]
+fn dev_framework() -> Option<PathBuf> {
+    if !tauri::is_dev() {
+        return None;
+    }
+    sys::get_cef_dir().filter(|dir| dir.join("libcef.dll").is_file())
+}
+
+/// Maps the library out of `framework`, off a Mac.
+#[cfg(target_os = "linux")]
+fn load_framework(framework: &Path) -> Result<(), String> {
+    libcef::load(framework)
+}
+
+#[cfg(windows)]
+fn load_framework(framework: &Path) -> Result<(), String> {
+    win::load(framework)
+}
+
 /// A framework beside the helpers is the dev layout, and nothing to fetch.
 #[cfg(target_os = "macos")]
 fn dev_framework() -> Option<PathBuf> {
     paths().filter(|p| p.framework.starts_with(&p.helpers)).map(|p| p.framework)
 }
-
-/// See the headless module's: this Chromium reads CSS pixels under a recording's override.
-const INPUT_IN_DEVICE_PIXELS: bool = false;
 
 /// The profile root is in the build's own home, as its socket is: Chromium
 /// holds a singleton lock on the root, so a dev build sharing the release
@@ -291,8 +342,8 @@ fn start() -> Option<bool> {
             return Some(false);
         }
     }
-    #[cfg(target_os = "linux")]
-    if let Err(e) = libcef::load(&framework) {
+    #[cfg(not(target_os = "macos"))]
+    if let Err(e) = load_framework(&framework) {
         eprintln!("cef: {e}");
         return Some(false);
     }
@@ -303,9 +354,7 @@ fn start() -> Option<bool> {
     let args = Args::new();
     // Returns -1 for the browser process; helpers are a separate binary, so
     // this process is never anything else.
-    let ret = keeping_signal(libc::SIGCHLD, || {
-        execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut())
-    });
+    let ret = keeping_sigchld(|| execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut()));
     if ret >= 0 {
         eprintln!("cef: execute_process answered {ret} in the browser process");
         return Some(false);
@@ -319,7 +368,7 @@ fn start() -> Option<bool> {
 
     crate::headless::clear_stale_lock(&browser_dir());
 
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "macos"))]
     let settings = Settings {
         no_sandbox: 1,
         external_message_pump: 1,
@@ -345,7 +394,7 @@ fn start() -> Option<bool> {
         ..Default::default()
     };
     let mut cef_app = DrayApp::new();
-    let ok = keeping_signal(libc::SIGCHLD, || {
+    let ok = keeping_sigchld(|| {
         initialize(Some(args.as_main_args()), Some(&settings), Some(&mut cef_app), std::ptr::null_mut()) == 1
     });
     if !ok {
@@ -367,21 +416,21 @@ fn start() -> Option<bool> {
     Some(true)
 }
 
-/// Chromium's renderer, GPU, utility and zygote processes on Linux, which
-/// are this binary run again with `--type=`: loads libcef.so and hands the
-/// process to CEF, answering its exit code. `None` for the app itself.
-/// Before tokio or GTK: the zygote forks every renderer and refuses to with
-/// a second thread alive.
-#[cfg(target_os = "linux")]
+/// Chromium's renderer, GPU, utility and zygote processes on Linux and
+/// Windows, which are this binary run again with `--type=`: loads libcef and
+/// hands the process to CEF, answering its exit code. `None` for the app
+/// itself. Before tokio or GTK: the zygote forks every renderer and refuses
+/// to with a second thread alive.
+#[cfg(not(target_os = "macos"))]
 pub fn subprocess() -> Option<i32> {
     if !std::env::args().any(|a| a.starts_with("--type=")) {
         return None;
     }
-    let Some(framework) = crate::chromium::installed_framework() else {
+    let Some(Paths { framework }) = paths() else {
         eprintln!("cef: subprocess started with no Chromium on disk");
         return Some(1);
     };
-    if let Err(e) = libcef::load(&framework) {
+    if let Err(e) = load_framework(&framework) {
         eprintln!("cef: {e}");
         return Some(1);
     }
@@ -403,6 +452,18 @@ fn path_str(path: &Path) -> CefString {
 /// `SIG_DFL`, where it was discarded — and its waiter may be the one holding
 /// the sessions lock, so waiting for the next spawn's signal is not enough.
 /// A synthetic one after the restore makes every tokio waiter re-check now.
+#[cfg(unix)]
+fn keeping_sigchld<T>(f: impl FnOnce() -> T) -> T {
+    keeping_signal(libc::SIGCHLD, f)
+}
+
+/// Windows has no signals for Chromium to reset.
+#[cfg(windows)]
+fn keeping_sigchld<T>(f: impl FnOnce() -> T) -> T {
+    f()
+}
+
+#[cfg(unix)]
 fn keeping_signal<T>(signal: libc::c_int, f: impl FnOnce() -> T) -> T {
     let mut saved: libc::sigaction = unsafe { std::mem::zeroed() };
     let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -422,7 +483,7 @@ fn keeping_signal<T>(signal: libc::c_int, f: impl FnOnce() -> T) -> T {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod signal_tests {
     use super::keeping_signal;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -856,6 +917,19 @@ fn child_window_info() -> Result<WindowInfo, String> {
     Ok(info.set_as_child(parent, &bounds))
 }
 
+/// A tab's window: a child of the main window, made off its left edge until
+/// `apply_layout` decides it is the one on screen. Alloy, as on Linux. Main
+/// thread.
+#[cfg(windows)]
+fn child_window_info() -> Result<WindowInfo, String> {
+    let layout = LAYOUT.lock().unwrap().as_ref().map(|(_, l)| *l);
+    let (w, h) = layout.map(|l| (l.width, l.height)).unwrap_or((800.0, 600.0));
+    let (parent, width, height) = win::parent_and_size(w, h).ok_or("no main window")?;
+    let bounds = Rect { x: -20000, y: 0, width, height };
+    let info = WindowInfo { runtime_style: RuntimeStyle::ALLOY, ..WindowInfo::default() };
+    Ok(info.set_as_child(sys::HWND(parent as *mut _), &bounds))
+}
+
 /// A tab's view: a child of the main window, hidden until `apply_layout`
 /// decides it is the one on screen. Main thread.
 #[cfg(target_os = "macos")]
@@ -922,15 +996,15 @@ fn shown_tab() -> Option<i32> {
 }
 
 /// Every tab on screen and where: the presented one and the split panes'.
-/// Pinned tabs on Mac alone, since an X11 tab lives in the one frame `x11.rs`
-/// keeps for the pane.
+/// Pinned tabs off Linux alone, since an X11 tab lives in the one frame
+/// `x11.rs` keeps for the pane.
 fn shown_tabs() -> Vec<(i32, Layout)> {
     let mut shown: Vec<(i32, Layout)> = Vec::new();
     let pinned = PINNED.lock().unwrap().clone();
     if let (Some(id), Some((_, layout))) = (shown_tab(), LAYOUT.lock().unwrap().clone()) {
         shown.push((id, layout));
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "linux"))]
     shown.extend(pinned);
     shown
 }
@@ -989,7 +1063,12 @@ fn apply_layout() {
         if !show && !hidden {
             x11::refocus_webview(view);
         }
+        let unparked = if parked.is_none() { UNPARKED.lock().unwrap().remove(&id) } else { None };
+        if let (Some((w, h)), false) = (unparked, show) {
+            x11::park(view, Some((w as u32, h as u32)));
+        }
         if let Some((w, h)) = parked {
+            note_unparked(id, || x11::size(view).map(|(w, h)| (f64::from(w), f64::from(h))));
             x11::park(view, Some((w, h)));
             x11::set_hidden(view, false);
         } else if !show && warm.contains(&id) {
@@ -1003,6 +1082,32 @@ fn apply_layout() {
     #[cfg(target_os = "linux")]
     if shown.is_none() {
         x11::stow();
+    }
+    #[cfg(windows)]
+    for (id, view, browser) in views {
+        let layout = placed.iter().find(|(p, _)| *p == id).map(|(_, l)| *l);
+        let show = layout.is_some();
+        if let Some(layout) = layout {
+            win::place(view, layout.x, layout.y, layout.width, layout.height);
+            if let Some(host) = browser.host() {
+                host.notify_move_or_resize_started();
+            }
+        }
+        let parked = if show { None } else { automation::parked(id) };
+        let hidden = win::is_hidden(view);
+        if !show && !hidden {
+            win::refocus_webview(view);
+        }
+        if let Some((w, h)) = parked {
+            win::park(view, Some((w, h)));
+            win::set_hidden(view, false);
+        } else if !show && warm.contains(&id) {
+            // At its own size, so coming back is a move and never a relayout.
+            win::park(view, None);
+            win::set_hidden(view, false);
+        } else if hidden == show {
+            win::set_hidden(view, !show);
+        }
     }
     #[cfg(target_os = "macos")]
     for (id, view, browser) in views {
@@ -1027,7 +1132,15 @@ fn apply_layout() {
         if !show && !view.isHidden() {
             refocus_webview(view);
         }
+        let unparked = if parked.is_none() { UNPARKED.lock().unwrap().remove(&id) } else { None };
+        if let (Some((w, h)), false) = (unparked, show) {
+            view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), NSSize::new(w, h)));
+        }
         if let Some((w, h)) = parked {
+            note_unparked(id, || {
+                let size = view.frame().size;
+                Some((size.width, size.height))
+            });
             view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), NSSize::new(w as f64, h as f64)));
             view.setHidden(false);
         } else if !show && warm.contains(&id) {
@@ -1197,6 +1310,15 @@ fn browser_holds_focus(session: &str) -> bool {
     views.into_iter().any(x11::holds_focus)
 }
 
+/// Whether keyboard focus sits inside one of the session's tab windows.
+/// Main thread only.
+#[cfg(windows)]
+fn browser_holds_focus(session: &str) -> bool {
+    let views: Vec<usize> =
+        TABS.lock().unwrap().iter().filter(|t| t.session == session && t.view != 0).map(|t| t.view).collect();
+    views.into_iter().any(win::holds_focus)
+}
+
 /// Whether the first responder sits inside one of the session's tab views.
 /// Main thread only.
 #[cfg(target_os = "macos")]
@@ -1257,6 +1379,17 @@ fn pressed(x: i32, y: i32) {
         }
         x11::Pressed::Elsewhere => {}
     }
+}
+
+/// `reveal` on Windows, where a hidden window drops input the same way.
+#[cfg(windows)]
+fn reveal(id: i32) {
+    let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.view).unwrap_or(0);
+    if view == 0 || !win::is_hidden(view) {
+        return;
+    }
+    win::park(view, None);
+    win::set_hidden(view, false);
 }
 
 /// `reveal` on X11, where an unmapped window drops input the same way.
@@ -1331,7 +1464,7 @@ wrap_life_span_handler! {
         fn on_after_created(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser.cloned() else { return };
             let id = self.tab;
-            let view = browser.host().map(|h| h.window_handle() as usize).unwrap_or(0);
+            let view = browser.host().map(|h| handle_of(&h)).unwrap_or(0);
             let devtools = observe(&browser, id);
             // A woken tab already has its entry, and keeps its title and
             // favicon until the page says otherwise. Filled in place, never
@@ -1432,13 +1565,14 @@ wrap_life_span_handler! {
         /// torn down, so the tab's view is pulled out of the window here and
         /// `on_before_close` follows from that.
         fn do_close(&self, browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
-            let view = browser
-                .and_then(|b| b.host())
-                .map(|h| h.window_handle() as usize)
-                .unwrap_or(0);
+            let view = browser.and_then(|b| b.host()).map(|h| handle_of(&h)).unwrap_or(0);
             #[cfg(target_os = "linux")]
             if view != 0 {
                 x11::destroy(view);
+            }
+            #[cfg(windows)]
+            if view != 0 {
+                win::destroy(view);
             }
             #[cfg(target_os = "macos")]
             if view != 0 {
@@ -1486,6 +1620,15 @@ wrap_life_span_handler! {
             }
         }
     }
+}
+
+/// The native handle of a browser's view: an `NSView` pointer, an X window
+/// id or an `HWND`, as a number.
+fn handle_of(host: &BrowserHost) -> usize {
+    #[cfg(windows)]
+    return host.window_handle().0 as usize;
+    #[cfg(not(windows))]
+    return host.window_handle() as usize;
 }
 
 /// Takes a tab's entry out, for a close. The active tab passes to the last
@@ -1567,6 +1710,11 @@ mod string_list_tests {
     #[cfg(target_os = "linux")]
     fn load_framework() {
         libcef::load(&sys::get_cef_dir().expect("CEF not found")).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn load_framework() {
+        win::load(&sys::get_cef_dir().expect("CEF not found")).unwrap();
     }
 
     #[cfg(target_os = "macos")]
@@ -1889,6 +2037,9 @@ wrap_load_handler! {
             }
             update_tab(self.tab, |t| t.committed = true);
             disarm_picker(self.tab);
+            // Every cross-document commit lands here, a back/forward out of
+            // the page cache and a reload included; same-document ones don't.
+            automation::navigated(self.tab);
         }
 
         /// Chromium draws its own error page; this only records the reason
@@ -1925,11 +2076,16 @@ fn zoom(browser: &Browser, action: &str) {
     host.set_zoom_level(level);
 }
 
-/// DevTools in its own window: the default `WindowInfo` is a top-level one.
+/// DevTools in its own window: the default `WindowInfo` is a top-level one,
+/// bar Windows', whose zero style makes a window nobody can see.
 fn open_devtools(browser: &Browser) {
+    #[cfg(windows)]
+    let info = WindowInfo::default().set_as_popup(sys::HWND(std::ptr::null_mut()), "DevTools");
+    #[cfg(not(windows))]
+    let info = WindowInfo::default();
     if let Some(host) = browser.host() {
         host.show_dev_tools(
-            Some(&WindowInfo::default()),
+            Some(&info),
             None::<&mut Client>,
             Some(&BrowserSettings::default()),
             None,
@@ -1958,8 +2114,8 @@ struct ForwardedKey {
 }
 
 /// The character a Windows virtual-key code stands for, unshifted: the keys
-/// an app chord can name. Linux only; see `on_pre_key_event`.
-#[cfg(target_os = "linux")]
+/// an app chord can name. Off a Mac only; see `on_pre_key_event`.
+#[cfg(not(target_os = "macos"))]
 fn key_char(code: ::std::os::raw::c_int) -> char {
     match code {
         0x30..=0x39 => char::from(code as u8),
@@ -1975,7 +2131,7 @@ fn key_char(code: ::std::os::raw::c_int) -> char {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, not(target_os = "macos")))]
 mod key_char_tests {
     use super::key_char;
 
@@ -1991,11 +2147,17 @@ mod key_char_tests {
     }
 }
 
+/// `EVENTFLAG_ALTGR_DOWN`: set beside Ctrl and Alt when the keystroke is
+/// AltGr's.
+const ALTGR_DOWN: u32 = 1 << 12;
+
 /// The platform's own key event, which CEF hands over beside its own.
 #[cfg(target_os = "macos")]
 type OsEvent<'a> = *mut u8;
 #[cfg(target_os = "linux")]
 type OsEvent<'a> = Option<&'a mut sys::_XEvent>;
+#[cfg(windows)]
+type OsEvent<'a> = Option<&'a mut sys::MSG>;
 
 wrap_keyboard_handler! {
     struct DrayKeyboard;
@@ -2009,19 +2171,26 @@ wrap_keyboard_handler! {
             _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
             let Some(event) = event else { return 0 };
+            // AltGr types a character, and Windows reports it as Ctrl+Alt:
+            // read as the accelerator, AltGr+Q (`@` on a German layout) never
+            // reached the page and AltGr+I opened DevTools.
+            if cfg!(windows) && event.modifiers & ALTGR_DOWN != 0 {
+                return 0;
+            }
             let raw_down = sys::cef_key_event_type_t::from(event.type_)
                 == sys::cef_key_event_type_t::KEYEVENT_RAWKEYDOWN;
             // The app's accelerator is ⌘ on a Mac and Ctrl elsewhere, and
-            // `useHotkey` takes either, so Linux reads Ctrl as the ⌘ here.
+            // `useHotkey` takes either, so Linux and Windows read Ctrl as the
+            // ⌘ here.
             #[cfg(target_os = "macos")]
             let (meta, ctrl) = (event.modifiers & 128 != 0, event.modifiers & 4 != 0);
-            #[cfg(target_os = "linux")]
+            #[cfg(not(target_os = "macos"))]
             let (meta, ctrl) = (event.modifiers & 4 != 0, false);
             let shift = event.modifiers & 2 != 0;
             let alt = event.modifiers & 8 != 0;
             // Alt+digit jumps between sessions with no accelerator held, so
-            // Linux forwards it too. The Mac forwards ⌘ chords alone.
-            let alt_digit = cfg!(target_os = "linux")
+            // Linux and Windows forward it too. The Mac forwards ⌘ chords alone.
+            let alt_digit = cfg!(not(target_os = "macos"))
                 && !meta
                 && alt
                 && !shift
@@ -2029,9 +2198,9 @@ wrap_keyboard_handler! {
             if !raw_down || !(meta || alt_digit) {
                 return 0;
             }
-            // Ctrl+←/→ moves a word in a Linux text field, and no app chord
-            // takes it, so the page keeps it.
-            if cfg!(target_os = "linux") && !shift && !alt && matches!(event.windows_key_code, 0x25 | 0x27) {
+            // Ctrl+←/→ moves a word in a Linux or Windows text field, and no
+            // app chord takes it, so the page keeps it.
+            if cfg!(not(target_os = "macos")) && !shift && !alt && matches!(event.windows_key_code, 0x25 | 0x27) {
                 return 0;
             }
             #[cfg(target_os = "macos")]
@@ -2041,12 +2210,12 @@ wrap_keyboard_handler! {
             // With Ctrl held, Linux's `unmodified_character` is the control
             // code (Ctrl+1 reads 17), so no chord matched and every one went
             // to the page. The key code is the key.
-            #[cfg(target_os = "linux")]
+            #[cfg(not(target_os = "macos"))]
             let ch = key_char(event.windows_key_code);
             // Redo is the page's: Ctrl+Shift+Z is reserved for editing and
             // Ctrl+Y is Linux's other spelling of it, and no app chord takes
             // either, so forwarding them only swallowed the key.
-            if cfg!(target_os = "linux") && meta && !alt && ((shift && ch == 'z') || (!shift && ch == 'y')) {
+            if cfg!(not(target_os = "macos")) && meta && !alt && ((shift && ch == 'z') || (!shift && ch == 'y')) {
                 return 0;
             }
             if let Some(browser) = browser.filter(|_| meta) {

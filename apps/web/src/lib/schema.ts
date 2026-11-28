@@ -82,8 +82,9 @@ export const drayTables = {
         createdAt: { type: "date", required: true, defaultValue: () => new Date() },
       },
     },
-    // The push relay's rate limit: one counter per phone handle or caller
-    // address, hashed, keyed on `id`. Nothing of a message is ever kept.
+    // Every rate limit on the site (`lib/rate.ts`): one counter per phone
+    // handle or caller address, hashed, keyed on `id`. Named for the push
+    // relay, its first user. Nothing of a message is ever kept.
     pushRate: {
       modelName: "push_rate",
       fields: {

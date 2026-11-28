@@ -87,11 +87,17 @@ type QuestionsAskedPayload = Extract<
   { type: "questions_asked" }
 >;
 
-/// Something the agent is blocked on until the user answers. Two shapes, one
-/// list: they arrive on the same channel, share a `requestId` space, and are
-/// retired by the same `permission_decided`, so splitting them would mean two
-/// pending sets that have to stay ordered against each other.
-export type PendingAsk = PermissionRequestPayload | QuestionsAskedPayload;
+export type SecretRequestedPayload = Extract<
+  AgentEvent["payload"],
+  { type: "secret_requested" }
+>;
+
+/// Something the agent is blocked on until the user answers. The first two
+/// arrive on the same channel, share a `requestId` space, and are retired by
+/// the same `permission_decided`, so splitting them would mean two pending
+/// sets that have to stay ordered against each other. A secret card is
+/// logged and retired by its own `secret_answered`, so it outlives its turn.
+export type PendingAsk = PermissionRequestPayload | QuestionsAskedPayload | SecretRequestedPayload;
 
 export function isToolGroup(item: WorkItem): item is ToolGroup {
   return "kind" in item && item.kind === "tool_group";
@@ -358,7 +364,13 @@ const RENDERS = new Set([
   "rate_limited",
   "permission_denied",
   "notice",
+  "secret_answered",
 ]);
+
+/// A card a newer one replaced closes silently: the newer card is the row.
+export function drawsSecretAnswer(outcome: string): boolean {
+  return outcome === "saved" || outcome === "declined" || outcome === "used";
+}
 
 /// Whether an item draws a row. A group always does — it is built from tool
 /// calls, which always draw.
@@ -373,6 +385,8 @@ export function rendersRow(item: WorkItem): boolean {
   // encrypted or empty block — which Claude Code and Codex both send — so by
   // content it is no row: it must not split a tool run or take a live slot.
   if (payload.type === "reasoning") return !payload.encrypted && payload.text.trim() !== "";
+  if (payload.type === "secret_answered") return drawsSecretAnswer(payload.outcome);
+  if (payload.type === "secret_requested") return !!payload.bot;
   return RENDERS.has(payload.type);
 }
 
@@ -673,6 +687,9 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
       current = open(event, event.id);
       continue;
     }
+    // Draws nothing: the reader just picked the agent (#1414). Kept out of
+    // `work` so it neither opens a head turn nor splits a tool run.
+    if (event.payload.type === "agent_switched") continue;
 
     // Events before any prompt still need a home — a resumed session replays
     // the log from wherever it was truncated.
@@ -686,10 +703,20 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
       continue;
     }
 
-    if (event.payload.type === "merge_card") {
+    if (event.payload.type === "merge_card" || event.payload.type === "issue_card") {
       current.cards.push(event);
       continue;
     }
+    // Where a secret went is always in view, never folded behind tool calls.
+    if (
+      (event.payload.type === "secret_answered" && drawsSecretAnswer(event.payload.outcome)) ||
+      (event.payload.type === "secret_requested" && event.payload.bot)
+    ) {
+      current.cards.push(event);
+      continue;
+    }
+    // Drawn on its card, never as a row of its own.
+    if (event.payload.type === "issue_approved") continue;
     if (event.payload.type === "tool_call_started") current.toolCalls += 1;
     if (event.payload.type === "assistant_text") current.messages += 1;
     // Only a *rendered* row unseats the flag. A replayed log carries trailing
@@ -870,9 +897,11 @@ function build(
     ) {
       asks.set(event.payload.requestId, event.payload);
     }
-    if (event.payload.type === "permission_decided") {
+    if (event.payload.type === "permission_decided" || event.payload.type === "secret_answered") {
       asks.delete(event.payload.requestId);
     }
+    // A task's ask of its bot on another machine is that chat's card, not this one's.
+    if (event.payload.type === "secret_requested" && !event.payload.bot) asks.set(event.payload.requestId, event.payload);
   }
 
   const pendingAsks = [...asks.values()];

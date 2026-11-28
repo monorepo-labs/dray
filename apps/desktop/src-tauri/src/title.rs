@@ -159,7 +159,7 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
     Ok(match harness {
         Harness::ClaudeCode => {
             let bin = crate::binpath::claude().await;
-            let mut cmd = Command::new(&bin);
+            let mut cmd = crate::binpath::command(&bin);
             cmd.env("PATH", crate::harness::agent_path(&bin));
             cmd.args([
                 "-p",
@@ -174,8 +174,10 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
                 // empty.
                 "--mcp-config",
                 r#"{"mcpServers":{}}"#,
+                // PowerShell is Windows' shell tool; denying Bash alone left
+                // it named in a warning on every title.
                 "--disallowed-tools",
-                "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task",
+                "Bash,PowerShell,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task",
                 // `manual` hangs here — it produced no output and had to be
                 // killed, twice. `auto` is safe only because the tool list
                 // above is empty.
@@ -187,7 +189,7 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         }
         Harness::Codex => {
             let bin = crate::binpath::codex().await;
-            let mut cmd = Command::new(&bin);
+            let mut cmd = crate::binpath::command(&bin);
             cmd.env("PATH", crate::harness::agent_path(&bin));
             cmd.args([
                 "exec",
@@ -240,6 +242,9 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         // the probe that discovers the list lands. `models.rs` says why there
         // is no constant to reach for here.
         Harness::Pi => bail!("pi has no cheap model to title with yet"),
+        // OpenCode titles itself, and `opencode::note_title` reads it back off
+        // `session/list` once the first turn answers.
+        Harness::OpenCode => bail!("OpenCode titles its own sessions"),
         // **grok titles itself, for free, and this is not a gap.** Its own
         // title is written by the model out of band and arrives as
         // `session_info_update` mid-turn — measured at 0.22–0.24s from the last
@@ -250,7 +255,7 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         Harness::Grok => bail!("grok titles its own sessions on the wire"),
         Harness::Fx => {
             let bin = crate::binpath::fx().await;
-            let mut cmd = Command::new(&bin);
+            let mut cmd = crate::binpath::command(&bin);
             cmd.env("PATH", crate::harness::agent_path(&bin));
 
             // Named through the environment because `fx ask` takes no `--model`
@@ -418,7 +423,7 @@ fn said(stderr: &[u8]) -> String {
 /// intermediates (`0x20`–`0x2F`) up to one final byte, which is a charset
 /// designation like `ESC ( B` — read as two bytes it leaves its `B` in the
 /// text.
-fn readable(line: &str) -> String {
+pub(crate) fn readable(line: &str) -> String {
     let mut out = String::new();
     let mut chars = line.chars().peekable();
 
@@ -824,6 +829,7 @@ mod command_tests {
 
         assert!(claude.contains(&"--strict-mcp-config".to_string()));
         assert!(claude.iter().any(|a| a.contains("Read,Write,Edit")));
+        assert!(claude.iter().any(|a| a.contains("PowerShell")), "Windows' shell tool too");
     }
 
     /// Codex cannot: it has no `--disallowed-tools`, and `-s read-only` permits
@@ -895,6 +901,7 @@ mod command_tests {
     /// abandonment rather than a stop. Pinned with `sleep` rather than a CLI,
     /// since the behaviour being relied on is the runtime's.
     #[tokio::test]
+    #[cfg(unix)]
     async fn timing_out_kills_the_child_rather_than_abandoning_it() {
         let child = Command::new("/bin/sleep")
             .arg("30")

@@ -11,8 +11,12 @@ allowBuilds:
   # Next's image optimizer; without it `next build` warns and falls back to a
   # slower JS decoder.
   sharp: true
+  # The runtime under `wrangler dev` in apps/upload-worker; its postinstall
+  # checks the platform binary is in place.
+  workerd: true
 
-minimumReleaseAgeExclude:
-  - '@pierre/diffs@1.6.1'
-  - '@pierre/highlights@0.2.0'
-  - '@pierre/theming@1.0.2'
+peerDependencyRules:
+  allowedVersions:
+    # Optional, and only imported under `react({ compiler: true })`, which the
+    # app doesn't set. blume pins 0.145 and pnpm shares that copy.
+    '@vitejs/plugin-react>oxc-transform-react': '0.145'

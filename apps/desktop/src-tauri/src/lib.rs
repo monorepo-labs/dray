@@ -25,18 +25,18 @@ pub mod apps;
 pub mod attachments;
 pub mod auto_continue;
 pub mod binpath;
-#[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+#[cfg(feature = "cef")]
 #[path = "cef/cef.rs"]
 pub mod cef;
 // Compiled without the feature too: it needs nothing of CEF's, and that is
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
-#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
+#[cfg(feature = "desktop")]
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
-#[cfg(all(feature = "desktop", target_os = "linux"))]
+#[cfg(all(feature = "desktop", any(target_os = "linux", windows)))]
 mod island;
-#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
+#[cfg(feature = "desktop")]
 mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
@@ -48,6 +48,7 @@ pub mod headless;
 #[cfg_attr(not(any(feature = "cef", feature = "serve")), allow(dead_code))]
 pub mod recording;
 mod local_servers;
+pub mod platform;
 pub mod docs;
 pub mod download;
 #[path = "events/events.rs"]
@@ -71,6 +72,8 @@ pub mod drafts;
 pub mod projects;
 pub mod push;
 pub mod remote_reports;
+pub mod remote_asks;
+pub mod secrets;
 pub mod held_flags;
 pub mod routines;
 #[cfg(feature = "desktop")]
@@ -105,6 +108,7 @@ pub mod servers;
 pub mod session;
 pub mod share;
 pub mod tunnel;
+mod netwatch;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod ssh;
 pub mod settings;
@@ -232,6 +236,14 @@ async fn send_msg(
     // composer. `None` for everything else the composer sends.
     base_ref: Option<&str>,
     is_new_session: bool,
+    // Issues a task is started *for*, from the issues page: named here so the
+    // task is filed under them, where a `#` tag in the text only mentions.
+    issue_ids: Option<Vec<String>>,
+    // Where the reader typed it, handed to the agent beside the prompt. Absent
+    // from a client older than the tag, and from a button's prompt.
+    device: Option<session::Device>,
+    // The client's clock with its offset, told to a bot alone.
+    sent_at: Option<String>,
     sink: Sink,
 ) -> Result<SendOutcome, Fail> {
     // The tolerant `Deserialize` reads a name this build doesn't know as
@@ -256,10 +268,27 @@ async fn send_msg(
     }
 
     // A draft keeps its base as written, a session id among the spellings, so
-    // it is resolved here the way `dray draft start` resolves it.
-    let base_ref = match base_ref {
+    // it is resolved here the way `dray draft start` resolves it. The worktree
+    // branch picker sends its branch here too, so the two follow one set of
+    // rules.
+    let base = match base_ref {
         Some(base) if is_new_session => Some(orchestration::resolve_base(base, cwd).await?),
         _ => None,
+    };
+
+    // A bot's chat runs in its folder, its tasks elsewhere: only the chat is
+    // told the time, a bot being the one that keeps track of the reader's day.
+    let origin = match device {
+        Some(device) => {
+            let dir = match is_new_session {
+                true => None,
+                false => store::get_session_index_item(session_id).await.ok().flatten().map(|i| i.cwd),
+            };
+            let in_chat = bots::bot_at(dir.as_deref().unwrap_or(cwd)).await.is_some();
+            let sent_at = sent_at.as_deref().filter(|_| in_chat);
+            Some(session::Origin::new(device, sent_at, chrono::Local::now().date_naive()))
+        }
+        None => None,
     };
 
     let outcome = manager()
@@ -267,11 +296,10 @@ async fn send_msg(
             session_id,
             prompt,
             &attachment_paths,
-            // Nothing named, ever: the app tags its issues in the prompt
-            // text, the composer's `#` picker being the only route, so there is
-            // one rule on this side of the bridge. `--issue` on the CLI is the
-            // other caller, and it names them because a flag is not prose.
-            &[],
+            // Empty from the composer, which tags its issues in the prompt
+            // text. The issues page names the one it starts a task for, as
+            // `--issue` on the CLI does, since a start is not a mention.
+            issue_ids.as_deref().unwrap_or_default(),
             harness,
             model,
             effort,
@@ -281,11 +309,7 @@ async fn send_msg(
             branch,
             use_worktree,
             worktree_name,
-            // The composer offers no base ref of its own: a worktree session
-            // created there is one the reader is starting fresh, and the picker
-            // hides the branch list in worktree mode because `-w` would not
-            // honour it. Only a draft carrying one hands it through.
-            base_ref.as_deref(),
+            base.as_ref(),
             is_new_session,
             // The composer never has a parent, and its prompts are the user's
             // own; only the orchestration socket sets either — or hides one.
@@ -293,10 +317,14 @@ async fn send_msg(
             false,
             None,
             None,
+            origin,
             None,
             &sink,
         )
         .await?;
+    if !analytics::client_counts() {
+        analytics::message_sent(session_id.to_string());
+    }
     // The new entry rides back to the caller alone, so every other client — the
     // app beside an Island or a phone that started it — hears of it as `dray new`'s
     // sessions are heard of. The caller's own copy replaces itself.
@@ -304,6 +332,124 @@ async fn send_msg(
         sink.emit(orchestration::SESSION_CREATED, &snap.index_item).ok();
     }
     Ok(outcome)
+}
+
+/// Starts a session on a pull request's own branch, from the pull requests
+/// page, in a tree Dray checks out on the head so the agent's push updates that
+/// PR. With `bot`, it is that bot's task instead: hidden under its chat, on
+/// the chat's own agent and picks, reporting back like a task the bot started,
+/// and the bot is told the reader started it.
+///
+/// Its own command rather than a field on `send_msg`, so a server older than
+/// the page answers `unknown command` before anything is made, instead of
+/// ignoring the head and forking from the default branch.
+#[cfg_attr(feature = "desktop", tauri::command)]
+#[allow(clippy::too_many_arguments)]
+async fn start_pr_session(
+    session_id: String,
+    prompt: String,
+    harness: Harness,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    cwd: String,
+    pr_head: git::PrHead,
+    pr_number: u64,
+    bot: Option<String>,
+    sink: Sink,
+) -> Result<store::SessionIndexItem, Fail> {
+    if !harness.names_a_cli() {
+        fail!("invalid harness");
+    }
+    if !analytics::client_counts() {
+        analytics::track_active_day();
+    }
+
+    let (parent, harness, model, effort, permission_mode, fast) = match bot.as_deref() {
+        Some(key) => {
+            let bot = bots::find_bot(key).await?;
+            let Some(chat) = bots::chat_of(&bot).await else {
+                fail!("{} has no chat yet. Write to it once, then send it the pull request.", bot.name);
+            };
+            // A task inherits its bot's agent and picks, as one the bot starts
+            // with `dray session new` does.
+            (Some(chat.session_id), chat.harness, chat.model, chat.effort, chat.permission_mode, chat.fast)
+        }
+        None => (None, harness, model, effort, permission_mode, fast),
+    };
+
+    // Ours where a task of this checkout already recorded the branch: its
+    // unpushed commits are work to carry on from, not a stale copy.
+    let mut pr_head = pr_head;
+    pr_head.ours = store::read_index()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .any(|i| i.project_path == cwd && i.branch.as_deref() == Some(pr_head.branch.as_str()));
+    let held = git::branch_checked_out(&cwd, &pr_head.branch).await;
+    let remote = git::remote_for(&cwd, &pr_head.repo).await.unwrap_or_else(|| "origin".into());
+    let prompt = with_push_line(&prompt, &pr_head.branch, &remote, held);
+
+    let outcome = manager()
+        .send_msg(
+            &session_id,
+            &prompt,
+            &[],
+            &[],
+            harness,
+            model,
+            effort,
+            permission_mode,
+            fast,
+            &cwd,
+            None,
+            true,
+            None,
+            Some(&git::Base::Pr(pr_head)),
+            true,
+            parent.as_deref(),
+            parent.is_some(),
+            None,
+            None,
+            None,
+            None,
+            &sink,
+        )
+        .await?;
+    let Some(item) = outcome.snapshot.map(|s| s.index_item) else {
+        fail!("the session started but returned no index entry");
+    };
+    sink.emit(orchestration::SESSION_CREATED, &item).ok();
+    if parent.is_some() {
+        // Named by number alone: the note is a list the bot trusts, and the
+        // title, read off the prompt's first line, carries the PR's own, which
+        // is the PR author's words. So would the branch.
+        let named = store::SessionIndexItem { title: format!("PR #{pr_number}"), ..item.clone() };
+        bots::note_since(&named, format!("the user started it on PR #{pr_number} from the pull requests page"), None, &sink)
+            .await;
+    }
+    Ok(item)
+}
+
+/// The page's prompt with how this task pushes put after its first paragraph,
+/// the PR's header. Said here, not by the page: only the server knows whether
+/// another tree holds the branch, which leaves this one detached
+/// ([`git::PrTree::Detached`]) and pushing by `HEAD:<branch>`.
+fn with_push_line(prompt: &str, branch: &str, remote: &str, held: bool) -> String {
+    let line = if held {
+        format!(
+            "Another task has {branch} checked out, so this tree is detached at its tip. Commit here and push with \
+             `git push {remote} HEAD:{branch}` to update the pull request; do not open another. If the push is refused, \
+             fetch and rebase onto {remote}/{branch} first."
+        )
+    } else {
+        format!("This tree is on {branch}, the pull request's own branch. Push to it to update the pull request; do not open another.")
+    };
+    match prompt.split_once("\n\n") {
+        Some((header, rest)) => format!("{header}\n\n{line}\n\n{rest}"),
+        None => format!("{prompt}\n\n{line}"),
+    }
 }
 
 /// Which agents can actually be run on this machine, and what to say about
@@ -329,7 +475,10 @@ async fn agent_availability() -> Vec<AgentAvailability> {
             available: binpath::agent_available(harness).await,
             label: harness.label().to_string(),
             reason,
-            install_command: curable.then(|| harness.install_command().to_string()),
+            // None where there is no command, as for fx on Windows: the notice
+            // then offers the docs alone rather than copying nothing.
+            install_command: (curable && !harness.install_command().is_empty())
+                .then(|| harness.install_command().to_string()),
             docs_url: curable.then(|| harness.docs_url().to_string()),
             login_command: harness.login_command().to_string(),
             login_hint: harness.login_hint().map(str::to_string),
@@ -405,6 +554,7 @@ async fn list_models(sink: Sink, harness: Option<harness::Harness>) -> Vec<Model
             harness::fx::models::list().await
         }
         harness::Harness::Grok => harness::grok::models::list().await,
+        harness::Harness::OpenCode => harness::opencode::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
         harness::Harness::ClaudeCode => harness::claude_code::models::list(&sink).await,
         other => models::models_for(other),
@@ -425,6 +575,7 @@ async fn refresh_models() {
     // grok's is one `initialize` on a throwaway child, so the next read simply
     // asks again.
     harness::grok::models::forget();
+    harness::opencode::models::forget();
     harness::codex::models::forget();
     harness::claude_code::models::forget();
 }
@@ -517,6 +668,8 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
         // probe that has not landed: the menu stays shut rather than claiming
         // grok has no commands. See `harness/grok/commands.rs`.
         Harness::Grok => harness::grok::commands::list_commands(cwd).await?,
+        // grok's shape: the wire's list, cached once a session opens.
+        Harness::OpenCode => harness::opencode::commands::list_commands(cwd).await?,
         Harness::Other(_) => Vec::new(),
     })
 }
@@ -698,7 +851,7 @@ async fn delete_session(
         },
         false => Vec::new(),
     };
-    let deleted = manager().delete(session_id, !keeps).await;
+    let deleted = manager().delete(session_id, !keeps, &sink).await;
     // A delete that failed before the entry went leaves the parent live, and
     // its children back under it. One that failed after keeps the adoption.
     let survived = deleted.is_err() && store::get_session_index_item(session_id).await.ok().flatten().is_some();
@@ -727,18 +880,30 @@ async fn delete_session(
 /// asked for rather than taken on trust.
 ///
 /// Returns what the fork replays — the parent's log, already copied — so the
-/// frontend can open it without a second read.
+/// frontend can open it without a second read. Other clients hear of it on
+/// `session_created`, as of any session they did not make.
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn fork_session(
     session_id: &str,
     fork_id: &str,
     worktree: bool,
+    sink: Sink,
 ) -> Result<SessionSnapshot, Fail> {
     let snapshot = manager().fork(session_id, fork_id, worktree).await?;
+    sink.emit(orchestration::SESSION_CREATED, &snapshot.index_item).ok();
 
     analytics::feature_used("fork");
 
     Ok(snapshot)
+}
+
+/// Cuts a session loose from its parent, and says so to every client.
+async fn detach_session(session_id: &str, sink: Sink) -> Result<Option<SessionIndexItem>, Fail> {
+    let item = store::detach_session(session_id).await?;
+    if let Some(item) = &item {
+        sink.emit(orchestration::SESSION_CHANGED, item).ok();
+    }
+    Ok(item)
 }
 
 /// Stops the in-flight turn without killing the session — the CLI aborts its
@@ -763,6 +928,30 @@ async fn stop_task(
     task_id: &str,
 ) -> Result<(), Fail> {
     Ok(manager().stop_task(session_id, task_id).await?)
+}
+
+/// Moves a task onto another agent ahead of the send that picked it (#1414).
+/// Its own command so a server from before the switch answers `unknown
+/// command` and the app sends nothing, rather than the old agent answering.
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn switch_agent(
+    session_id: &str,
+    harness: Harness,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    sink: Sink,
+) -> Result<(), Fail> {
+    let item = store::get_session_index_item(session_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no session {session_id}"))?;
+    if item.harness != harness {
+        session::runnable_model_spec(harness, &model).await?;
+        let pick = store::AgentPick { model, effort, permission_mode, fast };
+        manager().switch_agent(&item.session_id, harness, pick, &sink).await?;
+    }
+    Ok(())
 }
 
 /// Takes back the newest prompt still held for a running turn, returning its
@@ -820,9 +1009,12 @@ async fn mark_session_read(
     sink: Sink,
 ) -> Result<Option<SessionStatus>, Fail> {
     let next = manager().mark_read(session_id, read).await?;
-    // The island and the phone keep their own unread marks and hear of a read
-    // only here. Unread is not echoed: the app's listener reads `completed` as a
-    // turn finishing and would announce it.
+    // Unread rides the entry, never `session_status`: every listener there
+    // reads `completed` as a turn finishing and would announce one.
+    if next == Some(SessionStatus::Completed) {
+        orchestration::announce_change(&[session_id.to_string()], &sink).await;
+    }
+    // The island keeps its own unread marks and hears of a read only here.
     if next == Some(SessionStatus::Idle) {
         let event = session::SessionStatusEvent {
             session_id: session_id.to_string(),
@@ -849,8 +1041,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Saves on `RunEvent::Exit`, which plugins see before the callback
-        // below ends the process with `_exit`.
-        .plugin(tauri_plugin_window_state::Builder::new().build())
+        // below ends the process with `_exit`. On a Mac `setup` restores the
+        // main window itself, to decide on full screen.
+        .plugin({
+            let state = tauri_plugin_window_state::Builder::new();
+            #[cfg(target_os = "macos")]
+            let state = state.skip_initial_state("main");
+            state.build()
+        })
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
         .manage(transcription::TranscriptionState::default())
@@ -885,7 +1083,7 @@ pub fn run() {
             }
             // Chromium first: it patches NSApp and starts its pump, and every
             // window already exists here for it to parent a view into.
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::init(app.handle());
             // Mac only: X11 reports a two-finger scroll with no phases, so a
             // swipe's start and lift could only be guessed from timing, the
@@ -898,19 +1096,40 @@ pub fn run() {
             // `WindowControls` draws its buttons. tauri.linux.conf.json already
             // says so; this is for the window-state plugin, which restores a
             // `decorated` flag saved by a build that still had the bar.
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", windows))]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
                 let _ = window.set_decorations(false);
             }
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            // The window opens in full screen on the very first launch (no
+            // state file yet) and after quitting in full screen. The plugin
+            // saves the full-screen frame as the window's size, so restoring
+            // it left a screen-sized window behind full screen; the configured
+            // size, centred, is what leaving full screen gives instead.
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
+                let full = app.path().app_config_dir().is_ok_and(|dir| {
+                    match std::fs::read(dir.join(app.handle().filename())) {
+                        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+                        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                            .is_ok_and(|v| v["main"]["fullscreen"] == true),
+                    }
+                });
+                if full {
+                    let frame = StateFlags::SIZE | StateFlags::POSITION | StateFlags::FULLSCREEN;
+                    let _ = window.restore_state(StateFlags::all() - frame);
+                    let _ = window.set_fullscreen(true);
+                } else {
+                    let _ = window.restore_state(StateFlags::all());
+                }
+            }
             cli::install();
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
             transcription::serve_host(app.handle());
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
             transcription::stop_on_sleep(app.handle());
 
             // Sessions live in the background server launchd runs from this
@@ -1035,37 +1254,37 @@ pub fn run() {
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.
             files::read_file,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_open,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_tabs,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_history,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_activate,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_close,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_move,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_nav,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_layout,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_pins,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_shutter_ready,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_devtools,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_pick,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             cef::browser_snapshot,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             chromium::chromium_status,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             chromium::chromium_download,
-            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            #[cfg(feature = "cef")]
             chromium::chromium_remove,
             notifications::notify_session,
             notifications::set_window_urgent,
@@ -1085,6 +1304,7 @@ pub fn run() {
             apps::open_login_terminal,
             accounts::run_agent_login,
             agent_updates::update_agent_in_terminal,
+            agent_updates::install_agent_in_terminal,
             transcription::transcription_status,
             transcription::download_transcription_model,
             transcription::cancel_transcription_download,
@@ -1109,7 +1329,7 @@ pub fn run() {
             // kill still gets past this — see `Known issues`.
             if matches!(event, tauri::RunEvent::Exit) {
                 transcription::audio::restore_other_audio();
-                #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+                #[cfg(feature = "cef")]
                 cef::save_now();
                 // Tao ends the process with `process::exit`, which runs the C
                 // atexit chain — and ggml-metal's global device registry frees
@@ -1125,4 +1345,23 @@ pub fn run() {
                 unsafe { libc::_exit(0) }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_push_line;
+
+    /// The line lands after the PR's header, and says how this tree pushes.
+    #[test]
+    fn the_push_line_follows_the_header() {
+        let prompt = "Pull request #7 \"Fix\" — url\nBranch fix into main.\n\n`gh pr view 7 --comments` has the rest.\n\nDo it.";
+        let own = with_push_line(prompt, "fix", "upstream", false);
+        assert!(own.starts_with("Pull request #7"));
+        assert!(own.contains("into main.\n\nThis tree is on fix, the pull request's own branch."));
+        assert!(own.ends_with("Do it."));
+
+        let detached = with_push_line(prompt, "fix", "upstream", true);
+        assert!(detached.contains("`git push upstream HEAD:fix`"), "{detached}");
+        assert!(!detached.contains("This tree is on fix"));
+    }
 }

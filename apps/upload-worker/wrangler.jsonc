@@ -1,0 +1,20 @@
+// `dray upload`'s endpoint (#1479). README.md says how to deploy it.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dray-upload",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "routes": [{ "pattern": "upload.drayhq.com", "custom_domain": true }],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "dray-uploads" }],
+  "vars": {
+    // The bucket's own public domain, set on the bucket in the dashboard.
+    "PUBLIC_URL": "https://img.drayhq.com"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "LIMITER", "class_name": "Limiter" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Limiter"] }],
+  // Off on purpose: invocation logs record request headers, and every request
+  // here carries a GitHub token.
+  "observability": { "enabled": false }
+}

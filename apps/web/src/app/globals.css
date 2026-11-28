@@ -88,6 +88,8 @@
   --color-surface-thumb: color-mix(in oklab, oklch(1 0 0) 16%, var(--color-card));
   /* The picker's arrow-key highlight, a white veil rather than a fill. */
   --color-veil-strong: oklch(1 0 0 / 11.5%);
+  /* Send's fill: `--primary` in every palette but Default light. */
+  --color-send: var(--color-primary);
 
   /* Everything in the transcript is one size; weight and colour carry
      hierarchy. Only code and tool output scale separately. */
@@ -124,7 +126,7 @@ html {
   color-scheme: dark;
   scroll-behavior: smooth;
   /* The app's titlebar row, which spans every column of the window frame. */
-  --titlebar-h: 40px;
+  --titlebar-h: 36px;
 }
 
 body {
@@ -159,6 +161,11 @@ body {
      root against the site's card: declared on the window, it mixes from
      whichever card the window's palette names. */
   --color-surface-thumb: color-mix(in oklab, oklch(1 0 0) 16%, var(--color-card));
+  /* The composer and the merge card draw their edge as a white ring, so the
+     composer's border goes. */
+  --color-edge-surface: transparent;
+  --shadow-composer: 0 0 0 1px oklch(1 0 0 / 8%);
+  --shadow-raised-card: 0 0 0 1px oklch(1 0 0 / 8%);
 }
 
 /* Both translucent over the page, painted as one fill each so a sheet is
@@ -246,14 +253,198 @@ body {
   --color-surface-thumb: oklch(0.99 0 0);
 }
 
+/* The light window is the app's Dray light: frame and sheet one white, so
+   the shadows alone draw the card, copied from the app's `[data-mode="light"]`
+   block. The sheet wears the composer's 6% ring and three short drops, plus a
+   soft drop along its top; the lit tab wears the same soft drop, the drops,
+   sides matched to the sheet's ring, and a 12% line on top. */
+:root[data-scheme="light"] [data-home] [data-app-window] {
+  --color-surface-frame: #ffffff;
+  --color-surface-sheet: #ffffff;
+  /* The composer is white on the white sheet, drawn by its shadow: a hairline
+     ring over `--shadow-surface` with the wide stop pulled in. The merge card
+     wears the same ring over the card's own softer drop. Send keeps the
+     palette's blue where every other filled button is near-black. */
+  --color-composer: #ffffff;
+  --color-send: oklch(0.65 0.17 250);
+  --shadow-composer:
+    0 0 0 1px oklch(0 0 0 / 6%), 0 1px 1px oklch(0 0 0 / 8%), 0 1px 1px oklch(0 0 0 / 10%), 0 1px 2px oklch(0 0 0 / 8%);
+  --shadow-raised-card:
+    0 0 0 1px oklch(0 0 0 / 6%), 0 1px 1px oklch(0 0 1 / 4%), 0 1px 1px oklch(0 0 0 / 6%), 0 1px 4px oklch(0 0 0 / 4%);
+  --sheet-ring: 0 0 0 1px oklch(0 0 0 / 6%);
+  --sheet-foot: 0 1px 1px oklch(0 0 0 / 8%), 0 1px 1px oklch(0 0 0 / 10%), 0 1px 2px oklch(0 0 0 / 8%);
+  --sheet-glow: 0 1px 3px oklch(0 0 0 / 10%);
+  --tab-shadow: drop-shadow(0 0 1px oklch(0 0 0 / 5%)) drop-shadow(0 0 2px oklch(0 0 0 / 5%));
+  --tab-drops: 0 1px 1px -1px oklch(0 0 0 / 8%), 0 1px 1px -1px oklch(0 0 0 / 10%), 0 1px 2px -1px oklch(0 0 0 / 8%);
+  --tab-side-out: color-mix(in srgb, var(--color-surface-frame), black 8%);
+  --tab-side-in: color-mix(in srgb, var(--color-surface-frame), black 13%);
+  --tab-sides: linear-gradient(to right, var(--tab-side-out) 0.5px, var(--tab-side-in) 0.5px 1px, transparent 1px calc(100% - 1px), var(--tab-side-in) calc(100% - 1px) calc(100% - 0.5px), var(--tab-side-out) calc(100% - 0.5px)) border-box;
+
+  .tab-strip {
+    --tab-edge-top: oklch(0 0 0 / 12%);
+    --tab-edge-side: oklch(0 0 0 / 6%);
+    --tab-edge-foot: oklch(0 0 0 / 6%);
+    --tab-under: linear-gradient(var(--color-surface-frame) 0 0) border-box;
+  }
+
+  /* The app's sidebar rows are lighter on the white frame: `#ededed` lit,
+     half of it on hover. */
+  [data-sidebar] {
+    --color-sidebar-accent: #ededed;
+  }
+}
+
+/* The sheet's drops, as the app draws them (`App.css`): two boxes 8px past the
+   sheet's, so each mask covers its shadow too. The top one carries the soft
+   drop along the top edge alone; the other the composer's drops everywhere
+   but above the ring. */
+.sheet-glow,
+.sheet-foot {
+  position: absolute;
+  inset: -8px;
+  z-index: 21;
+  pointer-events: none;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border-radius: 8px;
+  }
+}
+
+.sheet-glow {
+  mask-image: linear-gradient(black 12%, transparent 22%),
+    linear-gradient(to right, transparent 7px, black 7px calc(100% - 7px), transparent calc(100% - 7px));
+  mask-composite: intersect;
+
+  &::before {
+    --tl: var(--sheet-tl, 8px);
+    inset: var(--glow-top, 7px) 7px 7px;
+    border-radius: 9px;
+    border-top-left-radius: calc(var(--tl) + min(var(--tl), 1px));
+    box-shadow: var(--sheet-glow, none);
+  }
+}
+
+.sheet-foot {
+  mask-image: linear-gradient(transparent 7px, black 7px), linear-gradient(to right, black 7px, transparent 7px);
+  mask-composite: add;
+
+  &::before {
+    top: var(--foot-top, 8px);
+    border-top-left-radius: var(--sheet-tl, 8px);
+    box-shadow: var(--sheet-foot, none);
+  }
+}
+
+/* A tab in the titlebar strip, drawn the way the app draws it, which is a
+   browser's: flat on the frame at rest, a pill on hover, and lit, a piece of
+   the sheet under a rounded top with a concave flare at each foot. */
+.tab-strip {
+  --tab-r: 10px;
+  --tab-under: linear-gradient(var(--color-surface-sheet) 0 0) border-box,
+    linear-gradient(var(--color-background) 0 0) border-box;
+  --tab-edge-top: var(--color-hairline);
+  --tab-edge-side: var(--color-hairline);
+  --tab-edge-foot: var(--color-hairline);
+  border: 1px solid transparent;
+  border-bottom-width: 0;
+  /* Down to the strip's floor; this lifts the label onto the strip's centre
+     line with its other controls. */
+  padding-bottom: 3px;
+  isolation: isolate;
+}
+
+/* Dark lights the edge from above, gone before the feet. Every page but a
+   light homepage is dark. */
+:root:not([data-scheme="light"]) .tab-strip,
+[data-scheme="dark"] .tab-strip {
+  --tab-edge-top: oklch(1 0 0 / 18%);
+  --tab-edge-side: oklch(1 0 0 / 8%);
+  --tab-edge-foot: transparent;
+}
+
+.tab-strip::before {
+  content: "";
+  position: absolute;
+  /* 28px, the strip's other hover pills, 4px clear of the floor. */
+  inset: 1px 1px 4px;
+  z-index: -1;
+  border-radius: calc(var(--tab-r) - 2px);
+  pointer-events: none;
+  transition: background-color 150ms ease-out;
+}
+
+.tab-strip:not([data-lit]):hover::before {
+  background: color-mix(in oklab, var(--color-sidebar-accent) 50%, transparent);
+}
+
+.tab-strip[data-lit] {
+  z-index: 10;
+  filter: var(--tab-shadow, none);
+  box-shadow: var(--tab-drops, none);
+  border-radius: var(--tab-r) var(--tab-r) 0 0;
+  background:
+    var(--tab-sides, linear-gradient(transparent 0 0)),
+    linear-gradient(var(--color-surface-sheet) 0 0) padding-box,
+    linear-gradient(var(--color-background) 0 0) padding-box,
+    linear-gradient(var(--tab-edge-top), var(--tab-edge-side) 45%, var(--tab-edge-foot) 72%) border-box,
+    var(--tab-under);
+}
+
+/* The flares: a square outside each foot holding a quarter circle of frame,
+   edged in the hairline, the rest the tab's fill. */
+.tab-strip[data-lit]::before,
+.tab-strip[data-lit]::after {
+  content: "";
+  position: absolute;
+  inset: auto;
+  bottom: 0;
+  z-index: 0;
+  width: var(--tab-r);
+  height: var(--tab-r);
+  border-radius: 0;
+  pointer-events: none;
+  --edge: transparent calc(var(--tab-r) - 1.5px), var(--tab-edge-foot) calc(var(--tab-r) - 1px),
+    var(--tab-edge-foot) calc(var(--tab-r) - 0.5px), var(--color-surface-sheet) var(--tab-r);
+  --floor: transparent calc(var(--tab-r) - 0.5px), var(--color-background) var(--tab-r);
+}
+
+.tab-strip[data-lit]::before {
+  right: 100%;
+  background:
+    radial-gradient(circle at 0 0, var(--edge)),
+    radial-gradient(circle at 0 0, var(--floor));
+}
+
+.tab-strip[data-lit]::after {
+  left: 100%;
+  background:
+    radial-gradient(circle at 100% 0, var(--edge)),
+    radial-gradient(circle at 100% 0, var(--floor));
+}
+
+/* The first tab sits on the sheet's left edge, so lit it runs straight down
+   into it: no flare that side, and the sheet squares its top-left corner. */
+[data-app-window] [data-tab-row] {
+  /* The tab's soft drop stops at its border, beside a sheet side with none. */
+  clip-path: inset(0 0 0 3px);
+
+  > .tab-strip[data-lit]:first-child::before {
+    --tab-r: 0px;
+  }
+}
+
+[data-app-window]:has([data-tab-row] > .tab-strip[data-lit]:first-child) [data-main-sheet] {
+  --sheet-tl: 0px;
+  --glow-top: 8px;
+  --foot-top: 6px;
+}
+
 /* The machines drawing's dark palette mapped to a light one, value for
    value, so the drawing keeps one set of fills. CSS outranks a
    presentation attribute, which is what lets a selector repaint it. */
-/* The light window's chat and side panel sit on white, a step up from the
-   tinted frame and sidebar around them. */
-:root[data-scheme="light"] [data-home] .app-sheet {
-  background: #FFFFFF;
-}
 
 :root[data-scheme="light"] [data-home] [data-art="everywhere"] {
   [fill="#000000"] { fill: #fff; }

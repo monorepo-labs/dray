@@ -197,7 +197,7 @@ fn is_env_name(key: &str) -> bool {
 /// reads as "skip" — the safe direction.
 async fn auth_states() -> BTreeMap<String, String> {
     let bin = crate::binpath::fx().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
     command.args(["mcp", "list"]);
     if let Some(home) = std::env::home_dir() {
         command.current_dir(home);

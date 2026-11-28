@@ -1,6 +1,6 @@
 [package]
 name = "dray"
-version = "0.15.0"
+version = "0.20.4"
 edition = "2021"
 license = "Apache-2.0"
 description = "Run and manage Dray sessions from the command line."
@@ -16,6 +16,18 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde_json = "1"
 qrcode = { version = "0.14.1", default-features = false }
+
+# Who serves the orchestration pipe (main.rs `served_by_this_user`), and the
+# console's raw mode for `dray server setup`'s picker. Already in the lock.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Console",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+]
 
 [profile.release]
 strip = true

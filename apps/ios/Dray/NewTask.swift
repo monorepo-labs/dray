@@ -39,6 +39,13 @@ final class NewTask {
     var worktree = UserDefaults.standard.bool(forKey: "new.worktree") {
         didSet { UserDefaults.standard.set(worktree, forKey: "new.worktree") }
     }
+    /// The branch a worktree starts on, held with the checkout it was picked in so it
+    /// never follows the reader to another project; `nil` is the default branch.
+    private var basePick: (place: String, branch: String)?
+    var worktreeBase: String? {
+        get { basePick?.place == place ? basePick?.branch : nil }
+        set { basePick = newValue.map { (place, $0) } }
+    }
     private var modelPicks = Prefs.map("models")
     private var effortPicks = Prefs.map("efforts")
     private(set) var modelId = ""
@@ -87,6 +94,8 @@ final class NewTask {
         let named = held.filter { $0.name == project }
         return named.first { $0.path == projectPath }?.path ?? named.first?.path
     }
+    /// The checkout the picks speak for.
+    var place: String { "\(server?.uuidString ?? "")|\(cwd ?? "")" }
 
     /// The project menu: a name per repo, split by folder where the server holds two of that name.
     var projectChoices: [ProjectChoice] {
@@ -139,6 +148,8 @@ final class NewTask {
         if let p = draft.permissionMode { stance = p }
         if let f = draft.fast { fast = f }
         if let w = draft.useWorktree { worktree = w }
+        // Held with the draft's own folder, not whatever `cwd` resolves to before the server's projects land.
+        basePick = draft.base.map { ("\(server.uuidString)|\(draft.projectPath ?? cwd ?? "")", $0) }
     }
 
     private var modelsKey: String { "\(server?.uuidString ?? "")|\(harness)" }
@@ -209,6 +220,7 @@ final class NewTask {
         let opened = draftId
         let id = UUID().uuidString.lowercased()
         let sent = text
+        let base = basePick
         do {
             let outcome: SendOutcome = try await store.call(server, "send_msg", [
                 "sessionId": .string(id),
@@ -223,11 +235,16 @@ final class NewTask {
                 "branch": nil,
                 "useWorktree": .bool(worktree && bot == nil),
                 "worktreeName": nil,
-                "baseRef": nil,
+                // The server resolves it as `dray session new --base` does.
+                "baseRef": JSON(worktree && bot == nil ? worktreeBase : nil),
                 "isNewSession": true,
+                "device": .string(sendingDevice),
+                "sentAt": sentAt(),
             ])
             if let item = outcome.snapshot { store.created(server, item) }
             bot = nil
+            // Only the pick this start used: another may have been made while it was out.
+            if basePick?.place == base?.place && basePick?.branch == base?.branch { basePick = nil }
             await dropDraft(opened)
             // Words added while the start was out were never sent, so they stay.
             if text == sent { text = "" }
@@ -262,6 +279,7 @@ final class NewTask {
             "permissionMode": .string(Picks.stanceFor(harness, stance)),
             "fast": .bool(fast && Picks.offersFast(harness, model)),
             "useWorktree": .bool(worktree),
+            "base": JSON(worktree ? worktreeBase : nil),
         ]
         do {
             let _: JSON = try await store.call(server, "create_draft", ["draft": .object(draft)])

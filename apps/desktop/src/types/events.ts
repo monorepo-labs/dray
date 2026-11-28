@@ -366,7 +366,12 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  * notice says it did. The session layer records it, so the composer
  * stops naming the model the CLI left.
  */
-model: ModelId | null, } | { "type": "task_started", taskId: string, title: string, } | { "type": "merge_card", taskId: string, title: string, 
+model: ModelId | null, } | { "type": "agent_switched", from: Harness, to: Harness, 
+/**
+ * `to` picks its own earlier conversation in this session back up,
+ * so it is handed only what happened since it left.
+ */
+resumed: boolean, } | { "type": "task_started", taskId: string, title: string, } | { "type": "merge_card", taskId: string, title: string, 
 /**
  * The repo root, what the sidebar's PR marks are keyed by. The task's
  * machine's path where `machine` is set.
@@ -381,11 +386,68 @@ machine?: string,
 /**
  * `owner/name`, set with `machine`.
  */
-repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+repo?: string, } | { "type": "issue_card", title?: string, 
 /**
- * The `user_message` event reacted to, always in this same session.
+ * `owner/name`.
  */
-messageId: string, emoji: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+repo: string, issues: Array<IssueCardRow>, } | { "type": "issue_approved", cardId: string, number: number, } | { "type": "secret_requested", requestId: string, name: string, label?: string, reason: string, url?: string, 
+/**
+ * A secret by this name is already saved on the machine, so the
+ * card offers it in one click beside pasting a new one.
+ */
+saved?: boolean, 
+/**
+ * Every secret saved on the machine that answers, so the card can
+ * offer another than the one named.
+ */
+savedNames?: Array<string>, 
+/**
+ * The saved one the card offers first: `name` itself, the one picked
+ * for it before, or the nearest by its words (GITHUB_TOKEN for
+ * GH_TOKEN). Absent where none comes close.
+ */
+closest?: string, 
+/**
+ * The task's own record of asking its bot, whose chat on another
+ * machine draws the card and whose machine keeps the secrets. Draws
+ * a line here, never a card.
+ */
+bot?: boolean, 
+/**
+ * Set on the bot's side: the card answers this task on another
+ * machine, which gets the value as a one-time file there.
+ */
+task?: SecretTask, } | { "type": "secret_answered", requestId: string, name: string, outcome: SecretOutcome, 
+/**
+ * Kept on this machine under `name` rather than deleted after a day.
+ */
+kept?: boolean, 
+/**
+ * Later requests for `name` skip the card and get the saved file.
+ */
+always?: boolean, 
+/**
+ * No card was shown: a secret agents may use without asking answered on its own.
+ */
+auto?: boolean, 
+/**
+ * The task on another machine it went to.
+ */
+task?: SecretTask, 
+/**
+ * The saved secret handed over, where it is saved under another name.
+ */
+from?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "reaction", 
+/**
+ * The event reacted to, always in this same session: a `user_message`,
+ * or with `by_user` an `assistant_text`.
+ */
+messageId: string, emoji: string, 
+/**
+ * The user reacted, not the agent. A build from before this reads the
+ * line as a bot's reaction on a message it never finds, and draws none.
+ */
+byUser?: boolean, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -411,14 +473,23 @@ trigger: string | null, preTokens: number | null, postTokens: number | null, dur
 export type AgentUpdate = { harness: Harness, label: string, current: string, latest: string, };
 
 /**
+ * What Settings' analytics switch draws: the effective state, not the stored
+ * one, so a run `DRAY_NO_ANALYTICS` turned off never shows a switch sitting on.
+ */
+export type AnalyticsSetting = { enabled: boolean, 
+/**
+ * `DRAY_NO_ANALYTICS` is set, so the switch cannot move.
+ */
+locked: boolean, };
+
+/**
  * What is on disk.
  */
 export type AppSettings = { 
 /**
- * The old in-app analytics switch, **read by nothing**: Settings offers no
- * opt-out any more, so a stored `false` is ignored and `DRAY_NO_ANALYTICS`
- * is the only way off. Kept so an older build sharing `~/.dray` still finds
- * the field it reads, and so a rewrite here carries its value through.
+ * Settings' "Share usage analytics" switch. Here because the server and
+ * `app_started` read it before any webview exists. A `false` stored
+ * before #658 took the switch away counts again.
  */
 analyticsEnabled: boolean, 
 /**
@@ -640,10 +711,16 @@ greeting?: Array<string>, };
 export type BotAvatar = { shape: string, hue: number, };
 
 /**
- * A bot chat's inbox row: its last reply, and the replies since the reader
- * last wrote.
+ * A bot chat's inbox row: its newest line — the reader's own message, the
+ * bot's reaction to it, or its last reply — and the replies since the reader
+ * last wrote. Worded here so every client draws it as it is.
  */
-export type BotPreview = { text: string | null, replies: number, };
+export type BotPreview = { text: string | null, replies: number, 
+/**
+ * `text` is already one plain line, to draw as it is. A server from
+ * before this sends the raw reply, which the client still cleans.
+ */
+plain?: boolean, };
 
 /**
  * One bot's card, as `bot_stalls` answers and `bot_stalls_changed` carries it.
@@ -675,6 +752,12 @@ export type BranchList = {
  * `None` on a detached HEAD, and for a directory that isn't a repo.
  */
 current: string | null, branches: Array<string>, 
+/**
+ * Branches a remote has and this checkout holds no local copy of, by
+ * their own name (`feature/x`, not `origin/feature/x`). Only the worktree
+ * picker offers them: a tree can start on one, a checkout cannot.
+ */
+remoteBranches: Array<string>, 
 /**
  * What a `-w` worktree forks from, resolved the way the CLI resolves it.
  * Shown in place of the branch picker in worktree mode, where the picked
@@ -863,6 +946,11 @@ export type DrayUser = { id: string, name: string,
  */
 email: string | null, username: string | null, 
 /**
+ * The GitHub login the account signed up with, which GitHub names it
+ * after where the profile has no name. Absent from a site older than it.
+ */
+githubLogin: string | null, 
+/**
  * The Google or GitHub picture, where the account has one.
  */
 image: string | null, 
@@ -1015,7 +1103,7 @@ path: string | null, };
  *
  * [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
  */
-export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok";
+export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok" | "opencode";
 
 export type ImageRef = { path: string | null, url: string | null, mimeType: string | null, };
 
@@ -1117,6 +1205,17 @@ mime: string,
  * `data:<mime>;base64,…`, ready to put in a `src` or an `href`.
  */
 dataUrl: string, bytes: number, };
+
+/**
+ * One issue on an [`IssueCard`](AgentEventPayload::IssueCard). Open or
+ * closed as a bool, never the issues page's state enum, so the logged line
+ * cannot fail a reader whose enum lacks a kind.
+ */
+export type IssueCardRow = { number: number, title: string, url: string, closed: boolean, labels: Array<IssueLabel>, 
+/**
+ * The description's opening, flattened to one paragraph.
+ */
+excerpt?: string, author?: IssuePerson, };
 
 export type IssueComment = { author: IssuePerson, body: string, createdAt: string, url: string | null, };
 
@@ -1654,7 +1753,13 @@ avatar: string | null, };
  */
 export type PrChecksState = "RUNNING" | "FAILING" | "CLEAR";
 
-export type PrComment = { author: string, 
+export type PrComment = { 
+/**
+ * GitHub's node id, unique across comments, reviews and review comments.
+ * What the pull requests page picks rows by: a review's `url` was the
+ * PR's own until reviews asked for theirs. Absent from an older server.
+ */
+id: string, author: string, 
 /**
  * The commenter's picture. `None` for an account that has none, which the
  * panel draws as their initial rather than as a gap.
@@ -1677,6 +1782,42 @@ resolved: boolean,
  * review thread or it is a new comment.
  */
 replies: Array<PrComment>, };
+
+export type PrDetail = { 
+/**
+ * The description as GitHub stores it: markdown, images as links.
+ */
+body: string, createdAt: string, authorAvatar: string | null, labels: Array<IssueLabel>, 
+/**
+ * Asked and answered, one entry per person or team.
+ */
+reviewers: Array<PrReviewer>, };
+
+/**
+ * A pull request's head as the pull requests page names it, for a session
+ * started on it: the branch, and the repository as [`repo_key`] spells it.
+ */
+export type PrHead = { branch: string, repo: string, };
+
+/**
+ * A pull request as the pull requests page lists it, beside its [`PrMark`].
+ */
+export type PrListing = { title: string, author: string, authorAvatar: string | null, updatedAt: string, additions: number, deletions: number, 
+/**
+ * Conversation comments plus inline threads, the two lists the panel
+ * draws as one timeline.
+ */
+commentCount: number, 
+/**
+ * The head branch lives in someone else's fork, so a session here can
+ * neither match it by name nor push to it.
+ */
+isCrossRepository: boolean, viewerDidAuthor: boolean, 
+/**
+ * A review is asked of the viewer and not yet given. Requests to a team
+ * the viewer is in are not counted.
+ */
+reviewRequested: boolean, };
 
 /**
  * One pull request, cut down to what a sidebar row can draw.
@@ -1721,7 +1862,12 @@ mergeable: string | null, mergeStateStatus: string | null,
  * `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
  * repo asks for no review, and on the merged half.
  */
-reviewDecision: string | null, };
+reviewDecision: string | null, 
+/**
+ * What the pull requests page draws on the row, on the open half alone.
+ * Absent from a server older than the page.
+ */
+listing?: PrListing, };
 
 /**
  * Which of the two connections a mark came from.
@@ -1732,6 +1878,26 @@ reviewDecision: string | null, };
  * closed-without-merging is not asked for.
  */
 export type PrMarkState = "OPEN" | "MERGED";
+
+export type PrReviewer = { 
+/**
+ * A login, or a team's name.
+ */
+name: string, avatar: string | null, state: ReviewerState, };
+
+/**
+ * What the pull requests page lists: the reader's open pull requests across
+ * GitHub, and the owners they can narrow it to.
+ */
+export type PrSearch = { 
+/**
+ * The reader's own login, first among the owners.
+ */
+viewer: string, 
+/**
+ * The organizations the reader belongs to, as GitHub lists them.
+ */
+orgs: Array<string>, prs: Array<SearchedPr>, };
 
 /**
  * Why there is nothing to show, when the reason is not "this branch has no PR".
@@ -1919,7 +2085,13 @@ from: MessageSender | null,
  * the boundary would put a network call — and its failure — inside the
  * flush.
  */
-issues: Array<IssueRef>, };
+issues: Array<IssueRef>, 
+/**
+ * Dray's own prompt, which nobody typed: a bot's kickoff or review, or a
+ * reaction told to the agent. No client draws it and a cancel never takes
+ * it back, as its logged event draws nothing either.
+ */
+hidden?: boolean, };
 
 /**
  * What the This Mac row draws. No token: it is asked for on Copy, and never
@@ -1934,6 +2106,8 @@ address: string | null,
  * Why this Mac is not answering, while on.
  */
 error: string | null, };
+
+export type ReviewerState = "requested" | "approved" | "changes_requested" | "commented";
 
 export type Routine = { id: string, botId: string, name: string, prompt: string, schedule: Schedule, check?: string, paused: boolean, created: string, 
 /**
@@ -1960,6 +2134,43 @@ export type SaveOutcome = "saved" | "stale";
  * kind a later build adds cannot fail an older build's read of the file.
  */
 export type Schedule = { everyMinutes?: number, at?: string, days: Array<number>, };
+
+/**
+ * One pull request the search found, with the repo it lives in.
+ */
+export type SearchedPr = { 
+/**
+ * `owner/name`, the slug `github:` keys and `gh --repo` take.
+ */
+repo: string, 
+/**
+ * The repo's owner is an organization, not a person: what the Owner menu
+ * searches it by (`org:` or `user:`), membership or not.
+ */
+ownerIsOrg: boolean, mark: PrMark, };
+
+/**
+ * How a secret card closed. `Other` reads an outcome a later build adds, so
+ * the line still parses and the card still closes.
+ */
+export type SecretOutcome = "saved" | "declined" | "replaced" | "used" | "other";
+
+/**
+ * The task on another machine a bot's secret card answers.
+ */
+export type SecretTask = { sessionId: string, title: string, 
+/**
+ * The machine's name, for the card.
+ */
+machine: string, 
+/**
+ * Its id in `servers.json`, which the answer is sent through.
+ */
+machineId: string, 
+/**
+ * The task's own request there.
+ */
+requestId: string, };
 
 /**
  * What a send did. The two fields are mutually exclusive in practice — a
@@ -2049,6 +2260,11 @@ boat: BoatStatus | null,
 cloud: boolean, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
+
+/**
+ * The payload of [`SESSION_DELETED`].
+ */
+export type SessionDeletedEvent = { sessionId: string, };
 
 export type SessionIndexItem = { sessionId: string, harness: Harness, 
 /**

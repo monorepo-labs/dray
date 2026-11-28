@@ -1,6 +1,7 @@
 import { invoke } from "@/lib/transport";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
+import { SEARCH_DEBOUNCE_MS } from "@/hooks/useDebouncedSearch";
 import { pushNotice } from "@/hooks/useNotices";
 import {
   isSettled,
@@ -32,12 +33,6 @@ import type {
 /// asking for fewer rows would write a truncated answer under the key the page
 /// then paints from.
 export const ISSUE_LIST_LIMIT = 100;
-
-/// Typing in the page's search box reaches the network, so it is spaced out.
-/// Longer than the composer picker's 200ms: that one filters a menu somebody is
-/// mid-word in and wants to feel immediate, where this is a search box where a
-/// whole phrase gets typed before the answer is wanted.
-const DEBOUNCE_MS = 300;
 
 /// How long an answer counts as fresh. Leaving the page and coming back inside
 /// this window paints from the cache without a round trip, which is the trip
@@ -147,6 +142,18 @@ function rememberDetail(identifier: string, detail: IssueDetail, generation: num
     detailCache.delete(oldest);
     detailFetchedAt.delete(oldest);
   }
+}
+
+/// One issue's detail, from the cache while fresh, else read and cached: what
+/// a task started from a list row takes its body from.
+export async function readIssueDetail(issue: { identifier: string; id: string }): Promise<IssueDetail> {
+  const held = detailCache.get(issue.identifier);
+  if (held && Date.now() - (detailFetchedAt.get(issue.identifier) ?? 0) < FRESH_MS) return held;
+  const reading = issueGeneration();
+  const id = issue.id && issue.id !== issue.identifier ? issue.id : null;
+  const detail = await invoke<IssueDetail>("get_issue", { identifier: issue.identifier, id });
+  rememberDetail(issue.identifier, detail, reading);
+  return detail;
 }
 
 type Read = { key: string; details: Record<string, IssueDetail> };
@@ -575,7 +582,8 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
     // nothing that mattered: each keystroke makes a key nothing is cached
     // under, so every one of them took the un-debounced path and fired its own
     // request — which is exactly the run this exists to collapse.
-    const timer = setTimeout(run, query.text ? DEBOUNCE_MS : 0);
+    // Typing in the page's search box reaches the network, so it is spaced out.
+    const timer = setTimeout(run, query.text ? SEARCH_DEBOUNCE_MS : 0);
     return () => {
       cancelled = true;
       clearTimeout(timer);

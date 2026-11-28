@@ -12,6 +12,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub mod login;
+
 /// Bumped when an old side would answer a new request *wrongly and silently* —
 /// the server refuses a version it doesn't know rather than guessing at it.
 ///
@@ -50,7 +52,9 @@ use std::path::PathBuf;
 /// added `set_model`, which an older app reads as a broken CLI, and v23 the
 /// routine verbs. v24 added `ask` on a bot send: an older app delivers the
 /// message and passes no answer back, so the asking bot waits on nothing.
-pub const PROTOCOL_VERSION: u32 = 24;
+/// v25 added `detach_session`, which an older app reads as a broken CLI, and
+/// v26 `attach_session`, v27 `issue_card`, v28 the secret verbs.
+pub const PROTOCOL_VERSION: u32 = 28;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -144,6 +148,10 @@ impl Request {
             | Request::SetRoutinePaused(_)
             | Request::RemoveRoutine(_)
             | Request::RunRoutine(_) => 23,
+            Request::DetachSession(_) => 25,
+            Request::AttachSession(_) => 26,
+            Request::IssueCard(_) => 27,
+            Request::RequestSecret(_) | Request::SecretPath(_) | Request::ListSecrets => 28,
         }
     }
 }
@@ -198,6 +206,22 @@ pub enum Request {
     SetRoutinePaused(SetRoutinePaused),
     RemoveRoutine(RoutineRef),
     RunRoutine(RoutineRef),
+    /// Takes a task out of its parent, the sidebar's Detach from parent.
+    DetachSession(SessionRef),
+    /// Hands a task to a bot, the sidebar's Attach to bot: detach's reverse.
+    AttachSession(AttachSession),
+    IssueCard(IssueCard),
+    RequestSecret(RequestSecret),
+    SecretPath(SecretName),
+    ListSecrets,
+}
+
+/// `dray session attach`: the task, and the bot by id or name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachSession {
+    pub session_id: String,
+    pub bot: String,
 }
 
 /// A session's model and effort, changed the way its composer's picker does:
@@ -309,14 +333,69 @@ pub struct SetNeed {
     pub need: String,
 }
 
+/// A card listing a repository's GitHub issues, posted into `session_id`'s
+/// chat for the reader to open each one and approve it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCard {
+    /// The chat the card goes in: the calling session.
+    pub session_id: String,
+    /// `owner/name`.
+    pub repo: String,
+    pub numbers: Vec<u64>,
+    /// A short heading over the rows, like "Ready for review".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// An agent asking the user for a secret through a masked card in
+/// `session_id`'s chat. The value never comes back on this wire: the answer
+/// reaches the agent later as a message naming the file it was saved to.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestSecret {
+    /// The chat the card goes in: the calling session.
+    pub session_id: String,
+    /// What the agent calls it, like `GITHUB_TOKEN`, and the name "Save as"
+    /// keeps it under.
+    pub name: String,
+    /// The card's heading, where it should differ from `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Why, in a sentence the user reads before pasting.
+    pub reason: String,
+    /// Where the user makes or finds one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// A secret saved on this machine, by name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretName {
+    pub name: String,
+}
+
+/// A saved secret as the CLI and Settings list it: never its value.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretSummary {
+    pub name: String,
+    /// When it was last saved, RFC 3339.
+    pub modified: String,
+    /// Agents get it without a card.
+    #[serde(default)]
+    pub always: bool,
+}
+
 /// A bot's emoji on the user's newest message in its chat, in place of a reply.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct React {
     /// The bot's chat: the calling session.
     pub session_id: String,
-    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or the word for one: seen, done, celebrate, like,
-    /// love, laugh, sad.
+    /// 👀 ✅ 🎉 👍 👎 ❤️ 😂 😢, or the word for one: seen, done, celebrate,
+    /// like, dislike, love, laugh, sad.
     pub emoji: String,
 }
 
@@ -632,6 +711,13 @@ pub struct CreateDraft {
     /// resolved when the draft starts rather than now.
     #[serde(default)]
     pub base: Option<String>,
+    /// Set by an app forwarding this to another machine where the caller named
+    /// a branch or ref rather than a session, so the far side may work on that
+    /// branch by name. Absent — an older app, or a session's branch — the far
+    /// side forks it, as every forward did before, since a session's branch
+    /// checked out by name would take commits onto the author's work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_as_branch: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -888,6 +974,13 @@ pub struct CreateSession {
     /// `from` is its name before v10, still read from an older CLI.
     #[serde(default, alias = "from")]
     pub base: Option<String>,
+    /// Set by an app forwarding this to another machine where the caller named
+    /// a branch or ref rather than a session, so the far side may work on that
+    /// branch by name. Absent — an older app, or a session's branch — the far
+    /// side forks it, as every forward did before, since a session's branch
+    /// checked out by name would take commits onto the author's work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_as_branch: bool,
     /// The session's title, set and locked at creation, so none is generated.
     /// An older app ignores it and generates one, which the caller can see.
     #[serde(default)]
@@ -1046,6 +1139,27 @@ pub enum Response {
     MergeCard { number: u64, url: String, title: String },
     /// The emoji a reaction put on the user's message.
     Reacted { emoji: String },
+    /// The issues an issue card lists, as `#number title`, in its order.
+    IssueCard { issues: Vec<String> },
+    /// A secret card is up. `replaced` names an open card for the same name
+    /// that this one closed.
+    SecretRequested {
+        request_id: String,
+        name: String,
+        #[serde(default)]
+        replaced: bool,
+        /// Set where no card went up: the saved secret is always allowed,
+        /// and this is its file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// The card went to the bot's chat on another machine, whose
+        /// secrets this task uses.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bot: bool,
+    },
+    /// Where a saved secret's file is on this machine.
+    SecretPath { name: String, path: String },
+    Secrets { secrets: Vec<SecretSummary> },
     /// The model and effort a session runs its next turn on, by label.
     /// `changed` is false for a read, or a pick it already had.
     Model { session: SessionSummary, model: String, effort: Option<String>, changed: bool },
@@ -1184,6 +1298,23 @@ pub fn socket_path() -> Option<PathBuf> {
     Some(home.join(SOCKET_NAME))
 }
 
+/// The named pipe that stands in for `socket` on Windows, where tokio serves
+/// no unix sockets. Derived from the path, so each home keeps a channel of its
+/// own and `DRAY_ENDPOINT` stays a path on every platform. A pipe name passes
+/// through as it is.
+pub fn pipe_name(socket: &str) -> String {
+    const PREFIX: &str = r"\\.\pipe\";
+    if socket.starts_with(PREFIX) {
+        return socket.to_string();
+    }
+    // FNV-1a over the path as Windows compares it: either slash, any case.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in socket.replace('/', "\\").to_lowercase().bytes() {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{PREFIX}dray-{hash:016x}")
+}
+
 /// One request or response as it goes on the wire. Newline-delimited JSON, the
 /// same framing the harness pipe uses, so no second convention enters either
 /// codebase.
@@ -1194,23 +1325,30 @@ pub fn encode_line<T: Serialize>(value: &T) -> serde_json::Result<String> {
 }
 
 /// An agent CLI as `dray setup` installs it. Not wire, but this is the one
-/// crate both sides compile, and the app's `Harness::install_command` and
-/// `login_command` are pinned to it by a test there.
+/// crate both sides compile, and the app's `Harness::install_command`,
+/// `docs_url` and `login_command` are pinned to it by a test there.
 pub struct Agent {
     /// `Harness::wire_name`, and what `dray setup --install` takes.
     pub id: &'static str,
     pub name: &'static str,
     pub bin: &'static str,
     pub install: &'static str,
+    /// The vendor's PowerShell installer, run on Windows in place of
+    /// `install`, whose `install.sh` Git Bash cannot stand in for. Empty where
+    /// the vendor publishes none, and then `docs` is the way.
+    pub install_windows: &'static str,
+    pub docs: &'static str,
     pub login: &'static str,
 }
 
-pub const AGENTS: [Agent; 5] = [
+pub const AGENTS: [Agent; 6] = [
     Agent {
         id: "claude_code",
         name: "Claude Code",
         bin: "claude",
         install: "curl -fsSL https://claude.ai/install.sh | bash",
+        install_windows: "irm https://claude.ai/install.ps1 | iex",
+        docs: "https://code.claude.com/docs/en/quickstart",
         login: "claude auth login",
     },
     Agent {
@@ -1218,6 +1356,8 @@ pub const AGENTS: [Agent; 5] = [
         name: "Codex",
         bin: "codex",
         install: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        install_windows: "irm https://chatgpt.com/codex/install.ps1 | iex",
+        docs: "https://learn.chatgpt.com/docs/codex/cli",
         login: "codex login",
     },
     Agent {
@@ -1225,6 +1365,8 @@ pub const AGENTS: [Agent; 5] = [
         name: "pi",
         bin: "pi",
         install: "curl -fsSL https://pi.dev/install.sh | sh",
+        install_windows: "irm https://pi.dev/install.ps1 | iex",
+        docs: "https://pi.dev/docs/latest",
         login: "pi",
     },
     Agent {
@@ -1232,6 +1374,8 @@ pub const AGENTS: [Agent; 5] = [
         name: "fx",
         bin: "fx",
         install: "curl -fsSL https://fx.sh/setup.sh | bash",
+        install_windows: "",
+        docs: "https://fx.sh/docs/getting-started/installation",
         login: "fx login",
     },
     Agent {
@@ -1239,7 +1383,18 @@ pub const AGENTS: [Agent; 5] = [
         name: "Grok Build",
         bin: "grok",
         install: "curl -fsSL https://x.ai/cli/install.sh | bash",
+        install_windows: "irm https://x.ai/cli/install.ps1 | iex",
+        docs: "https://docs.x.ai/build/quickstart",
         login: "grok login",
+    },
+    Agent {
+        id: "opencode",
+        name: "OpenCode",
+        bin: "opencode",
+        install: "curl -fsSL https://opencode.ai/v2/install | bash",
+        install_windows: "",
+        docs: "https://opencode.ai/docs/",
+        login: "opencode auth login",
     },
 ];
 
@@ -1250,6 +1405,11 @@ pub const SERVE_PORT: u16 = 7317;
 /// address while it is on: what an SSH login reads, and the one origin the
 /// server lets through besides its own.
 pub const TUNNEL_URL_FILE: &str = "tunnel-url";
+
+/// Set on a `dray-serve` that `dray server start` ran detached, where no
+/// systemd runs: nothing brings it back after a restart for an update, so it
+/// starts its own successor, as a Windows one does.
+pub const SELF_RESTART_ENV: &str = "DRAY_SELF_RESTART";
 
 /// What a pairing QR encodes, for the phone to add this server by: the
 /// address, the token and a name, as `dray://connect?…`. The iOS app
@@ -1452,6 +1612,20 @@ mod tests {
         // Only an ask needs the app that passes the answer back.
         let ask = Request::SendToBot(SendToBot { ask: true, ..Default::default() });
         assert_eq!(Envelope::new(ask.clone()).v, 24);
+        let detach = Request::DetachSession(Default::default());
+        assert_eq!(Envelope::new(detach.clone()).v, 25);
+        let attach = Request::AttachSession(Default::default());
+        assert_eq!(Envelope::new(attach.clone()).v, 26);
+        let issues = Request::IssueCard(Default::default());
+        assert_eq!(Envelope::new(issues.clone()).v, 27);
+        let secrets = [
+            Request::RequestSecret(Default::default()),
+            Request::SecretPath(Default::default()),
+            Request::ListSecrets,
+        ];
+        for request in &secrets {
+            assert_eq!(Envelope::new(request.clone()).v, 28, "{request:?}");
+        }
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1464,7 +1638,8 @@ mod tests {
             .chain(&bots)
             .chain([&card, &need, &react, &image, &model])
             .chain(&routines)
-            .chain([&ask])
+            .chain([&ask, &detach, &attach, &issues])
+            .chain(&secrets)
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
@@ -1492,6 +1667,30 @@ mod tests {
         assert!(matches!(*on.request, Request::SendMessage(ref s) if s.prompt == "hi"));
     }
 
+    /// A forward that says nothing about how its base was named forks it, so an
+    /// older app's line reads as it always did, and only `true` goes on the wire.
+    #[test]
+    fn a_base_is_a_fork_unless_marked_a_branch() {
+        let old: CreateSession = serde_json::from_str(r#"{"prompt":"p","base":"feature"}"#).unwrap();
+        assert!(!old.base_as_branch);
+        let line = serde_json::to_string(&old).unwrap();
+        assert!(!line.contains("base_as_branch"), "{line}");
+        let named = CreateDraft { base: Some("feature".into()), base_as_branch: true, ..Default::default() };
+        let back: CreateDraft = serde_json::from_str(&serde_json::to_string(&named).unwrap()).unwrap();
+        assert!(back.base_as_branch);
+    }
+
+    /// One home is one pipe however its path is spelled, and two homes never
+    /// share one.
+    #[test]
+    fn a_socket_path_names_one_pipe() {
+        let name = pipe_name(r"C:\Users\me\.dray\dray.sock");
+        assert!(name.starts_with(r"\\.\pipe\dray-"), "{name}");
+        assert_eq!(name, pipe_name("c:/users/ME/.dray/dray.sock"));
+        assert_ne!(name, pipe_name(r"C:\Users\me\.dray-dev\dray.sock"));
+        assert_eq!(pipe_name(&name), name);
+    }
+
     #[test]
     fn endpoint_prefers_the_environment() {
         // Serialized against the other env-reading test by running in one
@@ -1505,15 +1704,18 @@ mod tests {
         assert!(endpoint().unwrap().ends_with("dray.sock"));
 
         // The socket follows the data directory, and an endpoint named
-        // outright still wins over it.
+        // outright still wins over it. Joined rather than spelled out: a
+        // Windows path uses a backslash here.
         std::env::set_var("DRAY_HOME", "/tmp/other-home");
-        assert_eq!(endpoint().as_deref(), Some("/tmp/other-home/dray.sock"));
+        let expected = PathBuf::from("/tmp/other-home").join(SOCKET_NAME);
+        assert_eq!(endpoint().as_deref(), Some(expected.to_string_lossy().as_ref()));
         std::env::set_var("DRAY_ENDPOINT", "/tmp/custom.sock");
         assert_eq!(endpoint().as_deref(), Some("/tmp/custom.sock"));
 
         std::env::set_var("DRAY_HOME", "");
         std::env::remove_var("DRAY_ENDPOINT");
-        assert!(endpoint().unwrap().ends_with(".dray/dray.sock"));
+        let tail = PathBuf::from(".dray").join(SOCKET_NAME);
+        assert!(endpoint().unwrap().ends_with(tail.to_string_lossy().as_ref()));
 
         std::env::remove_var("DRAY_HOME");
     }

@@ -17,12 +17,12 @@
 
 use super::{
     activate_tab, active_id, awake, browser_dir, close_tab, cover, emit, nav, open_url, relayout,
-    reveal_for_input, send_cdp, set_zoom, tab_state, tabs_of, touch, uncover, INPUT_IN_DEVICE_PIXELS,
+    reveal_for_input, send_cdp, set_zoom, tab_state, tabs_of, touch, uncover,
 };
 use base64::Engine;
 use dray_proto::{BrowserAction, Get, Is, Locator};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
@@ -36,7 +36,16 @@ type Answer = Result<(String, Value), String>;
 static NEXT_ID: AtomicI32 = AtomicI32::new(1);
 /// Replies land on the UI thread keyed by (browser, message id); the caller
 /// waits on the other end of its channel.
-static PENDING: Mutex<Option<HashMap<(i32, i32), oneshot::Sender<Reply>>>> = Mutex::new(None);
+static PENDING: Mutex<Option<HashMap<(i32, i32), Waiting>>> = Mutex::new(None);
+
+/// When each tab's main frame last committed a new document (`navigated`).
+static COMMITTED: Mutex<Option<HashMap<i32, Instant>>> = Mutex::new(None);
+
+struct Waiting {
+    tx: oneshot::Sender<Reply>,
+    /// A `Page.captureScreenshot`, which a navigation can swallow (`navigated`).
+    capture: bool,
+}
 /// What each tab's page logged since `console`/`errors` last drained it.
 static CONSOLE: Mutex<Option<HashMap<i32, Vec<(bool, String)>>>> = Mutex::new(None);
 /// The size `set viewport`/`set device` asked for, per session. Only
@@ -67,6 +76,8 @@ static RECORDING: Mutex<std::collections::BTreeMap<String, Recording>> =
 /// a recorded tab: the reader may pick it mid-shot, before the pane's cover
 /// for it lands.
 static SHOT_TAB: Mutex<Option<i32>> = Mutex::new(None);
+/// Every tab a recording has laid out, for `navigated`.
+static RECORDED: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
 
 struct Recording {
     tab: i32,
@@ -132,9 +143,111 @@ const DEVICES: &[(&str, u32, u32)] = &[
 /// A CDP reply arriving from the backend's channel, handed to the call that
 /// is waiting on it. A failure carries the protocol's own message.
 pub(super) fn answer(tab: i32, id: i32, reply: Reply) {
-    if let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(tab, id))) {
-        let _ = tx.send(reply);
+    if let Some(waiting) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(tab, id))) {
+        let _ = waiting.tx.send(reply);
     }
+}
+
+/// Fails every capture in flight on `tab`, for its main frame committing a
+/// new document. Chromium swaps the renderer on every cross-document
+/// navigation, same origin included, and a `Page.captureScreenshot` the old
+/// one was holding is never answered, by CEF or headless: `film` sat out the
+/// whole `TIMEOUT` on it, so a recording stopped within 30s of a navigation
+/// kept nothing after it. A capture sent just after the commit may be failed
+/// too, which costs one frame.
+pub(super) fn navigated(tab: i32) {
+    COMMITTED.lock().unwrap().get_or_insert_with(HashMap::new).insert(tab, Instant::now());
+    // Both sides of a recording, after a commit, put the tab's override back
+    // to what it should be (#1632). Chromium hands a page restored from the
+    // back/forward cache the emulation it was cached with whenever none is
+    // live, so after `record stop` a page cached mid-recording came back at
+    // 1440×900 and 2x, every click at half; a bare clear is a no-op while
+    // Chromium thinks none is on, so one is set first. And a navigation
+    // mid-recording swallows a capture, which can leave the scale it changed
+    // for the capture behind, so the recording's own override is sent again.
+    let was_recorded = RECORDED.lock().unwrap().as_ref().is_some_and(|t| t.contains(&tab));
+    if was_recorded {
+        crate::spawn(async move {
+            // Sent at the commit itself, it sometimes reached the page before
+            // the restored one was current and left it as it was.
+            tokio::time::sleep(SETTLE).await;
+            // Under the lock every override is set under, so a recording or a
+            // screenshot started meanwhile keeps its own.
+            let _held = CAPTURING.lock().await;
+            if let Some((w, h)) = parked(tab) {
+                let _film = hold_film(tab).await;
+                let _ = cdp(tab, "Emulation.setDeviceMetricsOverride", metrics(w, h)).await;
+                return;
+            }
+            let unset = json!({ "width": 0, "height": 0, "deviceScaleFactor": 0, "mobile": false });
+            let _ = cdp(tab, "Emulation.setDeviceMetricsOverride", unset).await;
+            let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
+        });
+    }
+    let lost: Vec<Waiting> = {
+        let mut guard = PENDING.lock().unwrap();
+        let Some(m) = guard.as_mut() else { return };
+        let keys: Vec<(i32, i32)> = m.iter().filter(|(k, w)| k.0 == tab && w.capture).map(|(k, _)| *k).collect();
+        keys.iter().filter_map(|k| m.remove(k)).collect()
+    };
+    for waiting in lost {
+        let _ = waiting.tx.send(Err("the page navigated mid-capture".into()));
+    }
+}
+
+/// Waits out `film`'s capture still in flight on `tab`, for whatever changes
+/// its metrics next. Chromium puts a tab's emulation back the way it found it
+/// when a capture answers, so an override cleared under one came back on with
+/// the reply: after `record stop` a CEF tab on Linux stayed at the recording's
+/// size and 2x, and ignored its own window's resizes (#1632).
+async fn captures_settled(tab: i32) {
+    let start = Instant::now();
+    let in_flight = || {
+        PENDING.lock().unwrap().as_ref().is_some_and(|m| m.iter().any(|(k, w)| k.0 == tab && w.capture))
+    };
+    while in_flight() && start.elapsed() < FRAME_TIMEOUT {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// How many pointer actions each tab has under way, which `film` asks no
+/// frame of. A capture under the 2x override on a 1x screen rescales the tab's
+/// emulation while it runs, and a click landing inside one is read at that
+/// scale: at half its place (#1632, measured on Linux CEF and headless).
+/// `film` captures back to back, so most clicks did. On a Retina Mac the
+/// capture changes nothing, which is why its clicks always hit. Out of a
+/// capture every Chromium here reads the click in CSS pixels, so it is never
+/// scaled.
+static POINTING: Mutex<Option<HashMap<i32, usize>>> = Mutex::new(None);
+
+fn pointing(tab: i32) -> bool {
+    POINTING.lock().unwrap().as_ref().is_some_and(|m| m.contains_key(&tab))
+}
+
+/// Held for one pointer action; dropping it lets `film` back on.
+struct Pointing(i32);
+
+impl Drop for Pointing {
+    fn drop(&mut self) {
+        let mut guard = POINTING.lock().unwrap();
+        if let Some(m) = guard.as_mut() {
+            if let Some(n) = m.get_mut(&self.0) {
+                *n -= 1;
+                if *n == 0 {
+                    m.remove(&self.0);
+                }
+            }
+        }
+    }
+}
+
+/// Holds `film` off `tab` and waits out its capture in flight, for the
+/// length of one pointer action.
+async fn hold_film(tab: i32) -> Pointing {
+    *POINTING.lock().unwrap().get_or_insert_with(HashMap::new).entry(tab).or_insert(0) += 1;
+    let held = Pointing(tab);
+    captures_settled(tab).await;
+    held
 }
 
 /// Whether a screenshot holds the capture lock. `sweep` waits it out rather
@@ -214,6 +327,15 @@ fn film(session: String, tab: i32, shot: u64, mut last: u64) {
             tick.tick().await;
             let Some(state) = state() else { return };
             let Some(layout) = state else { continue };
+            if pointing(tab) {
+                continue;
+            }
+            // A new renderer's first frame can come before it has taken the
+            // recording's metrics, and draws the page as tiles: measured on
+            // the capture asked within ~10ms of a commit, 2 navigations in 15.
+            if COMMITTED.lock().unwrap().as_ref().and_then(|m| m.get(&tab)).is_some_and(|at| at.elapsed() < SETTLE) {
+                continue;
+            }
             let Ok(data) = grab(tab).await else { continue };
             let at = Instant::now();
             // A frame identical to the last is dropped, so a still page leaves
@@ -237,9 +359,16 @@ fn film(session: String, tab: i32, shot: u64, mut last: u64) {
     });
 }
 
+/// How long one frame may take before it is given up as lost and asked for
+/// again. A 4K page at 2x answers in ~300ms; a frame swallowed by a
+/// navigation `navigated` did not catch would otherwise hold `film` for the
+/// whole `TIMEOUT`.
+const FRAME_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// One frame of a recorded tab, as base64 JPEG.
 async fn grab(tab: i32) -> Result<String, String> {
-    let mut reply = cdp(tab, "Page.captureScreenshot", json!({ "format": "jpeg", "quality": 90 })).await?;
+    let params = json!({ "format": "jpeg", "quality": 90 });
+    let mut reply = cdp_within(tab, "Page.captureScreenshot", params, FRAME_TIMEOUT).await?;
     match reply["data"].take() {
         Value::String(data) => Ok(data),
         _ => Err("no image came back".into()),
@@ -331,6 +460,9 @@ pub(super) fn forget(tab: i32) {
     if let Some(m) = CONSOLE.lock().unwrap().as_mut() {
         m.remove(&tab);
     }
+    if let Some(m) = COMMITTED.lock().unwrap().as_mut() {
+        m.remove(&tab);
+    }
     // Dropping a call's sender is what answers it "the tab closed": left in the
     // map, a verb in flight sat out the whole timeout, a screenshot holding the
     // capture lock with it.
@@ -353,9 +485,15 @@ pub(super) fn forget(tab: i32) {
 /// One CDP call on one tab. The backend carries the message and answers
 /// through `answer`, failing it there for a tab that is gone.
 pub(super) async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
+    cdp_within(tab, method, params, TIMEOUT).await
+}
+
+/// `cdp`, failing once `limit` passes without an answer.
+async fn cdp_within(tab: i32, method: &str, params: Value, limit: Duration) -> Reply {
     let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
     let (tx, rx) = oneshot::channel();
-    PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert((tab, id), tx);
+    let capture = method == "Page.captureScreenshot";
+    PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert((tab, id), Waiting { tx, capture });
     let message = json!({ "id": id, "method": method, "params": params });
     if let Err(e) = send_cdp(tab, id, message) {
         if let Some(m) = PENDING.lock().unwrap().as_mut() {
@@ -363,14 +501,14 @@ pub(super) async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
         }
         return Err(e);
     }
-    match tokio::time::timeout(TIMEOUT, rx).await {
+    match tokio::time::timeout(limit, rx).await {
         Ok(Ok(reply)) => reply,
         Ok(Err(_)) => Err("the tab closed before answering".into()),
         Err(_) => {
             if let Some(m) = PENDING.lock().unwrap().as_mut() {
                 m.remove(&(tab, id));
             }
-            Err(format!("{method} timed out after {}s", TIMEOUT.as_secs()))
+            Err(format!("{method} timed out after {}s", limit.as_secs()))
         }
     }
 }
@@ -583,8 +721,7 @@ async fn new_tab(session: &str, before: &[i32]) -> Result<i32, String> {
 }
 
 async fn mouse(tab: i32, kind: &str, x: f64, y: f64, extra: Value) -> Result<(), String> {
-    let scale = if INPUT_IN_DEVICE_PIXELS && parked(tab).is_some() { f64::from(RECORD_SCALE) } else { 1.0 };
-    let mut params = json!({ "type": kind, "x": x * scale, "y": y * scale });
+    let mut params = json!({ "type": kind, "x": x, "y": y });
     params.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
     cdp(tab, "Input.dispatchMouseEvent", params).await.map(|_| ())
 }
@@ -625,6 +762,7 @@ async fn click(tab: i32, at: &Locator, count: u32) -> Result<(), String> {
         let _ = eval(tab, &format!("{CLICK_MARK_JS}({x}, {y})")).await;
         tokio::time::sleep(SETTLE).await;
     }
+    let _held = hold_film(tab).await;
     mouse(tab, "mouseMoved", x, y, json!({})).await?;
     for n in 1..=count {
         let button = json!({ "button": "left", "clickCount": n });
@@ -903,6 +1041,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::Hover { at } => {
             let tab = driven_tab(session)?;
             let (x, y) = center(tab, &at).await?;
+            let _held = hold_film(tab).await;
             mouse(tab, "mouseMoved", x, y, json!({})).await?;
             ok(format!("hovering {}", describe_locator(&at)))
         }
@@ -1078,6 +1217,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             };
             if recorded.is_some() {
                 set_paused(session, true);
+                captures_settled(tab).await;
             }
             let bytes = capture(tab, w, h, full).await;
             // Put back on the failing path too, or one timed-out capture leaves
@@ -1171,7 +1311,9 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             // up rather than show that layout squeezed into itself. Its number
             // is also the recording's own, which `film` checks it is still for.
             let shot = cover(session, tab).await;
-            RECORDING.lock().unwrap().insert(session.into(), Recording { tab, size: (w, h), shot, paused: false, layout: 0, closed: false, recorder });
+            let rec = Recording { tab, size: (w, h), shot, paused: false, layout: 0, closed: false, recorder };
+            RECORDING.lock().unwrap().insert(session.into(), rec);
+            RECORDED.lock().unwrap().get_or_insert_with(HashSet::new).insert(tab);
             emit_recording(session, Some(tab));
             let started = async {
                 relayout()?;
@@ -1179,7 +1321,15 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 tokio::time::sleep(SETTLE).await;
                 // One frame before answering, so a `record stop` straight after
                 // still has a clip to hand back rather than racing `film`'s first.
-                grab(tab).await
+                // Asked again where a navigation swallowed it.
+                let mut first = grab(tab).await;
+                for _ in 0..2 {
+                    if first.is_ok() {
+                        break;
+                    }
+                    first = grab(tab).await;
+                }
+                first
             }
             .await;
             let first = match started {
@@ -1270,6 +1420,7 @@ fn recordings_dir(session: &str) -> PathBuf {
 /// view unparked, and the pane's shutter closed once the page has repainted
 /// at the pane's size, or the reader is handed the recording's layout.
 async fn end_recording(session: &str, tab: i32, shot: u64) {
+    captures_settled(tab).await;
     let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
     let _ = relayout();
     tokio::time::sleep(SETTLE).await;
@@ -1332,13 +1483,20 @@ pub(super) fn emit_shooting(session: &str, shooting: bool, shot: u64, tab: Optio
 /// the checkout, which is the agent's own.
 fn write_nofollow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    // Windows has no O_NOFOLLOW; a link there takes an administrator or
+    // developer mode to plant, so a check before the open is the guard.
+    #[cfg(windows)]
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(std::io::Error::other("refusing to write through a symlink"));
+    }
+    let mut file = options.open(path)?;
     file.write_all(bytes)
 }
 
@@ -1353,11 +1511,11 @@ async fn screenshot_path(session: &str, given: &str) -> Result<PathBuf, String> 
         .flatten()
         .map(|item| PathBuf::from(item.cwd))
         .ok_or("this session has no checkout to write under")?;
-    let cwd = std::fs::canonicalize(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
+    let cwd = dunce::canonicalize(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
     let full = if Path::new(given).is_absolute() { PathBuf::from(given) } else { cwd.join(given) };
     let name = full.file_name().ok_or("the path names no file")?.to_owned();
     let parent = full.parent().ok_or("the path names no directory")?;
-    let parent = std::fs::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    let parent = dunce::canonicalize(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     if !parent.starts_with(&cwd) {
         return Err(format!(
             "screenshots go under the session's checkout ({}); with no path, under ~/.dray/browser/shots",

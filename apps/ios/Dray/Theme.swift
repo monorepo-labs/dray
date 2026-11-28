@@ -25,8 +25,6 @@ enum Theme {
     static let off = Color(hex: 0x3A3A3A)
     /// A server's dot while it is on its way: quieter than any word beside it.
     static let dim = Color(hex: 0x525252)
-    /// The page lifted by 7% white: a bot's reaction chip, the desktop's `ReactionBadge`.
-    static let lifted = Color(hex: 0x171717)
 
     // Ink.
     static let text = Color(hex: 0xFAFAFA)
@@ -63,10 +61,14 @@ enum Theme {
     static let destructive = Color(hex: 0xFF6467)
     /// `--accent-merged`: a merged PR.
     static let merged = Color(hex: 0xA855F7)
+    /// GitHub's own closed purple on dark: a closed issue's number on a bot's issue card.
+    static let closedIssue = Color(hex: 0xA371F7)
     /// `--accent-merge`: GitHub's own green, on the merge button alone.
     static let merge = Color(hex: 0x238636)
     /// `--accent-mention`: a link in prose, far from the yellow so it never reads as a mark.
     static let link = Color(hex: 0x5AD3FF)
+    /// Linear's urgent priority, its own orange.
+    static let urgent = Color(hex: 0xF2994A)
 
     /// `--radius` 10pt and its rungs: never a sharp rectangle. Pills are
     /// capsules, not a rung.
@@ -94,8 +96,8 @@ enum Theme {
         static let xxl: CGFloat = 32
     }
 
-    /// The type scale, and every font the app draws: SF Pro, no monospace,
-    /// regular and semibold only. Sizes are Dynamic Type's default and scale with it.
+    /// The type scale, and every font the app draws: SF Pro, SF Mono for diff
+    /// lines alone, regular and semibold bar one medium line. Sizes are Dynamic Type's default and scale with it.
     enum Font {
         /// Empty-state titles, the PR title.
         static let title = TypeStyle(20, 26, .semibold, .title3)
@@ -113,6 +115,10 @@ enum Theme {
         static let spoken = TypeStyle(20, 26, .regular, .title3)
         /// The model's name in the picks row, and nothing else.
         static let footnoteStrong = TypeStyle(13, 18, .semibold, .footnote)
+        /// "Your next message goes to …" above a reply: the desktop's one medium line.
+        static let footnoteMedium = TypeStyle(13, 18, .medium, .footnote)
+        /// A diff's lines: columns only line up in a fixed width.
+        static let code = TypeStyle(12, 17, .regular, .footnote, design: .monospaced)
     }
 
     /// The full-screen image viewer.
@@ -159,14 +165,17 @@ struct TypeStyle {
     let leading: CGFloat
     let weight: SwiftUI.Font.Weight
     let style: UIFont.TextStyle
+    var design: SwiftUI.Font.Design = .default
 
-    init(_ size: CGFloat, _ leading: CGFloat, _ weight: SwiftUI.Font.Weight, _ style: UIFont.TextStyle) {
-        (self.size, self.leading, self.weight, self.style) = (size, leading, weight, style)
+    init(_ size: CGFloat, _ leading: CGFloat, _ weight: SwiftUI.Font.Weight, _ style: UIFont.TextStyle,
+         design: SwiftUI.Font.Design = .default) {
+        (self.size, self.leading, self.weight, self.style, self.design) = (size, leading, weight, style, design)
     }
 
     /// The font at a text size; the app's current one where none is given.
     func font(_ traits: UITraitCollection? = nil) -> SwiftUI.Font {
-        .system(size: UIFontMetrics(forTextStyle: style).scaledValue(for: size, compatibleWith: traits), weight: weight)
+        .system(size: UIFontMetrics(forTextStyle: style).scaledValue(for: size, compatibleWith: traits), weight: weight,
+                design: design)
     }
 
     /// Added between lines so wrapped text sits on the scale's line height.

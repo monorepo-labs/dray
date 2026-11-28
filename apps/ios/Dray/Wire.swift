@@ -1,5 +1,31 @@
 import Foundation
 
+/// The device `send_msg` names to the agent beside the reader's prompt. This file
+/// is compiled into Dray Island too, which is the only macOS build of it.
+#if os(macOS)
+let sendingDevice = "island"
+#else
+/// Read off the model identifier rather than `UIDevice`, which is main-actor
+/// only and absent from the island's build.
+let sendingDevice: String = {
+    var size = 0
+    sysctlbyname("hw.machine", nil, &size, nil, 0)
+    var machine = [CChar](repeating: 0, count: max(size, 1))
+    sysctlbyname("hw.machine", &machine, &size, nil, 0)
+    // A simulator reports the Mac's architecture there and names the device it plays here.
+    let model = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? String(cString: machine)
+    return model.hasPrefix("iPad") ? "ipad" : "iphone"
+}()
+#endif
+
+/// This device's wall clock with its UTC offset, as `send_msg`'s `sentAt`: a bot
+/// is told the reader's own time, not its server's.
+func sentAt() -> JSON {
+    let format = ISO8601DateFormatter()
+    format.timeZone = .current
+    return .string(format.string(from: Date()))
+}
+
 /// Any JSON value. Tool inputs are free-form, and call arguments go out as these.
 enum JSON: Codable, Hashable {
     case null, bool(Bool), number(Double), string(String), array([JSON]), object([String: JSON])
@@ -137,6 +163,8 @@ struct Welcome: Decodable {
     /// The CLI release a `dray-serve` shipped in; none on a local build or a Mac.
     let release: String?
     let dev: Bool?
+    /// A hash of the server's token, so the same machine reached two ways is one (`serverId`).
+    let identity: String?
 
     /// Dray on a Mac, whose server follows the app's own updates.
     var macApp: Bool { dictation == true && release == nil && dev != true }
@@ -146,7 +174,8 @@ struct Welcome: Decodable {
 /// newer server adding some costs nothing.
 struct SessionItem: Codable, Hashable {
     let sessionId: String
-    let harness: String
+    /// Moves with `agent_switched` (#1414).
+    var harness: String
     let cwd: String
     let projectPath: String
     var title: String
@@ -172,6 +201,8 @@ struct SessionItem: Codable, Hashable {
     let adoptedBy: String?
     /// The routine this session is one run of: it sits in its bot's folder but is never the chat or a task.
     let routineRun: String?
+    /// A lazy fork the CLI has not carried out yet: it has run no turn, so there is nothing to mark unread.
+    let forkFrom: String?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }
@@ -197,15 +228,17 @@ struct Bot: Codable, Hashable {
     var greeting: [String]? = nil
 }
 
-/// `bot_previews`' answer per chat: its newest reply and how many came since the reader last wrote.
+/// `bot_previews`' answer per chat: its row's line, worded by the server ("You: …", "Reacted 👍 to …", or the newest reply), and how many replies came since the reader last wrote.
 struct BotPreview: Codable, Hashable {
     let text: String?
     let replies: Int
+    /// `text` is one plain line already, drawn as it is; absent from a server that sends the raw reply.
+    let plain: Bool?
 }
 
 /// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
 /// `MERGED` are asked for; `checksState` is `RUNNING`, `FAILING` or `CLEAR`.
-struct PrMark: Decodable, Hashable {
+struct PrMark: Codable, Hashable {
     let number: Int
     let headRefName: String
     let isDraft: Bool
@@ -216,6 +249,23 @@ struct PrMark: Decodable, Hashable {
     var mergeable: String? = nil
     var mergeStateStatus: String? = nil
     var reviewDecision: String? = nil
+    /// What the pull requests page draws on the row, asked for with `listing: true`.
+    var listing: PrListing? = nil
+}
+
+/// An open pull request as the pull requests page lists it.
+struct PrListing: Codable, Hashable {
+    let title: String
+    let author: String
+    let authorAvatar: String?
+    let updatedAt: String
+    let additions: Int
+    let deletions: Int
+    let commentCount: Int
+    /// The head lives in a fork: no task here can match it by name or push to it.
+    let isCrossRepository: Bool
+    let viewerDidAuthor: Bool
+    let reviewRequested: Bool
 }
 
 struct Snapshot: Decodable {
@@ -235,6 +285,9 @@ struct LiveState: Decodable {
     /// Every bot's "Waiting on you" card on this server; absent from a server
     /// that predates #1259, whose cards the phone judges itself.
     let stalls: [Lenient<BotStalls>]?
+    /// Open secret cards (#1578), apart from `asks`: logged, so no turn ending strands them.
+    /// Absent from a server that predates them.
+    let secrets: [AgentEvent]?
 }
 
 /// One entry that may fail alone, so a bad one costs itself and not its list.
@@ -358,6 +411,11 @@ struct TitleEvent: Decodable {
     let title: String
 }
 
+/// `session_deleted`: another client deleted a session.
+struct DeletedEvent: Decodable {
+    let sessionId: String
+}
+
 struct SendOutcome: Decodable {
     /// The new index entry, flattened into a snapshot; only on the send that created it.
     let snapshot: SessionItem?
@@ -429,6 +487,44 @@ struct QuestionsRequest: Decodable, Hashable {
     let questions: [Question]
 }
 
+/// `dray secret request`'s card (#1578). Logged, unlike a permission card, and
+/// closed only by a `secret_answered` naming its `requestId`.
+struct SecretRequest: Decodable, Hashable {
+    let requestId: String
+    let name: String
+    let label: String?
+    let reason: String
+    let url: String?
+    /// Every secret saved on the machine that answers.
+    let savedNames: [String]?
+    /// The saved one offered first; absent where none comes close.
+    let closest: String?
+    /// The task's own record of asking its bot on another machine: a line here, never a card.
+    let bot: Bool?
+    /// Set in a bot's chat: the task on another machine the card answers.
+    let task: SecretTask?
+}
+
+/// The task on another machine a bot's secret card answers.
+struct SecretTask: Decodable, Hashable {
+    let sessionId: String
+    let title: String
+    let machine: String
+}
+
+/// How a secret card closed: `saved`, `declined`, `replaced` or `used`. Never the value.
+struct SecretAnswer: Decodable, Hashable {
+    let requestId: String
+    let name: String
+    let outcome: String
+    let kept: Bool?
+    let auto: Bool?
+    let task: SecretTask?
+
+    /// A card a newer one replaced closes silently: the newer card is the row.
+    var draws: Bool { ["saved", "declined", "used"].contains(outcome) }
+}
+
 /// A picture on a prompt or a tool result. `path` is the archived copy under
 /// `~/.dray/attachments`, read through the server's `/file`.
 struct ImageRef: Decodable, Hashable {
@@ -464,6 +560,13 @@ struct ToolResult: Decodable {
     }
 }
 
+/// Who relayed a `user_message`: the fields the transcripts read, each optional.
+private struct Sender: Decodable {
+    let title: String?
+    let sessionId: String?
+    let botId: String?
+}
+
 enum Payload: Decodable {
     case turnCompleted(failed: Bool, finalText: String?)
     /// `queued` is a prompt typed into a running turn, which answers it inside that turn.
@@ -484,13 +587,20 @@ enum Payload: Decodable {
     case subagentCompleted(agentId: String)
     /// A merge card a bot posted, or Dray did once the PR was ready.
     case mergeCard(MergeCard)
+    /// GitHub issues a bot showed the reader, and one the reader handed back to it.
+    case issueCard(IssueCard)
+    case issueApproved(cardId: String, number: Int)
     /// A session a bot chat started, logged by the server as it made it.
     case taskStarted(taskId: String, title: String?)
     /// Lessons a bot turn filed, one per file, and one taken back.
     case learned(commit: String, files: [Lesson])
     case learnedUndone(commit: String, path: String)
-    /// A bot's emoji on a message the user typed, in place of a reply.
-    case reaction(messageId: String, emoji: String)
+    /// An emoji on a message: a bot's on one the user typed, or with `byUser` the user's on the bot's.
+    case reaction(messageId: String, emoji: String, byUser: Bool = false)
+    /// The task moved to another agent (#1414). Draws nothing: the reader picked it.
+    case agentSwitched(to: String)
+    case secretRequested(SecretRequest)
+    case secretAnswered(SecretAnswer)
     case error(String)
     case other(String)
 
@@ -508,17 +618,17 @@ enum Payload: Decodable {
                     failed: try c.decode(String.self, forKey: "status") == "error" && !stop.hasPrefix("aborted"),
                     finalText: try c.decodeIfPresent(String.self, forKey: "finalText"))
             case "user_message":
-                // Optional values, and never a throw: a relay from this
-                // machine carries `"machine": null`, which `[String: String]`
-                // refuses — and a throw here costs the prompt, not its label.
-                let from = (try? c.decodeIfPresent([String: String?].self, forKey: "from")) ?? nil
+                // Only the fields read, and never a throw: a sender also carries
+                // Bools and a number (`routine`, `ask`, `hop`), which a string map
+                // refused whole, drawing a routine's report as the reader's own.
+                let from = try? c.decodeIfPresent(Sender.self, forKey: "from")
                 self = .userMessage(
                     text: try c.decode(String.self, forKey: "text"),
-                    fromTitle: from?["title"] ?? nil, fromId: from?["sessionId"] ?? nil,
+                    fromTitle: from?.title, fromId: from?.sessionId,
                     queued: (try? c.decode(Bool.self, forKey: "queued")) ?? false,
                     images: decodeImages(c),
                     kickoff: (try? c.decode(Bool.self, forKey: "kickoff")) ?? false,
-                    fromBot: from?["botId"] ?? nil)
+                    fromBot: from?.botId)
             case "assistant_text":
                 self = .assistantText(try c.decode(String.self, forKey: "text"))
             case "tool_call_started":
@@ -553,6 +663,11 @@ enum Payload: Decodable {
                 self = .error(try c.decode(String.self, forKey: "message"))
             case "merge_card":
                 self = .mergeCard(try MergeCard(from: decoder))
+            case "issue_card":
+                self = .issueCard(try IssueCard(from: decoder))
+            case "issue_approved":
+                self = .issueApproved(cardId: try c.decode(String.self, forKey: "cardId"),
+                                      number: try c.decode(Int.self, forKey: "number"))
             case "task_started":
                 self = .taskStarted(taskId: try c.decode(String.self, forKey: "taskId"),
                                     title: try? c.decode(String.self, forKey: "title"))
@@ -564,7 +679,14 @@ enum Payload: Decodable {
                                       path: try c.decode(String.self, forKey: "path"))
             case "reaction":
                 self = .reaction(messageId: try c.decode(String.self, forKey: "messageId"),
-                                 emoji: try c.decode(String.self, forKey: "emoji"))
+                                 emoji: try c.decode(String.self, forKey: "emoji"),
+                                 byUser: (try? c.decode(Bool.self, forKey: "byUser")) ?? false)
+            case "agent_switched":
+                self = .agentSwitched(to: try c.decode(String.self, forKey: "to"))
+            case "secret_requested":
+                self = .secretRequested(try SecretRequest(from: decoder))
+            case "secret_answered":
+                self = .secretAnswered(try SecretAnswer(from: decoder))
             default:
                 self = .other(type)
             }
@@ -612,6 +734,28 @@ struct MergeCard: Decodable, Hashable {
     /// Where `pr_marks` and `merge_pr` run on the chat's server: the checkout, or for a
     /// task on another machine the GitHub slug, read through `gh` (`cardRepo`).
     var prPath: String { repo.map { "github:\($0)" } ?? projectPath }
+}
+
+/// `dray session issue-card`'s card: one repo's issues, as GitHub had them when posted.
+struct IssueCard: Decodable, Hashable {
+    /// `owner/name`.
+    let repo: String
+    let issues: [IssueCardRow]
+}
+
+struct IssueCardRow: Decodable, Hashable, Identifiable {
+    let number: Int
+    let title: String
+    let url: String
+    let closed: Bool
+    /// The issues page's `IssueLabel`, apart because Dray Island compiles this file without that one.
+    let labels: [Label]
+    var id: Int { number }
+
+    struct Label: Decodable, Hashable {
+        let name: String
+        let color: String
+    }
 }
 
 /// One file a bot's turn changed under its instructions, skills or memory.

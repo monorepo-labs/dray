@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use sha2::Digest;
 use ts_rs::TS;
 
+use crate::analytics::{self, SignInFailure, SignInStep};
 use crate::{sink::Sink, store};
 
 pub const CHANGED: &str = "account_changed";
@@ -41,6 +42,10 @@ pub struct DrayUser {
     #[serde(default)]
     pub email: Option<String>,
     pub username: Option<String>,
+    /// The GitHub login the account signed up with, which GitHub names it
+    /// after where the profile has no name. Absent from a site older than it.
+    #[serde(default)]
+    pub github_login: Option<String>,
     /// The Google or GitHub picture, where the account has one.
     pub image: Option<String>,
     /// `github` and `google` sign-ins linked to the account, oldest first.
@@ -312,12 +317,14 @@ pub async fn start(sink: Sink, method: SignInMethod) -> Result<SignInStarted, St
     }
     let port = *PORT.get().ok_or("This server can't take a sign-in.")?;
     let site = crate::org_link::site();
+    analytics::sign_in(SignInStep::Started, method);
     if !reachable().await {
         {
             let mut memory = memory();
             memory.pending = None;
             memory.error = Some("offline".into());
         }
+        analytics::sign_in(SignInStep::Failed(SignInFailure::Offline), method);
         let _ = sink.emit(CHANGED, ());
         return Err("offline".into());
     }
@@ -353,6 +360,7 @@ pub async fn start(sink: Sink, method: SignInMethod) -> Result<SignInStarted, St
             ours
         };
         if ended {
+            analytics::sign_in(SignInStep::Failed(SignInFailure::TimedOut), method);
             let _ = timer.emit(CHANGED, ());
         }
     });
@@ -364,13 +372,17 @@ pub async fn start(sink: Sink, method: SignInMethod) -> Result<SignInStarted, St
 /// to match and is turned away. Too late once the code is being traded,
 /// which the gate says by offering no Cancel then.
 pub async fn cancel(sink: Sink) {
-    {
+    let dropped = {
         let mut memory = memory();
         if memory.pending.as_ref().is_some_and(|p| p.finishing) {
             return;
         }
-        memory.pending = None;
         memory.error = None;
+        memory.pending.take()
+    };
+    // Skip clears through here too, with nothing out as often as not.
+    if let Some(dropped) = dropped {
+        analytics::sign_in(SignInStep::Failed(SignInFailure::Cancelled), dropped.method);
     }
     let _ = sink.emit(CHANGED, ());
 }
@@ -408,11 +420,18 @@ pub async fn callback(sink: &Sink, query: &str) -> (u16, String) {
         return (400, page("This sign-in has ended", "Go back to Dray and start again.", true));
     };
     let _ = sink.emit(CHANGED, ());
+    let declined = error.is_some();
     let finished = match (error, code) {
         (Some(_), _) => Err("cancelled".to_string()),
         (None, Some(code)) => finish(sink, &pending, &code).await,
         (None, None) => Err("The site sent no code.".to_string()),
     };
+    let step = match &finished {
+        Ok(()) => SignInStep::Completed,
+        Err(_) if declined => SignInStep::Failed(SignInFailure::Declined),
+        Err(_) => SignInStep::Failed(SignInFailure::Exchange),
+    };
+    analytics::sign_in(step, pending.method);
     let reply = match &finished {
         Ok(()) => (200, page("You're signed in", "You can close this tab and go back to Dray.", false)),
         Err(why) if why == "cancelled" => (200, page("Sign-in was cancelled", "Go back to Dray to try again.", true)),

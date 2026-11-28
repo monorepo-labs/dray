@@ -6,17 +6,13 @@ import {
   useSyncExternalStore,
   type MutableRefObject,
   type ReactNode,
-  type SyntheticEvent,
 } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ChevronDown,
-  ChevronRight,
   GitPullRequest,
-  Plus,
   RefreshCw,
-  Search,
   Shapes,
   SlidersHorizontal,
   Tag,
@@ -26,9 +22,11 @@ import Avatar from "@/components/Avatar";
 import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
 import IssueLabelChip from "@/components/IssueLabelChip";
 import IssueStateIcon from "@/components/IssueStateIcon";
+import { IssueQuickActions, IssueTaskChip } from "@/components/IssueStart";
+import { ListGroup, RepoMenu } from "@/components/ListGroup";
 import Segmented from "@/components/Segmented";
 import LinearIcon from "@/components/LinearIcon";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -38,8 +36,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import PageSearch from "@/components/PageSearch";
 import ShortcutKeys from "@/components/ShortcutKeys";
-import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import GitHubIcon from "@/components/GitHubIcon";
 import IssueTrackerChips from "@/components/IssueTrackerChips";
@@ -61,19 +59,8 @@ import type {
   IssueRef,
   IssueScope,
   IssueState,
-  IssueStateKind,
   IssueTracker,
 } from "@/types/events";
-
-/// The page's search field. Named so ⌘⇧F can reach it — the same trick the
-/// sidebar's own field uses, and for the same reason: the chord has to be able
-/// to *re-focus* a field already on screen, which a `ref` threaded up through
-/// the page would do no better.
-///
-/// **Shifted, where the sidebar's is not.** ⌘F belongs to the sidebar and is
-/// bound app-wide, so a second field claiming it would take the one search that
-/// works from anywhere and make it depend on which view is up.
-const ISSUE_SEARCH_INPUT_ID = "issues-search";
 
 /// Where a personal API key is made. Linked rather than described, because the
 /// path through Linear's own settings is theirs to change and a stale sentence
@@ -152,7 +139,6 @@ export default function IssuesView({
   onRecheckGithub,
   picked,
   onPick,
-  onWorkOn,
   refreshRef,
 }: {
   /// The page is the thing on screen. Hidden pages do not read, for the reason
@@ -174,9 +160,6 @@ export default function IssuesView({
   picked: IssueRef | null;
   /// `null` closes the pane.
   onPick: (issue: IssueRef | null) => void;
-  /// Takes the reader to the empty composer with this issue tagged. Owned by
-  /// `App`, which is the only thing that can leave this page.
-  onWorkOn: (issue: Issue) => void;
   /// Where this page hands its refresh up, so ⌘R can reach it. `App` owns the
   /// chord — it has to pick between this page and the right panel, and only it
   /// knows which one the reader is looking at.
@@ -210,17 +193,6 @@ export default function IssuesView({
   }, [refreshRef, refresh]);
 
   const set = (patch: Partial<IssueQuery>) => setQuery({ ...query, ...patch });
-
-  // Bound here rather than in `App`, unlike ⌘F: this field only exists while
-  // the page does, and `enabled` unregisters the listener outright rather than
-  // leaving a chord claimed — `useHotkey` calls `preventDefault` on every match,
-  // so a binding left standing would eat ⌘⇧F from whatever *is* on screen.
-  // `select` rather than `focus`, so pressing it on a query replaces it.
-  useHotkey(
-    "issues.search",
-    () => document.querySelector<HTMLInputElement>(`#${ISSUE_SEARCH_INPUT_ID}`)?.select(),
-    { enabled: active && !needsConnecting },
-  );
 
   /// The workflow a row's status menu offers, which belongs to the issue's own
   /// team. Read once per connection with the filter options rather than per
@@ -411,7 +383,8 @@ export default function IssuesView({
                 // repository, so a pick carried across would narrow the new
                 // list by a name it has never heard of and draw nothing, with a
                 // lit control as the only clue why.
-                onPick={(teamId) => set({ teamId, label: null, issueType: null })}
+                onPick={(teamId) => teamId && set({ teamId, label: null, issueType: null })}
+                placeholder="Choose a repository"
               />
               <LabelMenu
                 title="Type"
@@ -454,43 +427,13 @@ export default function IssuesView({
         </div>
       </div>
 
-      {/* No fill and no border. A search box is the one control here that is
-          always in the same place, so it needs no edge to be found — and a
-          filled field above a borderless list draws a box round the least
-          interesting third of the page. The glyph does the work the border
-          was doing: it says "type here" without enclosing anything. */}
-      <div className="group flex h-11 shrink-0 items-center gap-2 px-3">
-        <Search className="size-4 shrink-0 text-muted-foreground" />
-        <Input
-          id={ISSUE_SEARCH_INPUT_ID}
-          value={query.text ?? ""}
-          placeholder="Search issues"
-          spellCheck={false}
-          // `dark:bg-transparent` as well as `bg-transparent`: the base input
-          // carries `dark:bg-input/30`, which is the more specific rule and
-          // wins — so the plain override read as removed here while leaving a
-          // fill on screen.
-          className="h-full rounded-none border-0 bg-transparent p-0 shadow-none focus-visible:ring-0 dark:bg-transparent"
-          onChange={(e) => set({ text: e.currentTarget.value || null })}
-          // Escape drops the query, the sidebar's rule. It does *not* blur:
-          // this field is always drawn, so there is nothing to close and a
-          // caret left where it was is a second search ready to be typed.
-          onKeyDown={(e) => {
-            if (e.key !== "Escape" || !query.text) return;
-            e.preventDefault();
-            set({ text: null });
-          }}
-        />
-
-        {/* The slot names whichever key does something here, and which one that
-            is turns on focus alone — the sidebar's rule, and the two fields
-            should not need learning twice. Escape reaches this input and
-            nothing else; ⌘⇧F is what brings focus back to a field left holding
-            a query. Esc is withheld over an empty field, the one state neither
-            key has anything to do in. */}
-        {query.text && <Kbd className="hidden group-focus-within:inline-flex">Esc</Kbd>}
-        <ShortcutKeys ids={["issues.search"]} className="group-focus-within:hidden" />
-      </div>
+      <PageSearch
+        id="issues-search"
+        active={active}
+        value={query.text ?? ""}
+        onChange={(text) => set({ text: text || null })}
+        placeholder="Search issues"
+      />
 
       {/* Under the header rather than over the rows: a failed refresh leaves
           what was already read on screen, and this says the answer is stale. */}
@@ -584,14 +527,13 @@ export default function IssuesView({
                     scopedToMe={query.scope === "assigned"}
                     states={statesFor(issue)}
                     onPick={onPick}
-                    onWorkOn={onWorkOn}
                   />
                 ))
               : loaded &&
                 groups.map((group) => (
-                  <Group
+                  <ListGroup
                     key={group.key}
-                    kind={group.key}
+                    icon={<IssueStateIcon kind={group.key} />}
                     label={group.label}
                     count={group.issues.length}
                   >
@@ -603,10 +545,9 @@ export default function IssuesView({
                         scopedToMe={query.scope === "assigned"}
                         states={statesFor(issue)}
                         onPick={onPick}
-                        onWorkOn={onWorkOn}
                       />
                     ))}
-                  </Group>
+                  </ListGroup>
                 ))}
 
             {/* Done and Cancelled are always here and always start closed.
@@ -622,9 +563,9 @@ export default function IssuesView({
                 const group = settledGroups.find((g) => g.key === key);
 
                 return (
-                  <Group
+                  <ListGroup
                     key={key}
-                    kind={key}
+                    icon={<IssueStateIcon kind={key} />}
                     label={label}
                     count={settled.loaded ? (group?.issues.length ?? 0) : null}
                     collapsedByDefault
@@ -641,13 +582,12 @@ export default function IssuesView({
                           scopedToMe={query.scope === "assigned"}
                           states={statesFor(issue)}
                           onPick={onPick}
-                          onWorkOn={onWorkOn}
                         />
                       ))
                     ) : (
                       <p className="px-3 py-2 text-ui text-muted-foreground">Nothing here.</p>
                     )}
-                  </Group>
+                  </ListGroup>
                 );
               })}
           </>
@@ -860,126 +800,6 @@ function Connect({
   );
 }
 
-/// One status bucket, collapsible, with the kind's own glyph beside the name.
-///
-/// Grouped because a flat list of forty issues has no shape: what is in
-/// progress and what is still a wish are different questions, and the tracker
-/// the reader already has open groups them exactly this way.
-///
-/// No fill behind the header, and space between groups instead. A tinted band
-/// across the page draws a box round the quietest line on it; a gap says the
-/// same thing with nothing at all, and leaves the rows as the only marked
-/// surface. The glyph is what the row above gave up — one copy, on the heading
-/// that names the state, rather than one per row repeating it.
-function Group({
-  kind,
-  label,
-  count,
-  collapsedByDefault = false,
-  onFirstOpen,
-  children,
-}: {
-  kind: IssueStateKind;
-  label: string;
-  /// `null` for a group whose rows have not been read yet — the settled ones
-  /// before anybody opens them. A zero there would be a claim, not a blank.
-  count: number | null;
-  collapsedByDefault?: boolean;
-  onFirstOpen?: () => void;
-  children: React.ReactNode;
-}) {
-  const [collapsed, setCollapsed] = useState(collapsedByDefault);
-
-  return (
-    <div className="mb-1.5 last:mb-0">
-      <button
-        type="button"
-        onClick={() => {
-          if (collapsed) onFirstOpen?.();
-          setCollapsed((prev) => !prev);
-        }}
-        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-ui text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ChevronRight className={cn("size-3.5 transition-transform", !collapsed && "rotate-90")} />
-        <IssueStateIcon kind={kind} />
-        <span className="font-medium text-foreground">{label}</span>
-        {count !== null && <span className="tabular-nums">{count}</span>}
-      </button>
-
-      {!collapsed && children}
-    </div>
-  );
-}
-
-/// Which repository the GitHub half is reading, on its face.
-///
-/// Wears the name rather than a glyph, because it is the one control here whose
-/// *value* is the answer to "what am I looking at" — the scope chips beside it
-/// say what they are by being lit, and this one has a hundred possible states.
-/// The rows are the repositories of attached projects with a `github.com`
-/// remote, which is the list this app can name without a network call.
-///
-/// **The repository, not the whole slug.** `monorepo-labs/dray` is most of this
-/// row's width spent on a word that is the same for most of the list, and the
-/// owner is only ever needed to tell two same-named repositories apart — which
-/// is a question asked where the pick is made. So the menu rows carry the slug
-/// whole and the trigger carries the name. No tooltip restoring it: a menu is
-/// one click away and already answers, where a tooltip on something that opens
-/// on hover-and-click is a second thing arriving over the first.
-function RepoMenu({
-  repo,
-  repos,
-  onPick,
-}: {
-  repo: string | null;
-  repos: IssueGroup[];
-  onPick: (repo: string) => void;
-}) {
-  // Nothing to choose between, and the empty state below already says what to
-  // do about that — a trigger reading "Choose a repository" that opens onto
-  // nothing is a control that cannot be used.
-  if (!repos.length) return null;
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-ui transition-colors",
-            repo
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <GitHubIcon className="size-3.5" />
-          <span className="max-w-40 truncate">
-            {repo ? repo.slice(repo.indexOf("/") + 1) : "Choose a repository"}
-          </span>
-          <ChevronDown className="size-3 opacity-60" />
-        </button>
-      </DropdownMenuTrigger>
-
-      <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuLabel>Repository</DropdownMenuLabel>
-        {repos.map((option) => (
-          <DropdownMenuCheckboxItem
-            key={option.id}
-            checked={repo === option.id}
-            // No "all repositories" to clear to: a number is only addressable
-            // within one, so picking is the only move — which is why this is a
-            // radio group spelled with checkmarks and the current row stays
-            // pickable rather than going grey.
-            onCheckedChange={() => onPick(option.id)}
-          >
-            {option.name}
-          </DropdownMenuCheckboxItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 /// Which label the GitHub half is narrowed to, on its face.
 ///
 /// Wears its value like `RepoMenu` above rather than folding into the sliders
@@ -1163,18 +983,16 @@ function FilterMenu({
 /// with. Linear is still one click away — the pane's own row carries the
 /// button — but it is the second thing offered rather than the first.
 ///
-/// "Work on it" starts nothing. It cannot: this page is workspace-wide, so a
-/// button that spawned a session would have to guess which repo the work belongs
-/// in. It hands the reader to the empty composer with the issue already tagged
-/// instead — which is the one place that *does* know how to ask, since the
-/// project, the model and the harness are all still sitting there unpicked.
+/// Hover offers Start task and Send to bot ([IssueQuickActions]). The page is
+/// workspace-wide, so a task runs in the checkout of the issue's repository,
+/// cloned into `~/dray` where there is none; a Linear issue names no
+/// repository, so its Start task waits for a project picked in the pane.
 function IssueRow({
   issue,
   picked,
   scopedToMe,
   states,
   onPick,
-  onWorkOn,
 }: {
   issue: Issue;
   picked: boolean;
@@ -1185,13 +1003,7 @@ function IssueRow({
   /// which leaves the glyph a plain one.
   states: IssueState[];
   onPick: (issue: Issue) => void;
-  onWorkOn: (issue: Issue) => void;
 }) {
-  const workOn = (e: SyntheticEvent) => {
-    e.stopPropagation();
-    onWorkOn(issue);
-  };
-
   return (
     // A div behaving as a button, the shape `IssuePanel`'s own row uses. This
     // was a real `button` back when the only thing inside it was one span
@@ -1274,35 +1086,20 @@ function IssueRow({
 
       <span className="min-w-0 flex-1 truncate">{issue.title}</span>
 
-      {/* A span carrying `buttonVariants` rather than a `Button`. The row is a
-          div with `role="button"` and this stays a span with it: the row's
-          accessible role is what a nested control conflicts with, not the tag
-          it happens to use, so promoting either to a real `button` would put
-          the invalid nesting straight back. Same bargain `FileLink` makes, and
-          `stopPropagation` on the key as well as the click is what keeps the
-          two apart — the row's own `target === currentTarget` guard is the
-          other half.
-
-          Its slot is reserved whether or not it is drawn: revealed by adding
-          width, the whole row would shift under the cursor that revealed it.
-          Hidden by opacity rather than `display`, or it could not be reached by
-          keyboard at all. */}
+      {/* Spans, not buttons: the row is a `role="button"`, and a real button
+          nested in it is invalid markup. Its slot is reserved whether or not it
+          is drawn, so revealing it never shifts the row under the cursor, and
+          hidden by opacity rather than `display` so the keyboard still reaches
+          it. It stays up while an action runs or its menu is open. */}
       <span
-        role="button"
-        tabIndex={0}
-        onClick={workOn}
-        onKeyDown={(e) => {
-          if (e.key !== "Enter" && e.key !== " ") return;
-          e.preventDefault();
-          workOn(e);
-        }}
         className={cn(
-          buttonVariants({ variant: "ghost", size: "xs" }),
-          "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+          "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
+          "focus-within:pointer-events-auto focus-within:opacity-100",
+          "has-[.row-busy]:pointer-events-auto has-[.row-busy]:opacity-100",
+          "has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100",
         )}
       >
-        Work on it
-        <Plus data-icon="inline-end" />
+        <IssueQuickActions issue={issue} />
       </span>
 
       {/* Who filed it, GitHub's rows alone. It is the person field that always
@@ -1353,6 +1150,8 @@ function IssueRow({
           some rows and text on others is worse than one that is never a link.
           ⌘-click on the row still leaves for the tracker, where they are
           listed. */}
+      {/* Tasks linked to it, the PR chip's shape with a task's mark. */}
+      <IssueTaskChip issue={issue} className="hidden @md:inline-flex" />
       {issue.pullRequests.length > 0 && (
         <span className="hidden shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-muted-foreground @md:inline-flex">
           <GitPullRequest className="size-3" />

@@ -23,7 +23,7 @@ export default function BoatNotice({ server }: { server: ServerInfo }) {
         {waking ? `Resuming ${server.name}` : `${server.name} is stopped`}
         <span className="text-muted-foreground">
           {" · "}
-          {waking ? "This can take a few minutes. Messages go when it's back." : (server.boat?.note ?? "Sending resumes it automatically.")}
+          {waking ? "This can take a few minutes. Messages go when it's back." : (server.boat?.note ?? "Sending a message resumes it.")}
         </span>
       </p>
       {!waking && (

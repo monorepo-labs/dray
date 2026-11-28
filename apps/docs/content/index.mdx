@@ -1,39 +1,47 @@
 ---
 title: Introduction
-description: Dray is a Mac app that runs coding agents in one window, many at a time. Start here to see what it does and where to read next.
+description: Dray is a Mac and Linux app that runs coding agents in one window, many at a time, with bots that run the work for you. Start here to see what it does and where to read next.
 ---
 
-Dray runs the coding agent CLIs you already use (Claude Code, Codex, pi, fx and Grok Build) in one chat window. It is free and open source, and runs on the subscriptions you already have. Dray installs no agent and stores no agent login: each agent keeps its own.
+Dray runs the coding agent CLIs you already use (Claude Code, Codex, pi, fx, Grok Build and OpenCode) in one chat window. It runs on a Mac, with a Linux version in beta. It is free and open source, and runs on the subscriptions you already have. Each agent keeps its own login: Dray stores none.
 
 ## What you can do
 
 - **Run many agents at once.** Each conversation is a session in the sidebar. Sessions keep running when you switch away, and when you quit the app.
+- **Run your work from a bot.** A bot is one chat that starts tasks in any project, keeps them moving, and comes back only when something needs you, with a merge card when a pull request is ready. Dray Bot is there from the start. See [Bots](/using-dray/bots).
 - **Give each task its own checkout.** A session can work in its own git worktree, so two agents never edit the same files.
-- **Steer the agent as it works.** Change the model, effort, fast mode and permission mode from the composer. Answer permission and question cards in the transcript.
-- **Write prompts with context.** Slash commands, `@` file mentions, `#` issue tags, images and files, and local dictation.
+- **Steer the agent as it works.** Change the model, effort, fast mode and permission mode from the composer, or move a task to another agent. Answer permission and question cards in the transcript.
+- **Write prompts with context.** Slash commands, `@` file mentions, `#` issue and pull request tags, images and files, and local dictation.
 - **Let agents fan out.** The `dray` command line lets an agent start sessions of its own, message them, link issues, and drive a browser.
-- **Work from issues.** Connect Linear or GitHub, browse your issues, and tag them in a prompt.
-- **Connect a server.** Add a Linux box over SSH and run your agents there, driven from the Mac app.
+- **Work from issues and pull requests.** Connect Linear or GitHub and browse your issues. The Pull requests page lists every open PR involving you, and starts a task from any of them. See [Pull requests](/using-dray/pull-requests).
+- **Connect a server.** Add a Linux box over SSH and run your agents there, driven from the app.
+- **Follow along on your iPhone.** The [Dray app for iPhone](https://apps.apple.com/app/id6824145317) reads and drives your sessions through your Mac's remote access or a server. Pair it from Settings → Servers. See [Remote access](/reference/remote-access).
 
 ## Where to start
 
 <CardGroup cols={2}>
   <Card title="Install Dray" href="/get-started/install" icon="download">
-    What you need, and the first launch.
+    What you need, first launch, and signing in.
   </Card>
   <Card title="Your first session" href="/get-started/first-session" icon="message-square">
     Attach a project, pick an agent, send a prompt.
   </Card>
-  <Card title="Agents" href="/using-dray/agents" icon="bot">
+  <Card title="Bots" href="/using-dray/bots" icon="bot">
+    Run your work from one chat.
+  </Card>
+  <Card title="Agents" href="/using-dray/agents" icon="cpu">
     What each agent supports, side by side.
   </Card>
   <Card title="The composer" href="/using-dray/composer" icon="pencil">
     Models, effort, fast mode and permission modes.
   </Card>
+  <Card title="Pull requests" href="/using-dray/pull-requests" icon="git-pull-request">
+    Every open PR involving you, and tasks started from them.
+  </Card>
   <Card title="dray CLI" href="/cli" icon="terminal">
     Every command, and how agents use it.
   </Card>
   <Card title="Connect a server" href="/server" icon="server">
-    Connect a Linux server and drive its agents from the Mac app.
+    Connect a Linux server and drive its agents from the app.
   </Card>
 </CardGroup>

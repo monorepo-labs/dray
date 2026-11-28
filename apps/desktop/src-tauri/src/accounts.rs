@@ -28,7 +28,6 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 use ts_rs::TS;
 
 /// How long any one probe may take before its row reads as unknown.
@@ -291,6 +290,25 @@ pub async fn agent_accounts(cwd: String) -> Vec<AgentAccounts> {
 async fn one(harness: Harness, cwd: &str) -> AgentAccounts {
     let installed = binpath::agent_installed(harness).await;
 
+    // OpenCode 2 lists its providers itself, so one ask answers both the rows
+    // and what Add offers.
+    if installed && harness == Harness::OpenCode && binpath::opencode_v2().await {
+        let (accounts, providers, error) = match opencode_integrations(cwd).await {
+            Ok(all) => (opencode_rows(&all), opencode_providers(&all), None),
+            Err(err) => (Vec::new(), Vec::new(), Some(format!("{err:#}"))),
+        };
+        return AgentAccounts {
+            harness,
+            label: harness.label().to_string(),
+            installed,
+            accounts,
+            providers,
+            provider_freeform: false,
+            login_hint: harness.login_hint().map(str::to_string),
+            error,
+        };
+    }
+
     let (accounts, error) = if installed {
         match probe(harness, cwd).await {
             Ok(accounts) => (accounts, None),
@@ -337,8 +355,9 @@ pub fn providers_of(harness: Harness) -> Vec<ProviderChoice> {
             .filter(|entry| entry.oauth || entry.api_key)
             .map(|entry| choice(entry.id, entry.label))
             .collect(),
-        // One credential, so there is nothing to pick between.
-        Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::Other(_) => Vec::new(),
+        // One credential, so there is nothing to pick between. OpenCode serves
+        // dozens of providers and its own login asks which.
+        Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::OpenCode | Harness::Other(_) => Vec::new(),
     }
 }
 
@@ -478,6 +497,14 @@ fn options(harness: Harness, provider: Option<&str>, headless: bool) -> Vec<Auth
                 Some("For a machine with no browser. Finish the sign-in elsewhere."),
             ),
         ],
+        // `-p` skips OpenCode's provider picker; without a provider it asks.
+        Harness::OpenCode => {
+            let command = match provider.filter(|provider| plausible_provider(provider)) {
+                Some(provider) => format!("opencode auth login -p {provider}"),
+                None => "opencode auth login".to_string(),
+            };
+            vec![option("oauth", "Sign in", Some(&command), Some("OpenCode asks for a key or opens a sign-in."))]
+        }
         Harness::Other(_) => Vec::new(),
     }
 }
@@ -489,6 +516,7 @@ async fn probe(harness: Harness, cwd: &str) -> anyhow::Result<Vec<Account>> {
         Harness::Pi => pi(cwd).await,
         Harness::Fx => fx(cwd).await,
         Harness::Grok => grok().await,
+        Harness::OpenCode => opencode().await,
         // Nothing to ask: this build cannot name the CLI, let alone drive it.
         Harness::Other(_) => Ok(Vec::new()),
     }
@@ -533,7 +561,7 @@ impl Said {
 /// all, which is the half of the row worth having.
 async fn run(harness: Harness, args: &[&str], cwd: &str) -> anyhow::Result<Said> {
     let bin = binpath::agent_binary(harness).await;
-    let mut command = Command::new(&bin);
+    let mut command = binpath::command(&bin);
     command
         .args(args)
         .env("PATH", agent_path(&bin))
@@ -1058,7 +1086,8 @@ pub async fn add_agent_account(
         }
     }
 
-    let option = auth_options(harness, provider.as_deref())
+    let option = installed_options(harness, provider.as_deref(), HEADLESS)
+        .await
         .into_iter()
         .find(|option| option.id == auth)
         .ok_or_else(|| format!("{} has no such way of signing in.", harness.label()))?;
@@ -1096,6 +1125,12 @@ pub async fn add_agent_account(
             }
             pi_write_key(&provider, &key)
         }
+        Harness::OpenCode => {
+            let provider = provider.ok_or("Pick a provider first.")?;
+            opencode_set_key(&provider, &key).await?;
+            crate::harness::opencode::models::forget();
+            Ok(())
+        }
         _ => Err(format!("{} cannot take a key here.", harness.label())),
     }
 }
@@ -1109,7 +1144,7 @@ pub async fn add_agent_account(
 /// nothing before doing it.
 async fn codex_set_key(key: &str) -> Result<(), String> {
     let bin = binpath::agent_binary(Harness::Codex).await;
-    let mut child = Command::new(&bin)
+    let mut child = binpath::command(&bin)
         .args(["login", "--with-api-key"])
         .env("PATH", agent_path(&bin))
         .stdin(Stdio::piped())
@@ -1154,6 +1189,284 @@ struct GrokCredential {
     /// `oidc` for the browser and device flows alike.
     #[serde(default)]
     auth_mode: Option<String>,
+}
+
+/// OpenCode 1's providers, read off its credential file rather than asked: one
+/// row per provider it holds a credential for, never the credential itself.
+/// A key OpenCode takes from the environment is not listed.
+///
+/// **OpenCode 2 never writes that file**: it copies it into its own database
+/// once and keeps every later sign-in there, so [`one`] asks 2 instead.
+async fn opencode() -> anyhow::Result<Vec<Account>> {
+    let data = match std::env::var_os("XDG_DATA_HOME").filter(|dir| !dir.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::env::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("no home directory to look for OpenCode's data in"))?
+            .join(".local/share"),
+    };
+    let raw = match tokio::fs::read_to_string(data.join("opencode/auth.json")).await {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::from("{}"),
+        Err(err) => return Err(err.into()),
+    };
+    let held: HashMap<String, serde_json::Value> =
+        serde_json::from_str(&raw).map_err(|err| anyhow::anyhow!("couldn't read OpenCode's credential file: {err}"))?;
+
+    if held.is_empty() {
+        return Ok(vec![Account {
+            provider: None,
+            label: "OpenCode".to_string(),
+            state: AccountState::LoggedOut,
+            detail: None,
+            auth_type: None,
+            can_sign_out: false,
+            can_change_method: false,
+            signs_in_elsewhere: false,
+        }]);
+    }
+    let mut rows: Vec<Account> = held
+        .into_iter()
+        .map(|(provider, credential)| Account {
+            label: provider.clone(),
+            provider: Some(provider),
+            state: AccountState::LoggedIn,
+            detail: None,
+            auth_type: Some(match credential.get("type").and_then(|t| t.as_str()) {
+                Some("api") => "API key".to_string(),
+                Some("oauth") => "OAuth".to_string(),
+                Some(other) => other.to_string(),
+                None => "Credential".to_string(),
+            }),
+            can_sign_out: false,
+            can_change_method: false,
+            signs_in_elsewhere: false,
+        })
+        .collect();
+    rows.sort_by(|a, b| a.label.cmp(&b.label));
+    Ok(rows)
+}
+
+/// One provider OpenCode 2 can sign into: how, and what it holds.
+#[derive(Debug, Deserialize)]
+struct Integration {
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    methods: Vec<IntegrationMethod>,
+    #[serde(default)]
+    connections: Vec<Connection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntegrationMethod {
+    /// `key`, `oauth`, `external` or `env`. Only `oauth` and `external` carry
+    /// an `id`, which is what `--method` takes.
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    /// Questions asked alongside the key or sign-in — Azure's resource name.
+    #[serde(default)]
+    form: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Connection {
+    /// `credential` for one OpenCode stores, which alone can be signed out.
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    id: String,
+    /// `key` or `oauth`.
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(default)]
+    status: Option<ConnectionStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConnectionStatus {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+/// `opencode api GET /api/integration`: every provider, its ways in and the
+/// credentials it holds, named and never carrying a secret.
+async fn opencode_integrations(cwd: &str) -> anyhow::Result<Vec<Integration>> {
+    #[derive(Deserialize)]
+    struct Body {
+        data: Vec<Integration>,
+    }
+    let said = run(Harness::OpenCode, &["api", "GET", "/api/integration"], cwd).await?;
+    if !said.ok {
+        anyhow::bail!("OpenCode couldn't list its providers: {}", if said.err.is_empty() { said.out } else { said.err });
+    }
+    Ok(serde_json::from_str::<Body>(&said.out)
+        .map_err(|err| anyhow::anyhow!("couldn't read OpenCode's providers: {err}"))?
+        .data)
+}
+
+/// A row per provider holding a credential. One OpenCode says needs signing in
+/// again — "Reconnect OpenCode Console to continue" — reads as signed out with
+/// its sentence, rather than as the working login a stored credential implies.
+fn opencode_rows(integrations: &[Integration]) -> Vec<Account> {
+    let rows: Vec<Account> = integrations
+        .iter()
+        .filter_map(|integration| {
+            let held = integration.connections.first()?;
+            let lapsed = held.status.as_ref().filter(|s| s.status == "needs_auth");
+            Some(Account {
+                provider: Some(integration.id.clone()),
+                label: if integration.name.is_empty() { integration.id.clone() } else { integration.name.clone() },
+                state: if lapsed.is_some() { AccountState::LoggedOut } else { AccountState::LoggedIn },
+                detail: lapsed.and_then(|s| s.message.clone()),
+                auth_type: Some(match (held.kind.as_str(), held.method.as_deref()) {
+                    ("credential", Some("key")) => "API key".to_string(),
+                    ("credential", Some("oauth")) => "OAuth".to_string(),
+                    ("credential", _) => "Credential".to_string(),
+                    _ => "Environment".to_string(),
+                }),
+                can_sign_out: integration.connections.iter().any(|c| c.kind == "credential"),
+                can_change_method: opencode_options(integration).len() > 1,
+                signs_in_elsewhere: false,
+            })
+        })
+        .collect();
+    if rows.is_empty() {
+        return vec![Account {
+            provider: None,
+            label: "OpenCode".to_string(),
+            state: AccountState::LoggedOut,
+            detail: None,
+            auth_type: None,
+            can_sign_out: false,
+            can_change_method: false,
+            signs_in_elsewhere: false,
+        }];
+    }
+    rows
+}
+
+/// What the Add-account flow offers on OpenCode 2: every provider with a way in
+/// Dray can start. A provider read from the environment alone has none.
+fn opencode_providers(integrations: &[Integration]) -> Vec<ProviderChoice> {
+    integrations
+        .iter()
+        .filter(|integration| plausible_provider(&integration.id) && !opencode_options(integration).is_empty())
+        .map(|integration| ProviderChoice {
+            id: integration.id.clone(),
+            label: if integration.name.is_empty() { integration.id.clone() } else { integration.name.clone() },
+        })
+        .collect()
+}
+
+/// One OpenCode 2 provider's ways in. A plain key is pasted here and handed to
+/// OpenCode's server; a sign-in, or a key that comes with questions, runs
+/// `opencode auth login <provider> --method <id>` in a terminal.
+fn opencode_options(integration: &Integration) -> Vec<AuthOption> {
+    let provider = &integration.id;
+    if !plausible_provider(provider) {
+        return Vec::new();
+    }
+    integration
+        .methods
+        .iter()
+        .filter_map(|method| {
+            let asks = method.form.iter().any(|field| field.get("required").and_then(Value::as_bool) == Some(true));
+            let (id, label, command) = match (method.kind.as_str(), method.id.as_deref()) {
+                ("key", _) if !asks => ("key".to_string(), "API key".to_string(), None),
+                ("key", _) => ("key".to_string(), "API key".to_string(), Some(format!("opencode auth login {provider}"))),
+                ("oauth" | "external", Some(id)) if plausible_provider(id) => (
+                    id.to_string(),
+                    "Sign in".to_string(),
+                    Some(format!("opencode auth login {provider} --method {id}")),
+                ),
+                _ => return None,
+            };
+            Some(AuthOption {
+                id,
+                label: method.label.clone().unwrap_or(label),
+                needs_key: command.is_none(),
+                command,
+                hint: asks.then(|| "OpenCode asks for the rest in the terminal.".to_string()),
+            })
+        })
+        .collect()
+}
+
+/// Hands a key to OpenCode 2's own store, through its background server.
+///
+/// Its CLI takes a key only at a prompt, and `opencode api` only on the command
+/// line, where any process here could read it. The server's own route takes
+/// it in a request body instead, authenticated with the password it leaves in
+/// `service.json` beside its address. `opencode api GET /api/info` first, which
+/// starts the server where it is not running.
+async fn opencode_set_key(provider: &str, key: &str) -> Result<(), String> {
+    #[derive(Deserialize)]
+    struct Service {
+        url: String,
+        password: String,
+    }
+    run(Harness::OpenCode, &["api", "GET", "/api/info"], "")
+        .await
+        .map_err(|err| format!("{err:#}"))?;
+    // ponytail: the XDG layout OpenCode 2 uses on macOS and Linux; Windows
+    // keeps it elsewhere and gets the terminal's sign-in until measured.
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|home| home.join(".local/state")))
+        .ok_or("no home directory to find OpenCode's server in")?;
+    let raw = tokio::fs::read_to_string(state.join("opencode/service.json"))
+        .await
+        .map_err(|err| format!("couldn't find OpenCode's server: {err}"))?;
+    let service: Service = serde_json::from_str(&raw).map_err(|err| format!("couldn't read OpenCode's server file: {err}"))?;
+
+    let response = crate::http()
+        .post(format!("{}/api/integration/{provider}/connect/key", service.url.trim_end_matches('/')))
+        .basic_auth("opencode", Some(&service.password))
+        .json(&serde_json::json!({ "key": key }))
+        .timeout(PROBE_TIMEOUT)
+        .send()
+        .await
+        .map_err(|err| format!("couldn't reach OpenCode's server: {err}"))?;
+    if response.status().is_success() {
+        return Ok(());
+    }
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let said = serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string));
+    Err(said.unwrap_or_else(|| format!("OpenCode refused the key ({status})")))
+}
+
+/// Signs every stored credential of one provider out of OpenCode 2. `opencode
+/// auth logout <provider> <credential>` asks nothing once both are named.
+async fn opencode_sign_out(provider: &str) -> Result<(), String> {
+    let integrations = opencode_integrations("").await.map_err(|err| format!("{err:#}"))?;
+    let held: Vec<&str> = integrations
+        .iter()
+        .filter(|integration| integration.id == provider)
+        .flat_map(|integration| &integration.connections)
+        .filter(|connection| connection.kind == "credential" && !connection.id.is_empty())
+        .map(|connection| connection.id.as_str())
+        .collect();
+    if held.is_empty() {
+        return Err(format!("OpenCode holds no sign-in for {provider}."));
+    }
+    for credential in held {
+        run(Harness::OpenCode, &["auth", "logout", provider, credential], "")
+            .await
+            .map_err(|err| format!("{err:#}"))?
+            .or_refused("OpenCode refused the sign-out.".to_string())?;
+    }
+    Ok(())
 }
 
 /// grok, read off its own credential file rather than asked.
@@ -1275,6 +1588,18 @@ pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Resul
             }
             vec!["auth", "logout", provider]
         }
+        // OpenCode 2 names each credential, so it signs out without asking.
+        // 1's is unmeasured and not offered: `can_sign_out` is false on its rows.
+        Harness::OpenCode if binpath::opencode_v2().await => {
+            let provider = provider.as_deref().ok_or("Which provider?")?;
+            if !plausible_provider(provider) {
+                return Err(format!("{provider} is not a provider name."));
+            }
+            opencode_sign_out(provider).await?;
+            crate::harness::opencode::models::forget();
+            return Ok(());
+        }
+        Harness::OpenCode => return Err("Sign out in a terminal: opencode auth logout".to_string()),
         Harness::Other(_) => return Err("Dray cannot drive that agent.".to_string()),
     };
 
@@ -1301,8 +1626,21 @@ pub async fn agent_auth_options(harness: Harness, provider: Option<String>) -> V
 }
 
 /// [`options`], with pi's sign-in moved back into its TUI where the pi
-/// installed here predates `pi auth login`.
+/// installed here predates `pi auth login`, and OpenCode 2's ways in read off
+/// the provider itself.
 async fn installed_options(harness: Harness, provider: Option<&str>, headless: bool) -> Vec<AuthOption> {
+    if harness == Harness::OpenCode && binpath::opencode_v2().await {
+        let Some(provider) = provider else {
+            return Vec::new();
+        };
+        return opencode_integrations("")
+            .await
+            .unwrap_or_default()
+            .iter()
+            .find(|integration| integration.id == provider)
+            .map(opencode_options)
+            .unwrap_or_default();
+    }
     let mut offered = options(harness, provider, headless);
     if harness == Harness::Pi && !pi_shell_auth().await {
         for option in offered.iter_mut().filter(|option| option.id == "oauth") {
@@ -1359,7 +1697,15 @@ pub async fn run_agent_login(
 ) -> Result<(), String> {
     let provider = checked_provider(provider)?;
     let offered = installed_options(harness, provider.as_deref(), false).await;
-    let command = pick(offered, harness, &auth)?;
+    let mut command = pick(offered, harness, &auth)?;
+    // The copy Dray runs, not the reader's `PATH`'s: with OpenCode 1 and 2
+    // both installed, the bare name signed the other one in.
+    if harness == Harness::OpenCode {
+        if let Some(rest) = command.strip_prefix("opencode ") {
+            let bin = binpath::agent_binary(harness).await;
+            command = format!("{} {rest}", crate::apps::sh_quote(&bin.to_string_lossy()));
+        }
+    }
     crate::apps::run_in_terminal(&command, &cwd).await
 }
 
@@ -1574,6 +1920,55 @@ mod tests {
             Ok("pi auth login openai --no-browser")
         );
         assert!(login_command(Harness::Pi, Some("a;b".into()), "oauth", true).is_err());
+    }
+
+    /// OpenCode 2.4.1's `/api/integration`, trimmed to seven providers: four
+    /// signed in, one of them lapsed, and three not.
+    #[test]
+    fn opencode_2_reads_its_providers_and_their_ways_in() {
+        #[derive(Deserialize)]
+        struct Body {
+            data: Vec<Integration>,
+        }
+        let all = serde_json::from_str::<Body>(include_str!("fixtures/opencode_integrations.json"))
+            .unwrap()
+            .data;
+
+        let rows = opencode_rows(&all);
+        let named: Vec<(&str, AccountState, Option<&str>)> = rows
+            .iter()
+            .map(|r| (r.label.as_str(), r.state, r.auth_type.as_deref()))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("Anthropic", AccountState::LoggedIn, Some("OAuth")),
+                ("OpenAI", AccountState::LoggedIn, Some("OAuth")),
+                ("OpenCode", AccountState::LoggedOut, Some("API key")),
+                ("xAI", AccountState::LoggedIn, Some("OAuth")),
+            ]
+        );
+        assert!(rows.iter().all(|r| r.can_sign_out));
+        assert_eq!(rows[2].detail.as_deref(), Some("Reconnect OpenCode Console to continue"));
+
+        // Claude Agent signs in through Claude Code alone, which is still a way in.
+        let offered: Vec<String> = opencode_providers(&all).into_iter().map(|p| p.id).collect();
+        assert_eq!(offered,["302ai", "anthropic", "azure", "claude-agent", "openai", "opencode", "xai"]);
+
+        let find = |id: &str| all.iter().find(|i| i.id == id).unwrap();
+        // A plain key is pasted here; Azure's asks a question first, so it is
+        // the terminal's.
+        let key = &opencode_options(find("302ai"))[0];
+        assert!(key.needs_key && key.command.is_none());
+        let azure = &opencode_options(find("azure"))[0];
+        assert_eq!(azure.command.as_deref(), Some("opencode auth login azure"));
+        let openai = opencode_options(find("openai"));
+        assert_eq!(openai[1].id, "chatgpt-token-sharing");
+        assert_eq!(openai[1].label, "Sign in with ChatGPT");
+        assert_eq!(
+            openai[1].command.as_deref(),
+            Some("opencode auth login openai --method chatgpt-token-sharing")
+        );
     }
 
     /// A provider whose credential is structured rather than a key or a

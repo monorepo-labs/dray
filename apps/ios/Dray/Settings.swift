@@ -3,24 +3,24 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Where Settings can go: a server's page, every server, Dictation, Notifications, Appearance.
+/// Where Settings can go: a server's page, every server, Dictation, Notifications, Vault.
 enum SettingsPage: Hashable {
     case server(UUID)
     case servers
     case dictation
     case notifications
-    case appearance
+    case secrets
 }
 
-/// The one Settings screen: a card per server, then Add server, Dictation, Notifications,
-/// Appearance and about. Opened on one server's page when a banner's Fix asks.
+/// The one Settings screen: a card per server, then Add server, Dictation, Notifications, Vault
+/// and about. Opened on one server's page when a banner's Fix asks.
 struct SettingsView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var path: [SettingsPage]
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
-    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
     @AppStorage(Push.allowKey) private var notify = true
+    @AppStorage(LaunchBot.key) private var launchBot = ""
 
     init(focus: UUID?) { _path = State(initialValue: focus.map { [.server($0)] } ?? []) }
 
@@ -40,8 +40,12 @@ struct SettingsView: View {
                             SettingsRow("Notifications", icon: "bell", value: notify ? "On" : "Off")
                         }
                         RowDivider(inset: 48)
-                        NavigationLink(value: SettingsPage.appearance) {
-                            SettingsRow("Appearance", icon: "circle.lefthalf.filled", value: hideSessions ? "Bots only" : nil)
+                        NavigationLink(value: SettingsPage.secrets) {
+                            SettingsRow("Vault", icon: "lock")
+                        }
+                        if !store.allBots.isEmpty || !launchBot.isEmpty {
+                            RowDivider(inset: 48)
+                            launchBotRow
                         }
                     }
                     .buttonStyle(RowButtonStyle())
@@ -78,10 +82,27 @@ struct SettingsView: View {
                         .navigationBarTitleDisplayMode(.inline)
                 case .dictation: DictationSettings()
                 case .notifications: NotificationSettings()
-                case .appearance: AppearanceSettings()
+                case .secrets: SecretsSettings()
                 }
             }
             .task { await Releases.shared.refresh() }
+        }
+    }
+
+    /// Off, or the bot whose chat a launch opens; Back is the list as ever.
+    private var launchBotRow: some View {
+        let bots = store.allBots
+        let picked = bots.first { LaunchBot.id($0.server, $0.bot) == launchBot }
+        return Menu {
+            Picker("Open bot at launch", selection: $launchBot) {
+                Text("Off").tag("")
+                ForEach(bots, id: \.bot.id) { b in
+                    Text(store.live.count > 1 ? "\(b.bot.name) · \(store.name(of: b.server))" : b.bot.name)
+                        .tag(LaunchBot.id(b.server, b.bot))
+                }
+            }
+        } label: {
+            SettingsRow("Open bot at launch", icon: "bubble.left", value: picked?.bot.name ?? "Off", trailing: "chevron.up.chevron.down")
         }
     }
 
@@ -906,40 +927,23 @@ private struct KindSwitch: View {
     }
 }
 
-private func switchRow(_ label: String, _ on: Binding<Bool>) -> some View {
+/// Settings' Open bot at launch: the bot whose chat a launch opens, empty for off.
+enum LaunchBot {
+    static let key = "launch.bot"
+    /// What the pick is kept as: a bot's id on its own server.
+    static func id(_ server: UUID, _ bot: Bot) -> String { "\(server.uuidString)/\(bot.id)" }
+
+    /// The picked bot, from the list as it stands: the cache on a cold launch, before any server answers.
+    @MainActor static func bot(_ store: Store) -> (server: UUID, bot: Bot)? {
+        let pick = UserDefaults.standard.string(forKey: key) ?? ""
+        return pick.isEmpty ? nil : store.allBots.first { id($0.server, $0.bot) == pick }
+    }
+}
+
+func switchRow(_ label: String, _ on: Binding<Bool>) -> some View {
     Toggle(label, isOn: on)
         .toggleStyle(SwitchStyle())
         .font(Theme.Font.body)
         .padding(.leading, Theme.Space.l).padding(.trailing, 14)
         .frame(minHeight: 52)
-}
-
-// MARK: Appearance
-
-/// How the home list looks. Hiding sessions leaves it to bots alone.
-struct AppearanceSettings: View {
-    static let hideSessionsKey = "list.hideSessions"
-    @AppStorage(hideSessionsKey) private var hideSessions = false
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                RowGroup {
-                    Toggle("Hide sessions", isOn: $hideSessions)
-                        .toggleStyle(SwitchStyle())
-                        .font(Theme.Font.body)
-                        .padding(.leading, Theme.Space.l).padding(.trailing, 14)
-                        .frame(minHeight: 52)
-                }
-                GroupLabel("Home shows your bots only: no sessions, project filter, orb, drafts or settled.")
-                    .padding(.horizontal, Theme.Space.m)
-            }
-            .padding(.horizontal, Theme.Space.l)
-            .padding(.top, Theme.Space.m)
-        }
-        .background(Theme.card.ignoresSafeArea())
-        .foregroundStyle(Theme.text)
-        .navigationTitle("Appearance")
-        .navigationBarTitleDisplayMode(.inline)
-    }
 }

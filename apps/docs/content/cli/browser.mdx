@@ -1,8 +1,8 @@
 ---
 title: Browser
-description: Drive a session's own browser with dray browser — open pages, read them, click and type, take screenshots and record videos.
+description: Drive a session's own browser with dray browser — open pages, read them, click and type, take screenshots and record videos — and what the app's browser shows on a new tab or a stopped dev server.
 sidebar:
-  order: 6
+  order: 7
 ---
 
 Every session has its own browser, drawn in the app beside the chat. `dray browser` drives it from the command line. It is mostly for agents: an agent checks the dev server it just changed, fills a form, or records a video of a feature working, and you watch the same tabs it acts on.
@@ -153,7 +153,24 @@ While a recording runs, the pane shows a notice in place of the page, and you ca
 
 On a Linux server, `dray browser` runs its own Chromium with no window. It needs the system libraries Chromium uses, and `record` needs ffmpeg. `dray server install` offers both as **Browser for agents** and **ffmpeg**. See [Servers](/cli/servers).
 
+That Chromium closes after 5 minutes with nothing driving it, and keeps the session's tabs. The next command opens the same pages again. A recording, a command in progress or a screenshot keeps it open.
+
 Screenshots and recordings land in the same folders, under `~/.dray/browser` on the server.
+
+## The browser in the app
+
+The pages `dray browser` drives are the session's Browser tab in the app, so you can watch and take over.
+
+**A new tab** opens on a start page:
+
+- **Diff** and **Files** cards at the top. Click one and the tab becomes that view.
+- The dev servers the session can reach, under **Running locally**, or **Running on** a server's name. Click one to open it. **Get shareable link** gives it a public address; see [Share a dev server](/reference/remote-access#share-a-dev-server).
+- In a bot's browser, its tasks' dev servers too, each group headed by the task, with its machine's name when the task runs elsewhere. See [Bots](/using-dray/bots).
+- **Recently visited** pages.
+
+**A dev server that stops answering** shows Dray's own page instead of the browser's error: **Nothing is answering on localhost:`<port>`**, with the task that ran it, its machine, and how long ago it stopped. **Ask the task to restart it**, or **Ask the agent to restart it** in the session's own browser, sends the agent a message to start it again, and the button then reads **Asked**. **Retry** loads the page again. Once the server answers again, the page reloads by itself. Other servers still running are listed below.
+
+{/* screenshot: the stopped dev server page, with the task, machine and "stopped 3 min ago", and the two buttons */}
 
 ## Limits
 

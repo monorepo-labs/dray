@@ -1,19 +1,21 @@
 ---
 title: Install Dray
-description: What Dray needs, how to download and install it, how to add an agent CLI, and what happens on first launch.
+description: What Dray needs, how to download and install it on a Mac, Linux or Windows, what first launch sets up, how to sign in to your Dray account, and how to add an agent CLI.
 sidebar:
   order: 1
 ---
 
-Dray is a Mac app, with a Linux version in beta. It runs the coding agent CLIs you install yourself, so setting it up is two things: the app, and at least one agent.
+Dray runs on macOS, Linux and Windows. The Linux and Windows builds are in beta. It runs the coding agent CLIs on your machine, so setting it up is three things: the app, a Dray account, and at least one agent. First launch walks you through all three.
 
 ## Requirements
 
 - On a Mac: macOS 11 or later, Apple silicon or Intel. There is one universal download for both. Dray Island, the panel you can open over any app, needs macOS 15.
 - On Linux (beta): x64 or arm64. The `.deb` needs Ubuntu 22.04 or later, or Debian 12 or later. The AppImage runs on other distros with glibc 2.35 or later (most released since 2022) and needs no extra packages.
-- At least one agent CLI: Claude Code, Codex, pi, fx or Grok Build. See [Agents](/using-dray/agents).
+- On Windows (beta): Windows 10 or 11 on x64. The NSIS installer installs for your user account, so it needs no administrator prompt. Dray Island works here too.
+- A Dray account. You make one the first time you [sign in](#sign-in), with GitHub, Google or email.
+- At least one agent CLI: Claude Code, Codex, pi, fx, Grok Build or OpenCode. First launch can install one for you. See [Agents](/using-dray/agents).
+- The GitHub CLI (`gh`), signed in. First launch sets it up too. Dray uses it to list your repositories when you attach a project, for pull requests and for GitHub issues.
 - git, for branches and worktrees. A folder that is not a git repository still works, without those two.
-- Optional: the GitHub CLI (`gh`), signed in. Dray uses it to list your repositories when you attach a project, and for the pull request tab.
 
 ## Download and install
 
@@ -35,14 +37,93 @@ Dray is a Mac app, with a Linux version in beta. It runs the coding agent CLIs y
 
 Get the file for your system from [drayhq.com/download](https://www.drayhq.com/download), or from **Download for Linux** on the home page. There are two kinds, each for x64 and arm64:
 
-- **`.deb`**, for Debian and Ubuntu. Double-click it and press **Install**, or run `sudo apt install ./Dray_amd64.deb` (`Dray_arm64.deb` on arm64). apt installs what it needs. Then open Dray from your app menu.
-- **AppImage**, for other distros with glibc 2.35 or later. Make it executable with `chmod +x Dray_amd64.AppImage` (or Properties → Allow executing as program), then double-click it.
+| File | For | x64 | arm64 |
+|---|---|---|---|
+| `.deb` | Debian and Ubuntu | `Dray_amd64.deb` | `Dray_arm64.deb` |
+| AppImage | Other distros, glibc 2.35 or later | `Dray_amd64.AppImage` | `Dray_arm64.AppImage` |
 
-Both update themselves, like the Mac app. A `.deb` asks for your password once per update.
+<Steps>
+  <Step title="Install the .deb">
+    Double-click it and press **Install**, or run `sudo apt install ./Dray_amd64.deb` (`./Dray_arm64.deb` on arm64). apt installs what it needs. Then open Dray from your app menu. From a terminal the app is `dray-app`, since `dray` is the [command line tool](/cli).
+  </Step>
+  <Step title="Or run the AppImage">
+    Make it executable with `chmod +x Dray_amd64.AppImage` (or Properties → Allow executing as program), then double-click it. It updates by replacing its own file.
+  </Step>
+</Steps>
+
+Both update themselves, like the Mac app. A `.deb` asks for your password once per update; an AppImage asks nothing. See [Updates](/get-started/updates).
+
+### On Windows (beta)
+
+Download [`Dray_x64-setup.exe`](https://downloads.drayhq.com/Dray_x64-setup.exe), run it and follow the prompts. The app installs under your user account and appears in the Start menu. Stable releases also offer an MSI, [`Dray_x64.msi`](https://downloads.drayhq.com/Dray_x64.msi), for machines managed per machine. drayhq.com/download has no Windows button yet, so use these links.
+
+Both update themselves, like the Mac app. See [Updates](/get-started/updates).
+
+The installer is not signed yet, so Windows may show a SmartScreen warning: choose **More info**, then **Run anyway**.
+
+## First launch
+
+The first time you open Dray, it walks you through setup before you sign in. On a Mac the window opens in full screen; later launches restore it as you left it.
+
+{/* screenshot: onboarding's setup screen, agent cards and the GitHub CLI card */}
+
+<Steps>
+  <Step title="Welcome">
+    The Dray wordmark, then **Welcome to Dray**, with music. It moves on by itself.
+  </Step>
+  <Step title="Set up an agent and GitHub">
+    A card for each agent, and one for the GitHub CLI. Each reads **Checking…** for a moment, then what it needs:
+
+    - **Ready**: installed and signed in.
+    - **Install**: not on this machine. Click it and Dray runs the vendor's own installer in the background, then starts the agent's sign-in. For the GitHub CLI it uses Homebrew; without Homebrew it opens GitHub's install page.
+    - **Sign in**: installed but signed out. Click it and the agent's login opens in a terminal window. The card reads **Finish signing in** until it lands.
+    - **Install by hand**: the install failed. Hover for the reason. Click to run the same installer in a terminal window, where you can watch it and answer what it asks; for the GitHub CLI it opens GitHub's install page.
+
+    One agent is enough, but the GitHub CLI is needed too. There is no skip: once at least one agent and GitHub read **Ready**, the next screen opens by itself.
+  </Step>
+  <Step title="Meet Dray Bot">
+    What [Dray Bot](/using-dray/bots) does, in four tiles. Click **Continue** or press `Enter`.
+  </Step>
+  <Step title="Sign in">
+    Pick GitHub, Google or email. See [Sign in](#sign-in) below.
+  </Step>
+</Steps>
+
+Once you are signed in, Dray opens on Dray Bot's chat. [Your first session](/get-started/first-session) walks through the rest.
+
+Setup shows once. If you quit before signing in, Dray reopens on the sign-in page. If this machine was ever signed in, setup is skipped.
+
+## Sign in
+
+Dray asks you to sign in to a Dray account before you use it. Signing in happens in your browser, on drayhq.com, and brings you straight back to the app.
+
+<Steps>
+  <Step title="Pick an account">
+    The sign-in page offers **GitHub**, **Google** and **Email**. The one you used last time is marked **Last used**.
+  </Step>
+  <Step title="Finish in your browser">
+    Your browser opens. If it is already signed in to drayhq.com, it asks **Continue as …?**, or **Use a different account**, which signs it out first. With email, sign in with your password, or **Create an account** and enter the code Dray emails you.
+
+    While you are in the browser, the app reads **Finish signing in in your browser.** **Open again** reopens the browser page; **Cancel** stops the sign-in.
+  </Step>
+  <Step title="Back in Dray">
+    The browser hands you back to the app, and the app opens.
+  </Step>
+</Steps>
+
+There is no code to copy and nothing to approve: the browser can only hand the sign-in back to the Dray on your machine.
+
+- **Email** may be greyed out, with "Coming in the next few days" under it. Email sign-in is off until it opens on drayhq.com; use GitHub or Google until then.
+- **Skip for now.** Signing in is optional. **Skip for now**, under the cards, opens Dray without an account, and Dray stays open on later launches. Sign in any time from the top of Settings. After a few days of use and your first merged pull request, Dray asks you to sign in to keep using it. If drayhq.com can't be reached then, **Skip for now** still lets you in, and Dray asks again later. If Dray can't reach drayhq.com, the sign-in page says "Check your connection, or skip for now." and Skip for now is a fourth card. A machine signed in before keeps its sign-in offline.
+- **Signed out elsewhere.** If your sign-in is ended on drayhq.com, the sign-in page comes back within a minute or two: "Sign in again. Your agents are still running."
+
+Your account shows at the top of Settings' tab list: your picture or initials, name and email. Click it to see how you signed in, and pick **Sign out…** to sign out. Dray asks first, then shows the sign-in page, where you can sign in again or skip.
+
+Signing in is for Dray itself. Each agent keeps its own login; see [Install an agent](#install-an-agent).
 
 ## Install an agent
 
-Dray installs no agent and stores no agent login. Each agent keeps its own, exactly as it does in your terminal. If an agent already works in your terminal, it works in Dray.
+After first launch, Dray installs no agent for you. It stores no agent login either: each agent keeps its own, exactly as it does in your terminal. If an agent already works in your terminal, it works in Dray.
 
 You pick the agent in the composer's model picker. An agent that is not installed has a small red dot on its mark. Pick it anyway and the composer tells you:
 
@@ -53,7 +134,7 @@ Beside that line are two buttons:
 - **Copy command** copies the vendor's own install command. Paste it into a terminal.
 - **Install guide** opens the vendor's install page.
 
-Dray never runs the installer for you. These are the commands it offers:
+These are the commands Dray offers, and the ones first launch runs:
 
 | Agent | Install command |
 |---|---|
@@ -62,30 +143,27 @@ Dray never runs the installer for you. These are the commands it offers:
 | pi | `curl -fsSL https://pi.dev/install.sh \| sh` |
 | fx | `curl -fsSL https://fx.sh/setup.sh \| bash` |
 | Grok Build | `curl -fsSL https://x.ai/cli/install.sh \| bash` |
+| OpenCode | `curl -fsSL https://opencode.ai/v2/install \| bash` |
 
-Then sign in to the agent. [Agents](/using-dray/agents#signing-in) says how, and [Accounts](/settings/accounts) shows who each agent runs as.
+On Windows, Dray offers each vendor's PowerShell installer instead, such as `irm https://claude.ai/install.ps1 | iex` for Claude Code. fx and OpenCode publish none, so there Dray only links their install page.
+
+Then sign in to the agent. [Agents](/using-dray/agents#signing-in) says how, and Settings → [Agents](/settings/accounts) shows who each agent runs as.
 
 :::note
 Dray looks for each agent once and remembers the answer. If you install an agent while Dray is running, it still reads as missing. Quit with **Quit completely** (see below) and open Dray again, so the background process looks again.
 :::
 
-## First launch
-
-Dray opens on a new task: a composer in the middle of the window, and the sidebar on the left. [Your first session](/get-started/first-session) walks through the rest.
-
-{/* screenshot: the empty window on first launch, composer centered, sidebar with New Task and Issues */}
-
-### Dray keeps running after you quit
+## Dray keeps running after you quit
 
 Your sessions run in a background process, not in the window. Close the window or quit the app and the agents keep working. Open Dray again and you find them where you left them.
 
-When you quit (`⌘Q`, or the window's close button), Dray asks first:
+When you quit (`⌘Q` on a Mac, or the window's close button), Dray asks first:
 
 - **Quit** closes the app. Sessions keep running in the background.
 - **Quit completely** closes the app and stops every session too.
 - **Cancel** keeps Dray open.
 
-### The browser downloads in the background
+## The browser downloads in the background
 
 Dray has a built-in browser, and it runs on Chromium. Chromium is not in the download, since it is a few hundred megabytes. A few seconds after the window first opens, Dray fetches it in the background. There is nothing to click.
 
@@ -93,10 +171,10 @@ You can see how far it has got in Settings → Integrations → **Browser**, and
 
 ## The `dray` command line
 
-`dray` is a separate command line tool. It lets your agents start sessions of their own, message other sessions and drive the browser. Dray tells its agents how to install it when they need it. See [dray CLI](/cli).
+`dray` is the app's command line tool. It lets your agents start sessions of their own, message other sessions and drive the browser. The app ships it and puts it in `~/.local/bin` each time it starts, so there is nothing to install. See [dray CLI](/cli).
 
 ## Limits
 
-- The Linux app is a beta. If something breaks, [open an issue](https://github.com/monorepo-labs/dray/issues/new).
+- The Linux and Windows apps are betas. If something breaks, [open an issue](https://github.com/monorepo-labs/dray/issues/new).
 - Dray can also run on a Linux server that you drive from the app: see [Connect a server](/server).
-- Dray does not install an agent or sign you in to one. Each agent uses its own login, subscription or key.
+- Dray installs an agent only during first launch, and only one that is not on the machine at all. It never signs you in to an agent for you: each agent uses its own login, subscription or key.

@@ -7,9 +7,9 @@
 //! `Command::new("claude")` resolves under `pnpm tauri dev` and fails from the
 //! bundle, which is the same binary behaving differently by how it was started.
 //!
-//! Resolved once into a `OnceCell` and reused: the login-shell probe below costs
-//! real time (a shell reading the user's whole rc chain), and the answer can't
-//! change while the app runs.
+//! Resolved once and reused: the login-shell probe below costs real time (a
+//! shell reading the user's whole rc chain). Only Dray's own installs and the
+//! `gh` recheck throw an answer away.
 
 use crate::harness::Harness;
 use std::ffi::OsString;
@@ -19,17 +19,36 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
 use tokio::process::Command;
-use tokio::sync::OnceCell;
+use tokio::sync::Mutex;
 
-static CLAUDE_PATH: OnceCell<PathBuf> = OnceCell::const_new();
-/// Not a `OnceCell` like the two beside it, because this one caches an
+/// One agent's resolved path. Not a `OnceCell`, so [`forget_agent`] can empty it
+/// once Dray has installed that agent itself. The answer sits behind a std lock
+/// that never waits on a resolve, so [`resolved_bin_dirs`] always sees it; the
+/// async mutex only keeps two resolves of one agent from running at once.
+struct Slot {
+    path: RwLock<Option<PathBuf>>,
+    resolving: Mutex<()>,
+}
+
+impl Slot {
+    const fn new() -> Self {
+        Slot { path: RwLock::new(None), resolving: Mutex::const_new(()) }
+    }
+
+    fn get(&self) -> Option<PathBuf> {
+        self.path.read().unwrap().clone()
+    }
+}
+
+static CLAUDE_PATH: Slot = Slot::new();
+/// Not a [`Slot`] like the agents', because this one caches an
 /// *absence* and that absence is what the reader is being asked to fix — see
 /// [`forget_gh`].
 static GH_PATH: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
 /// Bumped by every [`forget_gh`], so a probe already running when the reader
 /// installed `gh` cannot put its own miss back over the answer.
 static GH_GENERATION: AtomicU64 = AtomicU64::new(0);
-static CODEX_PATH: OnceCell<PathBuf> = OnceCell::const_new();
+static CODEX_PATH: Slot = Slot::new();
 
 /// The `codex` shipped inside the ChatGPT desktop app.
 ///
@@ -54,8 +73,36 @@ pub async fn claude() -> PathBuf {
 /// A caller arriving mid-resolve waits on it rather than starting its own:
 /// launch asks for every agent from several places at once, and a miss ends in
 /// a login shell.
-async fn cached<T: Clone>(slot: &'static OnceCell<T>, resolve: impl Future<Output = T>) -> T {
-    slot.get_or_init(|| resolve).await.clone()
+async fn cached(slot: &'static Slot, resolve: impl Future<Output = PathBuf>) -> PathBuf {
+    if let Some(hit) = slot.get() {
+        return hit;
+    }
+    let _resolving = slot.resolving.lock().await;
+    if let Some(hit) = slot.get() {
+        return hit;
+    }
+    let found = resolve.await;
+    *slot.path.write().unwrap() = Some(found.clone());
+    found
+}
+
+/// Forgets where `harness` is, so the next ask resolves it again. Called after
+/// Dray installed it, or the miss cached before the install would stand until
+/// the server restarts.
+pub async fn forget_agent(harness: Harness) {
+    let slot = match harness {
+        Harness::ClaudeCode => &CLAUDE_PATH,
+        Harness::Codex => &CODEX_PATH,
+        Harness::Pi => &PI_PATH,
+        Harness::Fx => &FX_PATH,
+        Harness::Grok => &GROK_PATH,
+        Harness::OpenCode => &OPENCODE_PATH,
+        Harness::Other(_) => return,
+    };
+    // Waits out a resolve already running, or its pre-install miss lands after this.
+    let _resolving = slot.resolving.lock().await;
+    *slot.path.write().unwrap() = None;
+    LOGIN_PATH_STALE.store(true, Ordering::Release);
 }
 
 /// Resolves `name`, or the bare name for [`claude`]'s reason.
@@ -170,7 +217,7 @@ async fn resolve_codex() -> PathBuf {
     PathBuf::from("codex")
 }
 
-static PI_PATH: OnceCell<PathBuf> = OnceCell::const_new();
+static PI_PATH: Slot = Slot::new();
 
 /// Where `pi` is, or the bare name as a last resort — [`claude`]'s shape, and
 /// for its reason.
@@ -189,7 +236,7 @@ pub async fn pi() -> PathBuf {
     cached(&PI_PATH, or_bare("pi")).await
 }
 
-static FX_PATH: OnceCell<PathBuf> = OnceCell::const_new();
+static FX_PATH: Slot = Slot::new();
 
 /// Where `fx` is, or the bare name as a last resort — [`claude`]'s shape.
 /// Vercel's installer puts it in `~/.local/bin`, one of the known dirs.
@@ -197,7 +244,7 @@ pub async fn fx() -> PathBuf {
     cached(&FX_PATH, or_bare("fx")).await
 }
 
-static GROK_PATH: OnceCell<PathBuf> = OnceCell::const_new();
+static GROK_PATH: Slot = Slot::new();
 
 /// Where `grok` is, or the bare name as a last resort — [`claude`]'s shape.
 /// xAI's installer puts it in `~/.local/bin` and symlinks `~/.grok/bin/grok`
@@ -205,6 +252,77 @@ static GROK_PATH: OnceCell<PathBuf> = OnceCell::const_new();
 /// shell is ever asked.
 pub async fn grok() -> PathBuf {
     cached(&GROK_PATH, or_bare("grok")).await
+}
+
+static OPENCODE_PATH: Slot = Slot::new();
+
+/// The major version of the `opencode` [`opencode`] chose, `0` where unread.
+static OPENCODE_MAJOR: AtomicU64 = AtomicU64::new(0);
+
+/// Where `opencode` is, or the bare name as a last resort — [`claude`]'s shape.
+/// Its installers put it in `~/.opencode/bin`, one of the known dirs.
+pub async fn opencode() -> PathBuf {
+    cached(&OPENCODE_PATH, resolve_opencode()).await
+}
+
+/// Whether the `opencode` Dray runs is OpenCode 2, whose CLI, credential store
+/// and config reading differ from 1's.
+pub async fn opencode_v2() -> bool {
+    opencode().await;
+    OPENCODE_MAJOR.load(Ordering::Acquire) >= 2
+}
+
+/// The newest `opencode` here, not the first.
+///
+/// OpenCode 2 installs beside 1 rather than over it — brew's `opencode-v2`
+/// next to curl's `~/.opencode/bin` — and the old one usually comes first on
+/// `PATH`. Run, it shares 2's data dir with 2's background server: `opencode
+/// models` failed on "database is locked", and the two copies of each OAuth
+/// login refreshed over each other until the provider refused both. So every
+/// copy found is asked its version, once, and the newest wins; a tie keeps the
+/// search order.
+async fn resolve_opencode() -> PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut found: Vec<PathBuf> = Vec::new();
+    for candidate in std::env::split_paths(&path)
+        .chain(known_dirs())
+        .flat_map(|dir| spellings(dir.join("opencode")))
+        .filter(|candidate| is_executable(candidate))
+    {
+        let real = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        if !found.iter().any(|seen| std::fs::canonicalize(seen).unwrap_or_else(|_| seen.clone()) == real) {
+            found.push(candidate);
+        }
+    }
+    if found.is_empty() {
+        found.extend(login_shell_which("opencode").await);
+    }
+
+    let mut best: Option<(PathBuf, (u64, u64, u64))> = None;
+    for candidate in found {
+        let version = opencode_version(&candidate).await.unwrap_or_default();
+        if best.as_ref().is_none_or(|(_, held)| version > *held) {
+            best = Some((candidate, version));
+        }
+    }
+    let Some((bin, version)) = best else {
+        OPENCODE_MAJOR.store(0, Ordering::Release);
+        return PathBuf::from("opencode");
+    };
+    OPENCODE_MAJOR.store(version.0, Ordering::Release);
+    bin
+}
+
+async fn opencode_version(bin: &Path) -> Option<(u64, u64, u64)> {
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        command(bin).arg("--version").stdin(Stdio::null()).kill_on_drop(true).output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    crate::agent_updates::parse(&crate::agent_updates::version_in(&text)?)
 }
 
 #[cfg(test)]
@@ -226,7 +344,7 @@ mod pi_resolution_tests {
 /// Whether the agent's CLI is installed and usable.
 ///
 /// Read off the resolver's own answer rather than probing again: each caches
-/// in a `OnceCell`, absence included, so this costs nothing after the first
+/// in its slot, absence included, so this costs nothing after the first
 /// call — which matters, since a failed resolution is the expensive one (it
 /// ends in a login shell reading the whole rc chain).
 ///
@@ -237,10 +355,8 @@ mod pi_resolution_tests {
 /// falls through to the bare name exactly like an absent one — and "installed
 /// but cannot be driven" is the same answer to the reader as "not installed".
 ///
-/// The cache never invalidates, so a CLI installed while the app runs still
-/// reads as missing until restart — `gh` alone has a recheck, [`forget_gh`].
-/// It is why nothing here offers to install anything: the reader is at a
-/// terminal by then anyway.
+/// A CLI the reader installs by hand while the app runs still reads as missing
+/// until restart; one Dray installs is forgotten by [`forget_agent`].
 pub async fn agent_available(harness: Harness) -> bool {
     harness.names_a_cli() && agent_installed(harness).await
 }
@@ -268,6 +384,7 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
         Harness::Pi => pi().await,
         Harness::Fx => fx().await,
         Harness::Grok => grok().await,
+        Harness::OpenCode => opencode().await,
         // A harness only some other build knows. Its own spelling, which is
         // relative and so reads as "not installed" — the refusal has to happen
         // here rather than by falling back to Claude Code, which would run the
@@ -292,7 +409,7 @@ async fn speaks_app_server(bin: &Path) -> bool {
         .into_iter()
         .chain(node_dir().cloned())
         .collect();
-    let Ok(output) = Command::new(bin)
+    let Ok(output) = command(bin)
         .arg("--help")
         .env("PATH", child_path(extra))
         .output()
@@ -330,11 +447,126 @@ async fn resolve(bin: &str) -> Option<PathBuf> {
 fn search_path(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
-        .map(|dir| dir.join(bin))
+        .flat_map(|dir| spellings(dir.join(bin)))
         .find(|candidate| is_executable(candidate))
 }
 
+/// The files a bare name can be: itself, or on Windows `claude.exe` and a
+/// `.cmd` or `.bat` shim. Never the bare name there, since npm leaves a `sh`
+/// script of that name beside the shim, which Windows cannot run.
+#[cfg(unix)]
+fn spellings(path: PathBuf) -> [PathBuf; 1] {
+    [path]
+}
+
+#[cfg(windows)]
+fn spellings(path: PathBuf) -> [PathBuf; 3] {
+    [path.with_extension("exe"), path.with_extension("cmd"), path.with_extension("bat")]
+}
+
+/// A `Command` running `bin`. On Windows an npm `.cmd` shim is read and what
+/// it launches is run directly — its `.exe`, or `node` on its script — since a
+/// `.cmd` runs through cmd.exe, which cannot carry an argument with a newline:
+/// Claude's `--append-system-prompt` failed to spawn or arrived cut.
+pub fn command(bin: &Path) -> Command {
+    #[cfg(windows)]
+    if let Some((program, script)) = shim_target(bin) {
+        let mut command = Command::new(program);
+        command.args(script);
+        return command;
+    }
+    Command::new(bin)
+}
+
+/// What an npm `.cmd` or `.bat` shim at `shim` launches: the program, and the
+/// script to hand it where that is a `node` script. Both quote `%~dp0` paths
+/// the same way, and neither can be spawned by `CreateProcess` directly.
+#[cfg(windows)]
+fn shim_target(shim: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    if !shim.extension().is_some_and(|e| {
+        e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")
+    }) {
+        return None;
+    }
+    let text = std::fs::read_to_string(shim).ok()?;
+    let dir = shim.parent()?;
+    let target = shim_paths(&text)
+        .into_iter()
+        .rev()
+        .map(|rel| dir.join(rel))
+        .find(|p| !p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("node.exe")))?;
+    let ext = target.extension()?.to_ascii_lowercase();
+    if ext == "exe" {
+        return Some((target, None));
+    }
+    if !["js", "cjs", "mjs"].contains(&ext.to_str()?) {
+        return None;
+    }
+    // The shim's own rule: a `node.exe` beside it, else whichever is found.
+    let node = Some(dir.join("node.exe"))
+        .filter(|n| n.is_file())
+        .or_else(|| search_path("node"))
+        .or_else(|| node_dir().map(|d| d.join("node.exe")))
+        .unwrap_or_else(|| PathBuf::from("node"));
+    Some((node, Some(target)))
+}
+
+/// The paths a cmd-shim names relative to itself — every quoted
+/// `%dp0%\…` or `%~dp0\…` — in the order written.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn shim_paths(text: &str) -> Vec<String> {
+    text.split('"')
+        .skip(1)
+        .step_by(2)
+        .filter_map(|quoted| quoted.strip_prefix("%dp0%").or_else(|| quoted.strip_prefix("%~dp0")))
+        .map(|rest| rest.trim_start_matches(['\\', '/']).to_string())
+        .filter(|rest| !rest.is_empty())
+        .collect()
+}
+
 /// Where a user-installed CLI tends to land.
+#[cfg(windows)]
+fn known_dirs() -> Vec<PathBuf> {
+    let Some(home) = std::env::home_dir() else {
+        return Vec::new();
+    };
+    let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    [
+        // Claude Code's native installer, and `dray`'s own.
+        Some(home.join(".local").join("bin")),
+        // `npm install -g` lands its shims here.
+        appdata.map(|a| a.join("npm")),
+        local.as_ref().map(|l| l.join("pnpm")),
+        Some(home.join(".bun").join("bin")),
+        local.as_ref().map(|l| l.join("Microsoft").join("WinGet").join("Links")),
+        // Git for Windows installed for this user alone, for its `sh` as below.
+        local.map(|l| l.join("Programs").join("Git").join("bin")),
+        std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("nodejs")),
+        std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("cmd")),
+        // Git's `sh`, which a routine's check runs through: the installer puts
+        // only `Git\cmd` on `PATH`. Beside whichever `git` is found, else
+        // the default install.
+        git_bin().or_else(|| std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Git").join("bin"))),
+        std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("GitHub CLI")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// `<Git>\bin` for the `git.exe` on the inherited `PATH`, which Git for
+/// Windows keeps at `<Git>\cmd`.
+#[cfg(windows)]
+fn git_bin() -> Option<PathBuf> {
+    let git = search_path("git")?;
+    let root = git.parent()?.parent()?;
+    let bin = root.join("bin");
+    bin.join("sh.exe").is_file().then_some(bin)
+}
+
+/// Where a user-installed CLI tends to land.
+#[cfg(unix)]
 fn known_dirs() -> Vec<PathBuf> {
     let Some(home) = std::env::home_dir() else {
         return Vec::new();
@@ -345,6 +577,8 @@ fn known_dirs() -> Vec<PathBuf> {
         home.join(".claude/local"),
         home.join(".bun/bin"),
         home.join(".npm-global/bin"),
+        // OpenCode's own installer, which adds it to `PATH` from `.zshrc` alone.
+        home.join(".opencode/bin"),
         // Managers whose shims run on their own, found by absolute path. asdf's
         // and mise's do not — one is a script calling `asdf`, the other refuses
         // a tool pinned in no config — so those are globbed by install below.
@@ -386,10 +620,9 @@ pub fn resolved_bin_dirs() -> Vec<PathBuf> {
     // Read, never probed: this runs on the spawn path, and `gh`'s slot is the
     // one here that can be empty because nothing has asked yet.
     let gh = GH_PATH.read().unwrap().clone().flatten();
-    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get(), FX_PATH.get(), GROK_PATH.get()]
+    [&CLAUDE_PATH, &CODEX_PATH, &PI_PATH, &FX_PATH, &GROK_PATH]
         .into_iter()
-        .flatten()
-        .cloned()
+        .filter_map(Slot::get)
         .chain(gh)
         .filter(|path| path.is_absolute())
         .filter_map(|path| path.parent().map(Path::to_path_buf))
@@ -447,7 +680,7 @@ fn search_known_dirs(bin: &str) -> Option<PathBuf> {
 
     if let Some(found) = candidates
         .iter()
-        .map(|dir| dir.join(bin))
+        .flat_map(|dir| spellings(dir.join(bin)))
         .find(|candidate| is_executable(candidate))
     {
         return Some(found);
@@ -507,7 +740,7 @@ fn find_versioned(root: &Path, depth: usize, layouts: &[&str], bin: &str) -> Opt
     dirs.into_iter().rev().find_map(|version| {
         layouts
             .iter()
-            .map(|layout| version.join(layout).join(bin))
+            .flat_map(|layout| spellings(version.join(layout).join(bin)))
             .find(|candidate| is_executable(candidate))
     })
 }
@@ -525,7 +758,7 @@ async fn login_shell_which(bin: &str) -> Option<PathBuf> {
     }
     let path = slot.as_ref()?.as_ref()?;
     std::env::split_paths(path)
-        .map(|dir| dir.join(bin))
+        .flat_map(|dir| spellings(dir.join(bin)))
         .find(|candidate| is_executable(candidate))
 }
 
@@ -537,9 +770,39 @@ static LOGIN_PATH: tokio::sync::Mutex<Option<Option<OsString>>> =
 /// reader's rc files is only found by reading the `PATH` again.
 static LOGIN_PATH_STALE: AtomicBool = AtomicBool::new(false);
 
+/// Windows keeps no `PATH` in rc files: the machine's and the user's live in
+/// the registry, and an installer that ran after Explorer started is only
+/// there, not in what this process inherited.
+#[cfg(windows)]
+async fn login_shell_path() -> Option<OsString> {
+    // PowerShell 7 installs as `pwsh` and need not leave `powershell` on PATH.
+    for shell in ["powershell", "pwsh"] {
+        let output = Command::new(shell)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + \
+                 [Environment]::GetEnvironmentVariable('Path','User')",
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(crate::platform::CREATE_NO_WINDOW)
+            .output()
+            .await;
+        if let Ok(output) = output {
+            if output.status.success() {
+                return Some(String::from_utf8_lossy(&output.stdout).trim().into());
+            }
+        }
+    }
+    None
+}
+
 /// `-l` matters more than it looks: without it zsh reads `.zshrc` only, and a
 /// `PATH` exported from `.zprofile` — where the installers write it — stays
 /// invisible.
+#[cfg(unix)]
 async fn login_shell_path() -> Option<OsString> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
@@ -591,6 +854,54 @@ fn is_executable(path: &std::path::Path) -> bool {
 mod tests {
     use super::*;
 
+    /// A child's `PATH` reaches Git's `sh`, which only `Git\cmd` on the
+    /// inherited one would not: every routine check runs through it.
+    #[test]
+    #[cfg(windows)]
+    fn a_child_path_reaches_gits_sh() {
+        if search_path("git").is_none() {
+            return eprintln!("git not installed; skipping");
+        }
+        let out = std::process::Command::new("sh")
+            .args(["-c", "echo ok"])
+            .env("PATH", child_path(Vec::new()))
+            .output()
+            .expect("sh on the child's PATH");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "ok");
+    }
+
+    /// npm's two shim shapes as written on Windows: a native binary run
+    /// straight, and a script run under `node`.
+    #[test]
+    fn reads_what_an_npm_shim_launches() {
+        let exe = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
+        assert_eq!(shim_paths(exe), vec![r"node_modules\@anthropic-ai\claude-code\bin\claude.exe"]);
+        let js = "IF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n";
+        assert_eq!(shim_paths(js).last().map(String::as_str), Some(r"node_modules\@openai\codex\bin\codex.js"));
+    }
+
+    /// A `.bat` launcher cannot be handed to `CreateProcess` either, so it goes
+    /// through the same unwrap as npm's `.cmd` shims.
+    #[test]
+    #[cfg(windows)]
+    fn unwraps_a_bat_shim() {
+        let dir = std::env::temp_dir().join(format!("dray-bat-shim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let shim = dir.join("claude.bat");
+        std::fs::write(
+            &shim,
+            "@ECHO off\r\n\"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.js\" %*\r\n",
+        )
+        .unwrap();
+
+        let (program, script) = shim_target(&shim).expect("bat shim unwrapped");
+        assert_eq!(script, Some(dir.join(r"node_modules\@anthropic-ai\claude-code\bin\claude.js")));
+        assert!(program.ends_with("node.exe") || program == PathBuf::from("node"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     /// The resolver must agree with the shell about where `claude` is. Skipped
     /// rather than failed where it isn't installed, so CI without the CLI stays
     /// green.
@@ -615,6 +926,7 @@ mod tests {
     /// The marker is what separates the `PATH` from anything an rc file
     /// prints, so a parse that lost it would find nothing through this path.
     #[tokio::test]
+    #[cfg(unix)]
     async fn the_login_shell_path_finds_a_binary() {
         assert!(login_shell_which("sh").await.is_some_and(|p| p.is_absolute()));
     }
@@ -622,6 +934,7 @@ mod tests {
     /// mise's nesting is the layout that went missing: `installs/<tool>/<v>/`
     /// with the binary one level further in under the tool's own name.
     #[test]
+    #[cfg(unix)]
     fn finds_a_binary_nested_under_a_version_dir() {
         let root = std::env::temp_dir().join("dray-binpath-versioned-test");
         let _ = std::fs::remove_dir_all(&root);
@@ -654,6 +967,7 @@ mod tests {
     /// finds nothing — and ahead of the fixed list, or a `node` shim there
     /// wins over the sibling the CLI was installed against. Each dir once.
     #[test]
+    #[cfg(unix)]
     fn a_resolved_bin_dir_comes_after_inherited_and_before_known() {
         let launchd = std::ffi::OsStr::new("/usr/bin:/bin:/usr/sbin:/sbin");
         let nvm_bin = PathBuf::from("/home/u/.nvm/versions/node/v25.2.1/bin");

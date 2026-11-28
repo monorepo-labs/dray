@@ -5,7 +5,10 @@ import ThinkingOrbs
 /// view, so the toolbar button knows whether there is anything to open.
 @MainActor @Observable
 final class PrModel {
-    let key: SessionKey
+    let server: UUID
+    /// The session whose branch it reads; `nil` reads `cwd` and `branch` as given, the pull requests page's way.
+    let key: SessionKey?
+    var cwd: String?
     var prs: [PullRequest] = []
     var unavailable: PrUnavailable?
     var branch: String?
@@ -13,28 +16,41 @@ final class PrModel {
     var actionError: String?
     @ObservationIgnored private var generation = 0
 
-    init(key: SessionKey) { self.key = key }
+    init(key: SessionKey) {
+        server = key.server
+        self.key = key
+    }
+
+    init(server: UUID, cwd: String, branch: String) {
+        self.server = server
+        key = nil
+        self.cwd = cwd
+        self.branch = branch
+    }
 
     /// The button stays for the two states the reader can fix; every other
     /// error with no rows hides it, as the desktop's tab does.
     var visible: Bool { !prs.isEmpty || unavailable?.keepsButton == true }
 
     func load(_ store: Store) async {
-        guard let item = store.items[key] else { return }
         generation += 1
         let gen = generation
         do {
-            let status: WorkStatus = try await store.call(key.server, "work_status", ["cwd": .string(item.cwd)])
-            let branch = sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
+            if let key {
+                guard let item = store.items[key] else { return }
+                let status: WorkStatus = try await store.call(server, "work_status", ["cwd": .string(item.cwd)])
+                cwd = item.cwd
+                branch = sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
                                        worktreeRemoved: item.worktreeRemoved ?? false, observed: status.branch)
-            guard let branch else {
-                if gen == generation { (self.branch, prs, unavailable) = (nil, [], nil) }
+            }
+            guard let cwd, let branch else {
+                if gen == generation { (prs, unavailable) = ([], nil) }
                 return
             }
-            let prs: [PullRequest] = try await store.call(key.server, "prs_for_branch",
-                                                          ["cwd": .string(item.cwd), "branch": .string(branch)])
+            let prs: [PullRequest] = try await store.call(server, "prs_for_branch",
+                                                          ["cwd": .string(cwd), "branch": .string(branch)])
             guard gen == generation else { return }
-            (self.branch, self.prs, unavailable) = (branch, prs, nil)
+            (self.prs, unavailable) = (prs, nil)
         } catch {
             // Rows already on screen stay under the sentence, which says what failed to update.
             guard gen == generation else { return }
@@ -43,16 +59,16 @@ final class PrModel {
     }
 
     func act(_ store: Store, _ cmd: String, _ number: Int, _ extra: [String: JSON] = [:]) async {
-        guard let cwd = store.items[key]?.cwd else { return }
+        guard let cwd = key.flatMap({ store.items[$0]?.cwd }) ?? cwd else { return }
         acting = true
         actionError = nil
         do {
-            let _: JSON = try await store.call(key.server, cmd, ["cwd": .string(cwd), "number": JSON(number)].merging(extra) { $1 })
+            let _: JSON = try await store.call(server, cmd, ["cwd": .string(cwd), "number": JSON(number)].merging(extra) { $1 })
         } catch {
             actionError = error.localizedDescription
         }
         await load(store)
-        if let path = store.items[key]?.projectPath { await store.refreshMarks(key.server, path) }
+        if let path = key.flatMap({ store.items[$0]?.projectPath }) ?? self.cwd { await store.refreshMarks(server, path) }
         acting = false
     }
 }
@@ -78,18 +94,23 @@ private struct PrPanelModifier: ViewModifier {
     @State private var model: PrModel
     @State private var showing = false
 
-    init(key: SessionKey) { _model = State(initialValue: PrModel(key: key)) }
+    private let key: SessionKey
+
+    init(key: SessionKey) {
+        self.key = key
+        _model = State(initialValue: PrModel(key: key))
+    }
 
     func body(content: Content) -> some View {
-        let busy = store.items[model.key]?.busy ?? false
-        let connected = store.serverState[model.key.server] == .connected
+        let busy = store.items[key]?.busy ?? false
+        let connected = store.serverState[key.server] == .connected
         content
             // On arrival, on every turn edge, and on reconnect, where a read
             // that failed with the socket down would otherwise never retry.
             .task(id: "\(busy)|\(connected)") { if connected { await model.load(store) } }
             .toolbar {
                 // A bot's folder holds notes, not work: no PR lookup there, as on the desktop.
-                if model.visible && store.bot(model.key) == nil {
+                if model.visible && store.bot(key) == nil {
                     ToolbarItem(placement: .primaryAction) {
                         // The list row's own glyph, so the button says the PR's state before it is opened.
                         Button { showing = true } label: {
@@ -166,16 +187,18 @@ struct PrSheet: View {
 
 /// One pull request: what it is, whether it can land and the one action that
 /// moves it, then its checks and what people said.
-private struct PrSection: View {
+struct PrSection: View {
     @Environment(Store.self) private var store
     let pr: PullRequest
     let model: PrModel
+    /// Off on the pull requests page, whose own head names the PR.
+    var header = true
 
     var body: some View {
         let ready = readiness(pr)
         VStack(alignment: .leading, spacing: 28) {
             VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 6) {
+                if header { VStack(alignment: .leading, spacing: 6) {
                     Link(destination: URL(string: pr.url) ?? URL(string: "https://github.com")!) {
                         HStack(alignment: .top, spacing: 10) {
                             PrGlyph(mark: pr.mark, size: 20).padding(.top, 3)
@@ -194,7 +217,7 @@ private struct PrSection: View {
                     .font(Theme.Font.footnote)
                     .lineLimit(1)
                     .padding(.leading, 30)
-                }
+                } }
 
                 VStack(alignment: .leading, spacing: Theme.Space.m) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -423,51 +446,82 @@ private struct OutArrow: View {
     }
 }
 
-/// A comment or review as a card; tapping it opens the thread on GitHub,
-/// since the sheet reads and never replies.
+/// A comment or review as a card: three lines and a count of replies, and the
+/// whole of it with every reply once tapped. The sheet reads and never replies.
 private struct CommentCard: View {
     let comment: PrComment
+    @State private var open = false
 
     var body: some View {
-        let card = VStack(alignment: .leading, spacing: Theme.Space.s) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            head(comment)
+            let text = commentText(comment.body)
+            if open {
+                if !text.isEmpty { MarkdownText(text: text) }
+                ForEach(Array(flat(comment.replies, depth: 0).enumerated()), id: \.offset) { _, r in
+                    VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                        head(r.comment)
+                        let said = commentText(r.comment.body)
+                        if !said.isEmpty { MarkdownText(text: said) }
+                    }
+                    .padding(.leading, CGFloat(r.depth) * Theme.Space.l)
+                    .padding(.top, Theme.Space.s)
+                }
+            } else {
+                if !text.isEmpty {
+                    // Verbatim: markdown would set inline code in monospace, which nothing here draws.
+                    Text(verbatim: text).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                }
+                if !comment.replies.isEmpty {
+                    Text("\(comment.replies.count) more").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .prGroup(padding: 0)
+        .opacity(comment.resolved && !open ? 0.6 : 1)
+        .contentShape(.rect)
+        // A gesture, not a Button: one around the card would take the taps meant for links in it.
+        .onTapGesture {
+            Haptic.select()
+            withAnimation(Theme.motion) { open.toggle() }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(open ? "Collapses it" : "Shows all of it")
+        .accessibilityIdentifier("pr.comment")
+    }
+
+    /// Avatar, author, verdict and Resolved, then the file an inline comment sits on.
+    private func head(_ c: PrComment) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
             HStack(spacing: Theme.Space.s) {
-                AsyncImage(url: comment.avatar.flatMap(URL.init(string:))) { $0.resizable() } placeholder: {
+                AsyncImage(url: c.avatar.flatMap(URL.init(string:))) { $0.resizable() } placeholder: {
                     Circle().fill(Theme.tile)
                 }
                 .frame(width: 20, height: 20)
                 .clipShape(Circle())
-                Text(comment.author).foregroundStyle(Theme.text).lineLimit(1)
-                if let verb { Text(verb).foregroundStyle(verbColor).lineLimit(1) }
+                Text(c.author).foregroundStyle(Theme.text).lineLimit(1)
+                if let verb = verb(c) { Text(verb).foregroundStyle(verbColor(c)).lineLimit(1) }
                 Spacer(minLength: 0)
-                if comment.resolved { Text("Resolved").foregroundStyle(Theme.tertiary) }
-                OutArrow()
+                if c.resolved { Text("Resolved").foregroundStyle(Theme.tertiary) }
             }
             .font(Theme.Font.subhead)
-            if let path = comment.path {
+            if let path = c.path {
                 Text((path as NSString).lastPathComponent).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
-            let text = commentText(comment.body)
-            if !text.isEmpty {
-                // Verbatim: markdown would set inline code in monospace, which nothing here draws.
-                Text(verbatim: text).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).lineLimit(3)
-                    .multilineTextAlignment(.leading)
-            }
-            if !comment.replies.isEmpty {
-                Text("\(comment.replies.count) more").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
-            }
-        }
-        .padding(14)
-        .prGroup(padding: 0)
-        .opacity(comment.resolved ? 0.6 : 1)
-        if let url = URL(string: comment.url) {
-            Link(destination: url) { card }.buttonStyle(RowButtonStyle())
-        } else {
-            card
         }
     }
 
-    private var verb: String? {
-        switch comment.kind {
+    /// Replies in reading order, each with how deep it sits.
+    private func flat(_ list: [PrComment], depth: Int) -> [(comment: PrComment, depth: Int)] {
+        list.flatMap { [($0, depth)] + flat($0.replies, depth: depth + 1) }
+    }
+
+    private func verb(_ c: PrComment) -> String? {
+        switch c.kind {
         case "approved": "approved"
         case "changes_requested": "requested changes"
         case "reviewed": "reviewed"
@@ -475,8 +529,8 @@ private struct CommentCard: View {
         }
     }
 
-    private var verbColor: Color {
-        switch comment.kind {
+    private func verbColor(_ c: PrComment) -> Color {
+        switch c.kind {
         case "approved": Theme.add
         case "changes_requested": Theme.destructive
         default: Theme.secondary
@@ -497,7 +551,7 @@ private struct MissingCli: View {
     var body: some View {
         let installing = kind == "no_cli"
         let command = installing ? "dray setup" : "gh auth login"
-        let server = store.name(of: model.key.server)
+        let server = store.name(of: model.server)
         PrNotice(title: installing ? "GitHub CLI isn't installed" : "GitHub CLI is logged out",
                  message: stillMissing ? "Still not found on \(server)." : "Run this on \(server), then check again.") {
             PrOutline(tone: Theme.accent)
@@ -538,7 +592,7 @@ private struct MissingCli: View {
         checking = true
         defer { checking = false }
         if installing {
-            let found = (try? await store.call(model.key.server, "recheck_gh", as: Bool.self)) ?? false
+            let found = (try? await store.call(model.server, "recheck_gh", as: Bool.self)) ?? false
             stillMissing = !found
             if !found { return }
         }

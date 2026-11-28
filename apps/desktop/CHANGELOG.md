@@ -18,6 +18,278 @@ reads:
 - An image or video goes on its own line, indented under its item:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
+- A bigger feature can be a highlight: a page of its own in a dialog the app
+  opens after an update, with the item's first image or video, its title and
+  its text. Mark it with a comment under the item, which GitHub and the site
+  hide: `<!-- highlight: desktop, ios, android -->`, naming the apps it is for.
+  Add `· action: Label → target` for a button on its page, where target is
+  `new-task`, `new-bot`, `settings/<tab>` or an `https://` link. Keep the text
+  to a line or two. A release with no highlights for an app gets the small
+  card there instead, when it carries `notify`.
+
+## 0.36.4 · 2026-11-28
+
+### Improved
+
+- Click a routine in a bot's More tab to see it, and edit its name and
+  instructions there.
+
+### Fixed
+
+- A bot's chat shows the Messaged row for a message to a task on
+  another machine.
+
+## 0.36.3 · 2026-11-28
+
+### New
+
+- **Turn off usage analytics.** Settings → About has a Share usage
+  analytics switch. Off stops every event and error report from the
+  app and its server, and it stays off across restarts.
+
+### Improved
+
+- The in-app browser runs on Chromium 158, with its security fixes.
+- OpenCode lists every model you have, OpenCode Go included.
+- Adding a server over SSH works on a Linux box whose login has no
+  systemd user session. Where the box has no systemd at all, the server
+  still starts, and the dialog says it won't come back after a reboot.
+
+### Fixed
+
+- Browser recordings keep filming after the page navigates, instead of
+  stopping at the first navigation.
+- Machines added or removed with `dray machine` show up in the app, so a
+  bot's tasks on a new machine appear in its Tasks tab.
+- `dray session new --base origin/<branch>` works for a branch this
+  clone has not fetched yet.
+
+## 0.36.2 · 2026-11-27
+
+### Improved
+
+- **OpenCode 2 support.** Dray runs the newest OpenCode installed on
+  your machine and reads OpenCode 2's models, sign-ins and updates.
+  OpenCode 1 still works.
+- Settings → Agents → OpenCode can add an account for any provider and
+  sign out of one.
+
+### Fixed
+
+- On OpenCode 2, question cards and subagents work, a message sent
+  mid-turn joins the running turn, and subagents' permission cards
+  show.
+
+## 0.36.1 · 2026-11-26
+
+### Improved
+
+- **Saved secrets are now called the Vault.** The secret card's switch
+  reads Save to Vault, and Settings → Vault lists what is saved on each
+  machine.
+- Picking a different saved secret on the secret card opens a dialog
+  listing them, with search once there are more than a few.
+
+### Fixed
+
+- Messaging a task on another machine no longer fails with "no session"
+  when that machine's connection went stale.
+
+## 0.36.0 · 2026-11-26 · notify
+
+### New
+
+- **Agents ask for secrets through a private card.** When an agent needs
+  a token or password, it asks with a card in the chat instead of in
+  the conversation. The value goes to a private file on the task's
+  machine, never into the chat, logs or the model's context. Save one to
+  reuse it with a click, or let agents use it without asking. Settings →
+  Secrets lists what is saved on each machine.
+- **Sign-in is optional for now.** Skip it at launch and keep using
+  Dray; Settings has a Sign in row for later. Once you have used Dray
+  for a few days and merged a task's PR, it asks you to sign in.
+
+### Improved
+
+- On Linux and Windows, the sheet's top-right corner curves round the
+  window buttons on New Task, Issues, Pull requests, bot pages and
+  Settings.
+- Settings → Servers no longer shows Link or Unlink from org.
+
+### Fixed
+
+- A bot's routine run no longer stops the bot's chat mid-turn.
+- `dray draft ls` lists every draft, including from a bot's chat.
+
+## 0.35.0 · 2026-11-26 · notify
+
+### New
+
+- **Switch a task's harness mid-session.** Pick another harness in the
+  composer and your next message moves the task there, with everything
+  said so far.
+  ![A chat Claude Code answered, Codex picked in the composer for the next message](changelog/harness.png)
+  <!-- highlight: desktop -->
+- **Your agents, in your pocket. Dray is on iPhone and Android.** The
+  iPhone app is on the App Store. Android is in beta: message
+  @yogesharc on X or email support@drayhq.com to join. Every task on
+  every machine, with questions to answer, permissions to allow and
+  alerts when one is ready to merge.
+  ![Dray's bot chat on an iPhone, beside a QR code for the App Store](changelog/iphone.png)
+  <!-- highlight: desktop -->
+- **Dray on Windows (beta).** Windows 10 and 11 on x64: download
+  `Dray_x64-setup.exe`, or `Dray_x64.msi` for machines managed per
+  machine. It updates itself like the Mac app. The installer is not
+  signed yet, so SmartScreen may warn. Sessions keep running after you
+  quit and come back at sign-in, and `irm https://www.drayhq.com/install.ps1 | iex`
+  installs the `dray` CLI and server.
+
+### Fixed
+
+- The model picker is wide enough for every agent, so the switch-agent
+  shortcut no longer runs past its edge.
+## 0.34.3 · 2026-11-25
+
+### Improved
+
+- **Onboarding has its own song.** "Welcome to Dray" starts with the
+  logo, reaches full volume a few seconds in and plays to its end, even
+  past sign-in. A speaker button at the top right of the Dray Bot step
+  and the sign-in page mutes it, and plays it again once it ends. The
+  logo's shimmer is louder too.
+
+## 0.34.2 · 2026-11-25
+
+### Improved
+
+- A bot's routine rows show the name, schedule and next run, without
+  the last-run line.
+
+### Fixed
+
+- Remote access comes back about a second after the network returns or
+  the computer wakes, instead of your phone showing "Can't reach" for up
+  to half a minute.
+
+## 0.34.1 · 2026-11-24 · notify
+
+### New
+
+- **Switch a task's harness mid-session.** Pick another harness in the
+  composer and your next message moves the task there, with everything
+  said so far.
+  ![A chat Claude Code answered, Codex picked in the composer for the next message](changelog/harness.png)
+  <!-- highlight: desktop -->
+- **Your agents, in your pocket. Dray is now on iPhone.** Every task on
+  every machine, with questions to answer, permissions to allow and
+  alerts when one is ready to merge.
+  ![Dray's bot chat on an iPhone, beside a QR code for the App Store](changelog/iphone.png)
+  <!-- highlight: desktop -->
+- **OpenCode is now in Dray.** Pick OpenCode in the composer and run it
+  like any other agent, with your own models and providers.
+  ![OpenCode](changelog/opencode.png)
+  <!-- highlight: desktop -->
+- **Onboarding.** A first launch opens on a short welcome, sets up an
+  agent and the GitHub CLI, installing them if they are missing, and
+  introduces Dray Bot, all before you sign in.
+- **Issue cards in bot chat.** Bots can show GitHub issues as cards in
+  their chat; click one to open it on the Issues page.
+- **Start work from the Issues page.** Start a task on an issue, or
+  send it to a bot, without leaving the page. Issue and PR rows show
+  which tasks are working on them.
+- **👎 reaction** on a bot's messages, right after 👍.
+
+### Improved
+
+- The Mac app opens in full screen on its first launch; later launches
+  restore the window as you left it.
+- **Pull requests page.** The details pane shows the PR itself: state,
+  author, branches, labels, reviewers and description. A search box
+  finds PRs by title, number, author or branch, ⌘E opens and closes
+  the pane, and filters are kept across restarts. A stopped machine no
+  longer shows errors, and "Read only" marks fork PRs alone.
+- Pinning, settling, deleting and other task actions on your phone
+  show in the desktop sidebar at once. Deleting a task answers at once.
+- A bot's row shows your own last message, or the bot's reaction to it.
+- Sending to a task on a stopped Boat machine resumes the machine, and
+  your message shows waiting until it is delivered.
+- New Codex sessions start on GPT-6.2 Sol, and a Codex subagent shows
+  its model and effort.
+
+### Fixed
+
+- Right-clicking a task in the folded sidebar opens its menu.
+- Images in a chat no longer fill the whole message: they sit in a
+  compact row and open full size on click.
+- A bot's chat no longer flickers at the bottom.
+- A browser tab over a stopped dev server keeps the theme's colour.
+- Paths inside inline code show as written.
+- An fx subagent that was stopped no longer spins forever.
+
+## 0.33.0 · 2026-11-22 · notify
+
+### New
+
+- **Browser-style tabs.** A task's tabs look like a browser's: the open
+  tab is part of the page below it, the others sit flat until you hover
+  them. In light themes the window frame takes the page's colour, so
+  the whole window reads as one sheet.
+- **React to a bot's messages.** Hover a bot's message and pick an
+  emoji. The bot sees your reaction and may answer it.
+- **Attach a task to a bot.** Right-click a task in the sidebar and
+  pick Attach to. It moves under that bot's Tasks and reports to it
+  after every turn; Detach brings it back.
+  `dray session attach <id> --bot <name>` does the same.
+- **Markdown files render in Files.** A `.md` file opens rendered, with
+  working links and images. Switch to Edit to change it and ⌘S to save.
+
+### Improved
+
+- With the sidebar shut, New Task, Issues, Pull requests and bot pages
+  line up under the header the way a task does.
+- Bots keep documents they write for you in a `docs/` folder, sorted by
+  topic, instead of the Desktop or `/tmp`.
+- Keyboard focus on Settings and panel rows shows a grey ring.
+
+## 0.32.1 · 2026-11-21 · notify
+
+### Improved
+
+- **A fuller sidebar rail.** With the sidebar folded, the rail shows
+  your tasks as status dots, plus the project and space switchers.
+  Hovering a switcher opens a list of projects or spaces to pick from, in the
+  full sidebar too.
+- **⌘P opens Pull requests**, and its sidebar icon is lighter.
+
+### Fixed
+
+- A new task on the default branch starts from the remote's newest
+  commit, not an out-of-date copy, so changes already upstream no longer
+  show up as the task's own work.
+
+## 0.32.0 · 2026-11-21 · notify
+
+### New
+
+- **Pull requests page.** Every open PR involving you across GitHub,
+  filtered by owner and repository. Start a task right from a PR, and
+  see every task it has had.
+- **Mention PRs with `#`.** The composer's `#` menu lists pull requests
+  beside issues; ⇧⇥ switches between them. In a bot's chat, pick which
+  repo it lists.
+- **Start a worktree on any branch.** With Worktree on, the new-task
+  composer picks the branch the task starts from.
+  `dray session new --base <branch>` does the same.
+- **Bots can hand you a task.** `dray session detach` moves a bot's task
+  out of its Tasks and into your sidebar. In a bot's Tasks list the menu
+  item reads Detach from bot.
+
+### Improved
+
+- The sign-in page marks the method you used last.
+- Hovering a tab or a bot row starts loading its chat before you click.
+- Bots stay quiet when there is nothing to say: no stray text after a
+  reaction, no status filler, no announcing tasks or AI review progress.
 
 ## 0.31.0 · 2026-11-20 · notify
 

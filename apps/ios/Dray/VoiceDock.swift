@@ -476,7 +476,7 @@ enum SwipeHint {
     static let line = "Swipe up to type"
 }
 
-/// The text of a task or a reply in a near-full sheet: grabber, title, Done.
+/// The text of a task or a reply in a short sheet over the keyboard: grabber, title, Done.
 /// A task's picks and start stay on the dock; a reply can also send from here.
 struct TextSheet: View {
     let title: String
@@ -486,6 +486,8 @@ struct TextSheet: View {
     var sendable = true
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
+    /// Dragged up to the whole screen, for a long text.
+    @State private var full = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -520,10 +522,21 @@ struct TextSheet: View {
         }
         .padding(.horizontal, 20)
         .padding(.top, 14)
-        .presentationDetents([.large])
+        // The grabber and the title row: up for the whole screen, down for the short sheet again.
+        .background {
+            HostPan(start: .top(66)) { moved in
+                if abs(moved.y) > 24, abs(moved.y) > abs(moved.x) { full = moved.y < 0 }
+            }
+        }
+        // Short over the keyboard, as Android's is, and full height by a drag up the header. One
+        // detent at a time: offered both, the sheet goes to the larger as soon as the keyboard is up.
+        .presentationDetents([full ? .large : .height(260)])
         .presentationDragIndicator(.visible)
         .presentationBackground(Theme.card)
         .onAppear { focused = true }
+        // A swipe down the short sheet only ever takes the keyboard: the text's interactive dismissal
+        // and the sheet's own drag both stop there. Without it the short sheet has no use, so it goes too.
+        .onChange(of: focused) { if !focused, !full { dismiss() } }
     }
 
     private var done: some View {

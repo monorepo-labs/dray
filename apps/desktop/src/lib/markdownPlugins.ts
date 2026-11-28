@@ -128,6 +128,10 @@ export const FILE_PATH_CLASS = "dray-file-path";
 /// this opens anything.
 export const FILE_LINK_CLASS = "dray-file-path-link";
 
+/// Set beside [FILE_PATH_CLASS] on inline code that is a path and nothing
+/// else: it opens, and its text is drawn as written rather than as `@name`.
+export const FILE_CODE_CLASS = "dray-file-path-code";
+
 /// Enough of hast to walk it. Typed here rather than pulled from `@types/hast`,
 /// which is not a dependency and would be one for four fields.
 type HastNode = {
@@ -141,12 +145,29 @@ type HastNode = {
 /// Not prose, so not searched. `pre` covers a fenced block and its `code` with
 /// it, since nothing descends into a skipped element — a path inside one is
 /// already being drawn by the highlighter, and splitting its text would break
-/// the tokens. `a` is here too, and checked *after* `anchorToFile`: a link whose
+/// the tokens. Inline `code` is a command or a literal the reader copies, so its
+/// text stays as written: a path there drawn as `@name` copied as `@name`
+/// (#1487). One holding a path and nothing else still opens, through
+/// [codePath]. `a` is here too, and checked *after* `anchorToFile`: a link whose
 /// href names a file becomes one of ours, and any other link is left whole. A
 /// path sitting in a real link's own label therefore stays plain, which it must
 /// — that text already belongs to a link, and nesting a second one inside it
 /// would fire both on one click.
-const NOT_PROSE = new Set(["pre", "a", "script", "style"]);
+const NOT_PROSE = new Set(["pre", "code", "a", "script", "style"]);
+
+/// Inline code whose whole text is one path, with that text marked to open.
+/// A command holding a path is left alone: the path is not what it says.
+function codePath(node: HastNode): HastNode | null {
+  if (node.tagName !== "code" || node.children?.length !== 1) return null;
+  const value = node.children[0].type === "text" ? node.children[0].value : undefined;
+  const matches = value ? findPromptPaths(value) : [];
+  if (!value || matches.length !== 1) return null;
+  const { start, end, path, line } = matches[0];
+  if (start !== 0 || end !== value.length) return null;
+  const span = marked(path, node.children, false, line);
+  (span.properties!.className as string[]).push(FILE_CODE_CLASS);
+  return { ...node, children: [span] };
+}
 
 function marked(path: string, children: HastNode[], wasLink = false, line?: number): HastNode {
   return {
@@ -215,6 +236,48 @@ function rehypeFilePaths() {
   return (tree: HastNode) => walk(tree);
 }
 
+/// Converts the links an author wrote to files, and leaves the prose alone.
+///
+/// For a document read as a document: a path mentioned in its sentences is the
+/// author's text, not a reference to redraw as a mention.
+function rehypeFileAnchors() {
+  return (tree: HastNode) => markAnchors(tree);
+}
+
+export function markAnchors(node: HastNode) {
+  const children = node.children;
+  if (!children) return;
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i];
+    if (child.type !== "element") continue;
+    const link = docAnchorToFile(child);
+    if (link) children[i] = link;
+    else if (!NOT_PROSE.has(child.tagName ?? "")) markAnchors(child);
+  }
+}
+
+/// The file a document's own link names: any href with no scheme, the way a
+/// README links its neighbours. Looser than [anchorToFile] on purpose — in a
+/// doc `guide.md`, `../README.md` and `docs/` all mean the file beside it,
+/// where prose rules exist to keep an agent's sentences from linking words.
+/// A bare relative path gets `./`, so it still reads as a path once marked.
+function docAnchorToFile(node: HastNode): HastNode | null {
+  if (node.tagName !== "a") return null;
+  const href = node.properties?.href;
+  if (typeof href !== "string") return null;
+  const raw = href.trim().replace(/\?[^#]*/, "");
+  if (!raw || URL_SCHEME.test(raw) || raw.startsWith("//") || raw.startsWith("#")) return null;
+
+  // A heading anchor names a place this view cannot scroll to; `#L12` is a line.
+  const hash = raw.indexOf("#");
+  const bare = hash >= 0 && !/^#L\d+$/.test(raw.slice(hash)) ? raw.slice(0, hash) : raw;
+  const { path, line } = splitLocator(decodePath(bare));
+  if (!path || path.startsWith("~") || path.startsWith("$")) return null;
+
+  const written = path.startsWith("/") || path.startsWith(".") ? path : `./${path}`;
+  return marked(written, node.children ?? [], true, line);
+}
+
 export function walk(node: HastNode) {
   const children = node.children;
   if (!children) return;
@@ -227,7 +290,7 @@ export function walk(node: HastNode) {
     const child = children[i];
 
     if (child.type === "element") {
-      const link = anchorToFile(child);
+      const link = anchorToFile(child) ?? codePath(child);
       if (link) {
         next ??= children.slice(0, i);
         next.push(link);
@@ -336,6 +399,62 @@ function markLocalImages(node: HastNode) {
   }
 }
 
+/// The marker `rehypeImageRows` puts on a run of pictures standing on their own,
+/// which `Markdown` draws as one side-by-side gallery.
+export const IMAGE_ROW_CLASS = "dray-image-row";
+
+function isPicture(node: HastNode): boolean {
+  if (node.type !== "element") return false;
+  if (node.tagName === "img") return true;
+  const classes = node.properties?.className;
+  return node.tagName === "span" && Array.isArray(classes) && classes.includes(LOCAL_IMAGE_CLASS);
+}
+
+function isGap(node: HastNode): boolean {
+  return (node.type === "text" && !node.value?.trim()) || (node.type === "element" && node.tagName === "br");
+}
+
+/// A paragraph's pictures where it holds nothing else; `null` otherwise. A
+/// picture inside a link is not one — a badge row is links, and the link is
+/// what a click there means.
+function picturesOf(node: HastNode): HastNode[] | null {
+  if (node.type !== "element" || node.tagName !== "p") return null;
+  const kept = (node.children ?? []).filter((child) => !isGap(child));
+  return kept.length > 0 && kept.every(isPicture) ? kept : null;
+}
+
+/// Gathers every run of image-only paragraphs into one marked `div`, so four
+/// screenshots on four lines sit side by side instead of each taking a screen.
+/// Runs after harden, so an image it blocked is text by then and ends the run.
+function rehypeImageRows() {
+  return (tree: HastNode) => groupImageRows(tree);
+}
+
+function groupImageRows(node: HastNode) {
+  const children = node.children;
+  if (!children) return;
+  const out: HastNode[] = [];
+  let row: HastNode | null = null;
+  for (const child of children) {
+    const pictures = picturesOf(child);
+    if (pictures) {
+      if (!row) {
+        row = { type: "element", tagName: "div", properties: { className: [IMAGE_ROW_CLASS] }, children: [] };
+        out.push(row);
+      }
+      row.children!.push(...pictures);
+      continue;
+    }
+    // The newline between two paragraphs does not end a run.
+    if (!(row && isGap(child))) {
+      row = null;
+      groupImageRows(child);
+    }
+    out.push(child);
+  }
+  node.children = out;
+}
+
 /// The same pipeline with paths marked, for the one surface where a path names
 /// a file on *this* machine.
 ///
@@ -350,6 +469,20 @@ export const REHYPE_PLUGINS_WITH_FILE_PATHS = [
   rehypeTableCells,
   rehypeBareUrls,
   rehypeFilePaths,
+  rehypeLocalImages,
+  HARDEN,
+  rehypeImageRows,
+] as StreamdownProps["rehypePlugins"];
+
+/// For a markdown file read in the Files view: the links its author wrote to
+/// files and its local images resolve, and its prose stays as written.
+export const REHYPE_PLUGINS_WITH_FILE_LINKS = [
+  defaultRehypePlugins.raw,
+  rehypeFileImageUrls,
+  defaultRehypePlugins.sanitize,
+  rehypeTableCells,
+  rehypeBareUrls,
+  rehypeFileAnchors,
   rehypeLocalImages,
   HARDEN,
 ] as StreamdownProps["rehypePlugins"];

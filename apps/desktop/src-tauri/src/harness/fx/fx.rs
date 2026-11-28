@@ -35,7 +35,7 @@ use std::sync::Arc;
 use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, ChildStdout, Command},
+    process::{Child, ChildStdout},
     sync::Mutex,
     time::Duration,
 };
@@ -240,11 +240,9 @@ pub async fn init(
     // Ahead of the spawn: everything between the spawn and the kill-wrapped
     // `open_session` below has to be infallible, or a `?` returns leaving a
     // child nothing can reach.
-    let seq_start = if is_new_session {
-        0
-    } else {
-        next_seq_by_session_id(session_id).await?
-    };
+    // Off the log even for a new conversation: one an agent switch starts
+    // (#1414) carries on this session's log, and a new session's has none.
+    let seq_start = next_seq_by_session_id(session_id).await?;
 
     // fx's own titling holds the first prompt's reply — see [`disable_fx_titles`].
     if is_new_session {
@@ -252,7 +250,7 @@ pub async fn init(
     }
 
     let bin = crate::binpath::fx().await;
-    let mut command = Command::new(&bin);
+    let mut command = crate::binpath::command(&bin);
 
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
@@ -966,7 +964,7 @@ pub async fn fork_conversation(thread_id: &str) -> Result<String> {
     let bin = crate::binpath::fx().await;
     let output = tokio::time::timeout(
         RECOVER_TIMEOUT,
-        Command::new(&bin)
+        crate::binpath::command(&bin)
             .args(["session", "recover", thread_id, "--json"])
             .env("PATH", crate::harness::agent_path(&bin))
             .kill_on_drop(true)
@@ -1532,6 +1530,32 @@ mod tests {
         };
         assert!(line.contains("set_config_option"), "{line}");
         assert!(line.contains("\"max\""), "{line}");
+    }
+
+    /// A model switch's reply lists the level fx carried over, so it cannot
+    /// teach the ladder that level — the next send then judged it unsupported
+    /// and saved no effort. fx taking it again is what teaches it, which is why
+    /// `apply_live_controls` re-sends the effort after an fx model switch.
+    /// grok-4.6's real options, as the live switch answered with `low` carried.
+    #[test]
+    fn a_carried_level_is_learned_once_fx_takes_it_again() {
+        let (session, _rx) = session_on(None);
+        let sink = Sink::new(|_, _| {});
+        let reply = |model: &str| {
+            parser::ConfigOptions::of(&json!({"configOptions": [
+                {"id": "model", "currentValue": model, "options": [{"value": model}]},
+                {"id": "effort", "currentValue": "low", "options": [
+                    {"value": "auto"}, {"value": "xhigh"}, {"value": "high"},
+                    {"value": "medium"}, {"value": "low"}]},
+            ]}))
+        };
+
+        note_config(&session, &reply("test/carry"), None, &sink);
+        let switched = models::learned("test/carry").unwrap();
+        assert!(!switched.contains(&Effort::Low), "a carried level proves nothing");
+
+        note_effort(&session, &reply("test/carry"), Effort::Low, &sink);
+        assert!(models::learned("test/carry").unwrap().contains(&Effort::Low));
     }
 
     /// A level a model has stopped taking must not make its session

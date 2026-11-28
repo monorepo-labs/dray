@@ -14,21 +14,44 @@
 //
 // **Whether to start is Rust's answer.** `analytics_identity` answers with a
 // key, a host, an id and the properties together, or with nothing — no key
-// compiled in, or `DRAY_NO_ANALYTICS` — and nothing is the refusal.
+// compiled in, Settings' switch off, or `DRAY_NO_ANALYTICS` — and nothing is
+// the refusal. Settings calls this again after the switch moves.
+import type { PostHog } from "posthog-js";
 import { invoke } from "@/lib/transport";
 
 import type { SurveyIdentity } from "@/types/events";
 
-/// Starts PostHog, or does nothing where Rust refuses. Called once, at startup.
+/// The SDK once started. `init` a second time is not a no-op, so a later yes
+/// opts it back in rather than starting it again.
+let posthog: PostHog | null = null;
+
+/// Which call's answer is current. The launch call can still be waiting on its
+/// read when the switch makes a second one, and an older answer landing last
+/// must not undo the newer one, in either direction.
+let generation = 0;
+
+/// Starts PostHog, stops it, or does nothing where Rust refuses. Called at
+/// startup and again whenever Settings' analytics switch moves.
 export async function startSurveys(): Promise<void> {
+  const mine = ++generation;
   try {
     const identity = await invoke<SurveyIdentity | null>("analytics_identity");
+    if (mine !== generation) return;
+    if (!identity) {
+      if (posthog) allow(posthog, false);
+      return;
+    }
+    if (posthog) {
+      allow(posthog, true);
+      return;
+    }
     // Loaded only on a yes: it is ~300KB, parsed otherwise on every launch of a
     // build that sends nothing.
-    if (!identity) return;
-    const posthog = (await import("posthog-js")).default;
+    const sdk = (await import("posthog-js")).default;
+    if (mine !== generation || posthog) return;
+    posthog = sdk;
 
-    posthog.init(identity.key, {
+    sdk.init(identity.key, {
       api_host: identity.host,
       // The id Rust posts under, so the SDK joins that person rather than
       // minting a second one beside it. `bootstrap` and not `identify`: the
@@ -47,11 +70,25 @@ export async function startSurveys(): Promise<void> {
       capture_pageview: false,
       capture_pageleave: false,
       disable_session_recording: true,
-      loaded: (ph) => ph.setPersonProperties(identity.personProperties),
+      loaded: (ph) => {
+        // The SDK keeps its own opt-out in local storage, so one left by a
+        // switch turned off in an earlier run would outlive the switch.
+        if (ph.has_opted_out_capturing()) allow(ph, true);
+        ph.setPersonProperties(identity.personProperties);
+      },
     });
   } catch (e) {
     // Best effort, like every other analytics path: the one thing worse than a
     // survey never appearing is the app failing because one could not.
     console.error("[surveys]", e);
   }
+}
+
+/// Moves a started SDK with the switch. Off also stops it drawing a survey
+/// already fetched, whose answer could not be sent. On captures no `$opt_in`
+/// event: Rust reports everything this app sends.
+function allow(ph: Pick<PostHog, "set_config" | "opt_in_capturing" | "opt_out_capturing">, on: boolean) {
+  ph.set_config({ disable_surveys: !on });
+  if (on) ph.opt_in_capturing({ captureEventName: false });
+  else ph.opt_out_capturing();
 }

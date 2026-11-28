@@ -418,6 +418,19 @@ pub enum AgentEventPayload {
         model: Option<crate::models::ModelId>,
     },
 
+    /// The reader moved this task to another agent (#1414), logged ahead of the
+    /// first prompt the new one answers. Draws nothing, since the reader just
+    /// picked the agent; read back at the next spawn, an unanswered one is
+    /// what hands the new agent the conversation.
+    AgentSwitched {
+        from: Harness,
+        to: Harness,
+        /// `to` picks its own earlier conversation in this session back up,
+        /// so it is handed only what happened since it left.
+        #[serde(default)]
+        resumed: bool,
+    },
+
     /// A session this bot chat started, logged by the server as it creates it.
     /// The chat's "Started a new task" row reads this, never the bot's shell
     /// call, whose output a pipe or a script may hide. `title` is the one it
@@ -449,6 +462,89 @@ pub enum AgentEventPayload {
         repo: Option<String>,
     },
 
+    /// GitHub issues the agent showed the reader with `dray session
+    /// issue-card`, each opened in the issues view or handed back to the agent
+    /// to work on from its row. The rows are as GitHub had them when posted.
+    IssueCard {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        title: Option<String>,
+        /// `owner/name`.
+        repo: String,
+        issues: Vec<IssueCardRow>,
+    },
+    /// The reader asked the agent to work on one of an issue card's issues,
+    /// and the agent was told. Drawn on the card's row as started.
+    IssueApproved {
+        card_id: String,
+        number: u64,
+    },
+
+    /// The agent asked the user for a secret with `dray secret request`. Draws
+    /// a masked card until a [`SecretAnswered`](Self::SecretAnswered) with the
+    /// same `request_id` retires it. Logged, unlike a permission card: the
+    /// answer goes to a file and a fresh prompt, never to the child that
+    /// asked, so a card outlives the turn, the child and a restart alike.
+    SecretRequested {
+        request_id: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        label: Option<String>,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        url: Option<String>,
+        /// A secret by this name is already saved on the machine, so the
+        /// card offers it in one click beside pasting a new one.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        saved: bool,
+        /// Every secret saved on the machine that answers, so the card can
+        /// offer another than the one named.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        saved_names: Vec<String>,
+        /// The saved one the card offers first: `name` itself, the one picked
+        /// for it before, or the nearest by its words (GITHUB_TOKEN for
+        /// GH_TOKEN). Absent where none comes close.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        closest: Option<String>,
+        /// The task's own record of asking its bot, whose chat on another
+        /// machine draws the card and whose machine keeps the secrets. Draws
+        /// a line here, never a card.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bot: bool,
+        /// Set on the bot's side: the card answers this task on another
+        /// machine, which gets the value as a one-time file there.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        task: Option<SecretTask>,
+    },
+    /// How a [`SecretRequested`](Self::SecretRequested) card was closed. Never
+    /// carries the value, nor the file's path.
+    SecretAnswered {
+        request_id: String,
+        name: String,
+        outcome: SecretOutcome,
+        /// Kept on this machine under `name` rather than deleted after a day.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        kept: bool,
+        /// Later requests for `name` skip the card and get the saved file.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        always: bool,
+        /// No card was shown: a secret agents may use without asking answered on its own.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        auto: bool,
+        /// The task on another machine it went to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        task: Option<SecretTask>,
+        /// The saved secret handed over, where it is saved under another name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        from: Option<String>,
+    },
+
     /// What a bot's turn changed in its instructions, skills or memory, read
     /// off the commit Dray made of its folder. Drawn as "Learned" rows with
     /// View diff and Undo, so a lesson the bot gave itself is never silent.
@@ -462,13 +558,19 @@ pub enum AgentEventPayload {
         path: String,
     },
 
-    /// A bot's emoji on a message the user typed, in place of a reply. Drawn
-    /// as a badge on that message's bubble; a later one on the same message
-    /// replaces it, so 👀 can turn into ✅ once the work is done.
+    /// A bot's emoji on a message the user typed, in place of a reply, or with
+    /// `by_user` the user's on the agent's. Drawn as a badge on that message's
+    /// bubble; a later one from the same side replaces it, so 👀 can turn into
+    /// ✅ once the work is done.
     Reaction {
-        /// The `user_message` event reacted to, always in this same session.
+        /// The event reacted to, always in this same session: a `user_message`,
+        /// or with `by_user` an `assistant_text`.
         message_id: String,
         emoji: String,
+        /// The user reacted, not the agent. A build from before this reads the
+        /// line as a bot's reaction on a message it never finds, and draws none.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        by_user: bool,
     },
 
     /// The agent moved the checkout's git state or a pull request mid-turn —
@@ -591,6 +693,37 @@ pub enum PermissionOptionKind {
     SwitchMode,
     /// Refuse. Always offered, always last.
     Deny,
+}
+
+/// The task on another machine a bot's secret card answers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SecretTask {
+    pub session_id: String,
+    pub title: String,
+    /// The machine's name, for the card.
+    pub machine: String,
+    /// Its id in `servers.json`, which the answer is sent through.
+    pub machine_id: String,
+    /// The task's own request there.
+    pub request_id: String,
+}
+
+/// How a secret card closed. `Other` reads an outcome a later build adds, so
+/// the line still parses and the card still closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "snake_case")]
+pub enum SecretOutcome {
+    Saved,
+    Declined,
+    /// A newer card for the same name took its place.
+    Replaced,
+    /// The secret already saved under `name` was handed over.
+    Used,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -778,6 +911,29 @@ pub struct ToolResult {
     pub images: Vec<ImageRef>,
 }
 
+/// One issue on an [`IssueCard`](AgentEventPayload::IssueCard). Open or
+/// closed as a bool, never the issues page's state enum, so the logged line
+/// cannot fail a reader whose enum lacks a kind.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCardRow {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(default)]
+    pub labels: Vec<crate::issues::IssueLabel>,
+    /// The description's opening, flattened to one paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub author: Option<crate::issues::IssuePerson>,
+}
+
 /// One file a bot's turn changed under its instructions, skills or memory.
 /// `kind` and `change` are plain strings, never enums, so a kind a later build
 /// adds cannot fail an older reader's whole line.
@@ -842,6 +998,11 @@ pub struct MessageSender {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reply: Option<bool>,
+    /// An `--ask` from another machine: the id its server collects the answer
+    /// by (#1463). Held in memory only, from the send to the turn it arms.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub ask_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

@@ -1,22 +1,25 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 import { invoke, LOCAL, serverOfPath } from "@/lib/transport";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
   ChevronDown,
+  Minus,
   ChevronRight,
   CircleDashed,
   CircleSlash,
   Copy,
   ExternalLink,
+  GitBranch,
   MinusCircle,
   X,
 } from "lucide-react";
 
 import Avatar from "@/components/Avatar";
+import IssueLabelChip from "@/components/IssueLabelChip";
 import OpenInButton from "@/components/OpenInButton";
-import PrStateIcon from "@/components/PrStateIcon";
+import PrStateIcon, { PrStateWord } from "@/components/PrStateIcon";
 import Counts from "@/components/changes/Counts";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
@@ -28,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCopied } from "@/hooks/useCopied";
+import type { PrDetailRead } from "@/hooks/usePrDetail";
 import type { usePullRequest, PrActing, PrAction } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
 import { TERMINAL_OPENER } from "@/lib/openWith";
@@ -39,11 +43,14 @@ import {
   threadLabel,
   type Tone,
 } from "@/lib/pr";
+import { commentKey } from "@/lib/prInbox";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type {
   MergeMethod,
   PrCheck,
   PrComment,
+  PrReviewer,
   PrUnavailable,
   PullRequest,
 } from "@/types/events";
@@ -61,6 +68,9 @@ type PrPanelProps = PrData & {
   /// the missing-CLI state lands in — so the command it was opened to paste
   /// runs against this repo.
   cwd: string;
+  /// The PR's own words, labels and reviewers, on the pull requests page
+  /// alone — see [PrBody].
+  detail?: PrDetailRead;
 };
 
 export const TONE_TEXT: Record<Tone, string> = {
@@ -96,13 +106,14 @@ const LOGIN_COMMAND = "gh auth login";
 /// each — the shape the changes panel already uses, because the question is the
 /// same: a list of things that changed, any one of which can be opened.
 ///
-/// The PR body is deliberately absent from the expanded row. It is the one
-/// thing here the reader wrote themselves, it is usually the longest thing on
-/// the page, and it pushes the checks — the part that changes — below the fold.
-/// The title links out for anyone who wants the rest.
+/// The PR body is absent from a session's tab. There it is the reader's own
+/// text, usually the longest thing on the page, and it pushes the checks — the
+/// part that changes — below the fold. The pull requests page passes `detail`
+/// and draws it, since there the PR is often somebody else's.
 export default function PrPanel({
   branch,
   cwd,
+  detail,
   prs,
   error,
   loading,
@@ -158,6 +169,7 @@ export default function PrPanel({
             collapsible={prs.length > 1}
             acting={acting}
             act={act}
+            detail={detail}
           />
         ))}
       </div>
@@ -296,6 +308,7 @@ function PrRow({
   collapsible,
   acting,
   act,
+  detail,
 }: {
   pr: PullRequest;
   defaultOpen: boolean;
@@ -306,6 +319,7 @@ function PrRow({
   collapsible: boolean;
   acting: PrActing | null;
   act: (number: number, action: PrAction) => Promise<void>;
+  detail?: PrDetailRead;
 }) {
   const [collapsed, setCollapsed] = useState(!defaultOpen);
   const open = !collapsible || !collapsed;
@@ -350,7 +364,11 @@ function PrRow({
         )}
         <PrStateIcon pr={pr} />
         <span className="shrink-0 text-muted-foreground">#{pr.number}</span>
-        <span className="min-w-0 flex-1 truncate text-sidebar-foreground">{pr.title}</span>
+        {/* Whole on the pull requests page, where the pane is about this PR
+            and a cut title is the thing the reader came to read. */}
+        <span className={cn("min-w-0 flex-1 text-sidebar-foreground", detail ? "line-clamp-3" : "truncate")}>
+          {pr.title}
+        </span>
         <Counts added={pr.additions} removed={pr.deletions} className="shrink-0" />
 
         {/* Beside the PR's own name, which is what it points at — and not in
@@ -379,7 +397,9 @@ function PrRow({
               worth naming once the work is on it, and the header already carries
               the merge glyph. The word "Merged" alone was a whole row repeating
               the icon two lines above it. */}
-          {pr.state !== "MERGED" && <Readiness pr={pr} acting={acting} act={act} />}
+          {detail && <PrBody pr={pr} read={detail} />}
+
+          {pr.state !== "MERGED" && <Readiness pr={pr} acting={acting} act={act} showBase={!detail} />}
 
           {/* Its branch is another matter, and the one thing nothing else here
               cleans up: settling a session deletes the local branch and the
@@ -410,7 +430,7 @@ function PrRow({
             )}
           </Section>
 
-          <Section title="Comments" count={pr.comments.length || undefined}>
+          <Section title="Comments" count={pr.comments.length || undefined} action={<PickActions />}>
             {pr.comments.length ? (
               // Checks are a dense column of one-line facts; comments are
               // separate things people said, so they get air between them
@@ -433,6 +453,85 @@ function PrRow({
   );
 }
 
+
+/// How a reviewer's state reads beside their name, in GitHub's own words.
+const REVIEWER: Record<PrReviewer["state"], { word: string; tone: string }> = {
+  requested: { word: "awaiting review", tone: "text-accent-command" },
+  approved: { word: "approved", tone: "text-accent-add" },
+  changes_requested: { word: "requested changes", tone: "text-destructive" },
+  commented: { word: "commented", tone: "text-muted-foreground" },
+};
+
+/// What the pull requests page says about a PR before whether it can land:
+/// who opened it and where it goes, its labels and reviewers, then its
+/// description — the issue pane's `IssueBody`, in the same order and type.
+function PrBody({ pr, read }: { pr: PullRequest; read: PrDetailRead }) {
+  const { detail, loading, error } = read;
+  const body = detail ? stripBotMarkers(detail.body) : "";
+
+  return (
+    <div className="flex flex-col gap-3 px-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-ui text-muted-foreground">
+        <PrStateWord pr={pr} />
+        <span className="flex items-center gap-1.5">
+          <Avatar src={detail?.authorAvatar ?? null} name={pr.author || "?"} />
+          {pr.author || "Someone"} opened this
+          {detail?.createdAt && ` ${relativeTime(detail.createdAt)}`}
+        </span>
+        <span>
+          {pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}
+        </span>
+        {pr.updatedAt && <span>Updated {relativeTime(pr.updatedAt)}</span>}
+      </div>
+
+      {/* Base first, the way GitHub writes it: the head merges into it. */}
+      <div className="flex min-w-0 items-center gap-1.5 text-ui text-muted-foreground">
+        <GitBranch className="size-3.5 shrink-0" />
+        <code className="shrink-0 rounded bg-muted px-1 font-mono text-code text-foreground">{pr.baseRefName}</code>
+        <span aria-label="from">←</span>
+        <code className="min-w-0 truncate rounded bg-muted px-1 font-mono text-code text-foreground">
+          {pr.headRefName}
+        </code>
+      </div>
+
+      {detail && detail.labels.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {detail.labels.map((label) => (
+            <IssueLabelChip key={label.name} label={label} className="text-ui" />
+          ))}
+        </div>
+      )}
+
+      {detail && detail.reviewers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-ui">
+          {detail.reviewers.map((reviewer) => (
+            <span key={reviewer.name} className="flex items-center gap-1.5">
+              <Avatar src={reviewer.avatar} name={reviewer.name} />
+              <span className="text-foreground">{reviewer.name}</span>
+              <span className={REVIEWER[reviewer.state].tone}>{REVIEWER[reviewer.state].word}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {detail ? (
+        body ? (
+          <div className="text-chat">
+            <Markdown>{body}</Markdown>
+          </div>
+        ) : (
+          <p className="text-ui text-muted-foreground">No description.</p>
+        )
+      ) : error ? (
+        <p className="text-ui text-destructive">
+          {UNAVAILABLE[error.kind] || errorText(error) || "Could not read the description."}
+        </p>
+      ) : (
+        loading && <p className="text-ui text-muted-foreground">Reading the description…</p>
+      )}
+    </div>
+  );
+}
 
 /// GitHub's green, on both halves of the split button.
 ///
@@ -563,10 +662,13 @@ function Readiness({
   pr,
   acting,
   act,
+  showBase,
 }: {
   pr: PullRequest;
   acting: PrActing | null;
   act: (number: number, action: PrAction) => Promise<void>;
+  /// Off where [PrBody] already names base and head.
+  showBase: boolean;
 }) {
   const [method, setMethod] = useState<MergeMethod>("squash");
   const [confirming, setConfirming] = useState(false);
@@ -586,7 +688,7 @@ function Readiness({
             what the reader already knows — where the work is *going* is the
             half that isn't on screen anywhere else, and the half that tells two
             PRs from one branch apart. */}
-        {pr.state === "OPEN" && (
+        {pr.state === "OPEN" && showBase && (
           <p className="min-w-0 truncate text-ui text-muted-foreground">
             <span className="text-muted-foreground/50">into</span> {pr.baseRefName}
           </p>
@@ -723,10 +825,13 @@ function Readiness({
 function Section({
   title,
   count,
+  action,
   children,
 }: {
   title: string;
   count?: string | number;
+  /// Drawn at the header's far end.
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -734,6 +839,7 @@ function Section({
       <h3 className="flex items-baseline gap-2 px-3 pb-1 text-ui text-sidebar-foreground">
         {title}
         {count !== undefined && <span className="text-muted-foreground">{count}</span>}
+        {action && <span className="ml-auto flex items-baseline gap-2">{action}</span>}
       </h3>
       {children}
     </section>
@@ -789,6 +895,86 @@ function CheckRow({ check }: { check: PrCheck }) {
   );
 }
 
+/// Which comments the reader has picked to send to an agent, on the pull
+/// requests page. Absent everywhere else, so the session's PR tab draws no
+/// boxes.
+export type CommentPick = {
+  picked: ReadonlySet<string>;
+  toggle: (key: string) => void;
+  /// How many unresolved threads (and change-asking reviews) there are to tick.
+  unresolved: number;
+  selectUnresolved: () => void;
+  clear: () => void;
+};
+export const CommentPickContext = createContext<CommentPick | null>(null);
+
+/// The Comments header's end on the pull requests page: what is selected for
+/// the task's prompt, and a shortcut to every unresolved thread. Nothing
+/// elsewhere, where there are no boxes.
+function PickActions() {
+  const pick = useContext(CommentPickContext);
+  if (!pick) return null;
+  const n = pick.picked.size;
+  const link = "text-muted-foreground transition-colors hover:text-foreground";
+  return (
+    <>
+      {n > 0 && (
+        <>
+          <span className="text-muted-foreground">{n} selected</span>
+          <button type="button" className={link} onClick={pick.clear}>
+            Clear
+          </button>
+        </>
+      )}
+      {pick.unresolved > 0 && n === 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button type="button" className={link} onClick={pick.selectUnresolved}>
+              Select unresolved
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Tick every unresolved review thread, so the task gets them</TooltipContent>
+        </Tooltip>
+      )}
+    </>
+  );
+}
+
+/// The box that picks one comment, beside its row. A button wearing a checkbox's
+/// role rather than an input: the row next to it is a button too, and the app
+/// has no checkbox of its own to match.
+function PickBox({ comment }: { comment: PrComment }) {
+  const pick = useContext(CommentPickContext);
+  if (!pick) return null;
+  const key = commentKey(comment);
+  const on = pick.picked.has(key);
+  // A review whose thread is picked says so while it is folded shut.
+  const partly = !on && comment.replies.some((r) => r.path && pick.picked.has(commentKey(r)));
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={on}
+          aria-label={on ? "Unpick for the agent" : "Pick for the agent"}
+          onClick={() => pick.toggle(key)}
+          className={cn(
+            "flex size-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+            on || partly
+              ? "border-transparent bg-primary text-primary-foreground"
+              : "border-border hover:border-muted-foreground",
+          )}
+        >
+          {on && <Check className="size-2.5" strokeWidth={3} />}
+          {partly && <Minus className="size-2.5" strokeWidth={3} />}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{on ? "Picked for the agent" : "Pick for the agent"}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 /// What a review's verdict is called, in the words GitHub uses. A plain comment
 /// gets none — "commented" beside a comment is the row saying its own type.
 const VERDICT: Record<PrComment["kind"], { word?: string; tone?: string }> = {
@@ -820,17 +1006,21 @@ function CommentCard({ comment }: { comment: PrComment }) {
   const replies = comment.replies;
 
   const [open, setOpen] = useState(false);
+  // The body stays under the author's name, a box's width further in.
+  const picking = useContext(CommentPickContext) !== null;
   const expandable = Boolean(body) || replies.length > 0;
   const preview = !open && Boolean(body);
   const count = !open && replies.length > 0;
 
   return (
     <article className="px-3">
+      <div className="flex items-center gap-1.5">
+      <PickBox comment={comment} />
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={!expandable}
-        className="flex w-full cursor-pointer items-center gap-1.5 py-0.5 text-left text-ui disabled:cursor-default"
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-0.5 text-left text-ui disabled:cursor-default"
       >
         <ChevronRight
           className={cn(
@@ -872,9 +1062,10 @@ function CommentCard({ comment }: { comment: PrComment }) {
           {relativeTime(comment.createdAt)}
         </span>
       </button>
+      </div>
 
       {open && (
-        <div className="mb-1 mt-1 flex flex-col gap-2 pl-6">
+        <div className={cn("mb-1 mt-1 flex flex-col gap-2", picking ? "pl-11" : "pl-6")}>
           {/* Bot comments carry tables, badges and preview links, so this is
               real markdown rather than text — a Vercel comment rendered flat is
               a wall of pipe characters. */}
@@ -921,6 +1112,8 @@ function Nested({ comment }: { comment: PrComment }) {
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center gap-1.5 text-ui">
+        {/* A thread is the one unit inside a review worth sending on its own. */}
+        {comment.path && <PickBox comment={comment} />}
         {comment.path && (
           <span className="min-w-0 truncate font-mono text-sidebar-foreground" title={comment.path}>
             {threadLabel(comment.path)}

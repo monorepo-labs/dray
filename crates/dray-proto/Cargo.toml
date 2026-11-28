@@ -8,3 +8,9 @@ description = "Wire types for the socket between the Dray app and the dray CLI."
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# The `Run` key a server starts from at login (login.rs). Already in the app's
+# and the CLI's locks.
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.61"
+features = ["Win32_System_Registry"]

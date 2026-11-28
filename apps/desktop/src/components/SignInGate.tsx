@@ -1,14 +1,26 @@
 import type { ReactNode } from "react";
 
 import WindowControls from "@/components/layout/WindowControls";
+import MuteButton from "@/components/onboarding/MuteButton";
 import type { SignInMethod } from "@/types/events";
 
 /// What the gate is showing. `revoked` is a saved sign-in the site turned
 /// away; `waiting` a browser sign-in in flight, `finishing` once the browser
 /// is back and it can no longer be cancelled. `emailOff` is the site saying
-/// email sign-in isn't open yet.
+/// email sign-in isn't open yet, `lastUsed` the way in this app last took.
 export type GateView =
-  | { kind: "choose"; revoked: boolean; error: string | null; offline: boolean; emailOff: boolean }
+  | {
+      kind: "choose";
+      revoked: boolean;
+      error: string | null;
+      offline: boolean;
+      emailOff: boolean;
+      lastUsed: SignInMethod | null;
+      /// Sign-in is required now (#1590): its own words, and no Skip.
+      required: boolean;
+      /// False once sign-in is required, unless a failure opens the way.
+      canSkip: boolean;
+    }
   | { kind: "waiting"; method: SignInMethod; finishing: boolean };
 
 const METHOD: Record<SignInMethod, string> = { github: "GitHub", google: "Google", email: "email" };
@@ -30,9 +42,10 @@ export default function SignInGate({
   onSkip: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[1000] flex flex-col overflow-hidden bg-black text-white select-none">
+    <div data-sign-in-gate className="fixed inset-0 z-[1000] flex flex-col overflow-hidden bg-black text-white select-none">
       <Tiles />
       <header data-tauri-drag-region="deep" className="relative flex h-(--titlebar-h,40px) shrink-0 items-center justify-end">
+        <MuteButton />
         <WindowControls />
       </header>
       {view && (
@@ -62,30 +75,43 @@ function body(
         </Cards>
       </>
     );
-  const { error, offline, revoked, emailOff } = view;
+  const { error, offline, revoked, emailOff, lastUsed, required, canSkip } = view;
+  const tag = (method: SignInMethod) => lastUsed === method && <LastUsed />;
   const failed = !offline && error;
-  const label = failed ? failed : revoked ? "You've been signed out" : "Welcome to Dray";
+  // True as said: the agents run in the background server, never this window.
+  const label = failed
+    ? failed
+    : required
+      ? "Your agents are still running in the background"
+      : revoked
+        ? "You've been signed out"
+        : "Welcome to Dray";
   const heading = offline
     ? "Check your connection, or skip for now."
     : failed
       ? "Pick an account to try again."
-      : revoked
-        ? "Sign in again. Your agents are still running."
-        : "Pick an account to sign in with.";
+      : required
+        ? "Sign in to keep using Dray."
+        : revoked
+          ? "Sign in again. Your agents are still running."
+          : "Pick an account to sign in with.";
   return (
     <>
       <Label danger={Boolean(failed)}>{label}</Label>
       <Heading>{heading}</Heading>
       <Cards>
-        <Card icon={<GitHubIcon />} label="GitHub" corner onClick={() => act.onPick("github")} />
-        <Card icon={<GoogleIcon />} label="Google" corner onClick={() => act.onPick("google")} />
+        <Card icon={<GitHubIcon />} label="GitHub" tag={tag("github")} corner onClick={() => act.onPick("github")} />
+        <Card icon={<GoogleIcon />} label="Google" tag={tag("google")} corner onClick={() => act.onPick("google")} />
         {emailOff ? (
-          <Card icon={<MailIcon />} label="Email" detail="Coming in the next few days" off />
+          <Card icon={<MailIcon />} label="Email" detail="Coming in the next few days" tag={tag("email")} off />
         ) : (
-          <Card icon={<MailIcon />} label="Email" corner onClick={() => act.onPick("email")} />
+          <Card icon={<MailIcon />} label="Email" tag={tag("email")} corner onClick={() => act.onPick("email")} />
         )}
-        {offline && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
+        {offline && canSkip && <Card icon={<SkipIcon />} label="Skip for now" onClick={act.onSkip} />}
       </Cards>
+      {/* Online, a way past the gate that doesn't compete with the three ways
+          in (#1590). Offline it is the fourth card above. */}
+      {!offline && canSkip && <QuietSkip onClick={act.onSkip} />}
     </>
   );
 }
@@ -115,11 +141,12 @@ function Cards({ children }: { children: ReactNode }) {
 
 /// One card. Without `onClick` it only says something, like the waiting one;
 /// `dim` greys out one that can't be used right now, and `off` fades a way in
-/// that isn't open yet, leaving its `detail` readable, as the site does.
+/// that isn't open yet, leaving its `detail` and `tag` readable, as the site does.
 function Card({
   icon,
   label,
   detail,
+  tag,
   corner = false,
   dim = false,
   off = false,
@@ -128,6 +155,7 @@ function Card({
   icon: ReactNode;
   label: string;
   detail?: string;
+  tag?: ReactNode;
   corner?: boolean;
   dim?: boolean;
   off?: boolean;
@@ -139,9 +167,14 @@ function Card({
         {icon}
         {corner && <CornerArrow />}
       </span>
-      <span className="flex flex-col gap-0.5">
-        <span className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40" : "text-white/80"}`}>{label}</span>
-        {detail && <span className="text-[13px] leading-[18px] text-white/40">{detail}</span>}
+      <span className="flex flex-wrap items-end justify-between gap-x-3 gap-y-2">
+        <span className="flex flex-col gap-0.5">
+          <span className={`text-[17px] leading-6 tracking-[-0.01em] ${off ? "text-white/40" : "text-white/80"}`}>{label}</span>
+          {detail && <span className="text-[13px] leading-[18px] text-white/40">{detail}</span>}
+        </span>
+        {/* Wraps under the label on a card too narrow for both, like the
+            offline gate's four at the window's narrowest. */}
+        {tag && <span className="ml-auto">{tag}</span>}
       </span>
     </>
   );
@@ -160,6 +193,31 @@ function Card({
     >
       {inner}
     </button>
+  );
+}
+
+/// Skip without an account, in the label's own quiet type.
+function QuietSkip({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-6 ml-[102px] flex cursor-pointer items-center gap-1.5 self-start font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white/50 uppercase outline-none transition-colors hover:text-white/80 focus-visible:text-white/80 max-lg:ml-0"
+    >
+      Skip for now
+      <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden>
+        <path d="M4 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
+      </svg>
+    </button>
+  );
+}
+
+/// The site's tag on the card this app last signed in with.
+function LastUsed() {
+  return (
+    <span className="bg-white/10 px-1.5 py-[3px] font-mono text-[10px] leading-3 tracking-[0.06em] whitespace-nowrap text-white/70 uppercase">
+      Last used
+    </span>
   );
 }
 
@@ -264,6 +322,10 @@ function pts(list: string, fill: string): [number, number, string][] {
     return [x, y, fill];
   });
 }
+
+// Shared with What's New and onboarding so the brand's full-window pages read
+// as one family.
+export { Heading as GateHeading, Cards as GateCards };
 
 function Tiles() {
   return (

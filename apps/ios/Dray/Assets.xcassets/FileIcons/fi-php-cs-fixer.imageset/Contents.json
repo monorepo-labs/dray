@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "php-cs-fixer.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

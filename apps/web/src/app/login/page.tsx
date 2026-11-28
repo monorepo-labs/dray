@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { AccountChooser } from "@/components/account/AccountChooser";
-import { SignInMethods } from "@/components/account/SignInMethods";
+import { type Method, SignInMethods } from "@/components/account/SignInMethods";
 import { Heading, Label } from "@/components/account/SignInParts";
 import { SignInShell } from "@/components/account/SignInShell";
-import { auth, emailSignIn } from "@/lib/auth";
+import { auth, emailSignIn, LAST_METHOD_COOKIE } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Sign in - Dray" };
 
@@ -25,6 +25,11 @@ function problemFor(error: string | string[] | undefined): string | null {
   return "Sign-in didn't work";
 }
 
+/// The card the last-sign-in cookie names, if it names one of ours.
+function lastMethod(value: string | undefined): Method | null {
+  return value === "github" || value === "google" || value === "email" ? value : null;
+}
+
 /// Sign in to Dray with GitHub, Google or email. A reader already signed in
 /// goes straight on, unless the desktop app sent them, which asks whether
 /// that is the account they want; `via` is the method the app picked.
@@ -38,6 +43,7 @@ export default async function LoginPage({
   const via = typeof params.via === "string" ? params.via : null;
   const fromApp = next.startsWith("/api/app/authorize");
   const github = Boolean(process.env.GITHUB_CLIENT_ID);
+  const lastUsed = lastMethod((await cookies()).get(LAST_METHOD_COOKIE)?.value);
 
   if (params.error === "broken_link")
     return (
@@ -60,9 +66,17 @@ export default async function LoginPage({
           machine={new URLSearchParams(next.split("?")[1] ?? "").get("name")}
           github={github}
           emailOpen={emailSignIn}
+          lastUsed={lastUsed}
         />
       ) : (
-        <SignInMethods next={next} via={via} github={github} emailOpen={emailSignIn} problem={problemFor(params.error)} />
+        <SignInMethods
+          next={next}
+          via={via}
+          github={github}
+          emailOpen={emailSignIn}
+          lastUsed={lastUsed}
+          problem={problemFor(params.error)}
+        />
       )}
     </SignInShell>
   );

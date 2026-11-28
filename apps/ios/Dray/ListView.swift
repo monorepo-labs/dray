@@ -4,6 +4,9 @@ import ThinkingOrbs
 /// Which sessions the list shows: the live ones, saved drafts, or settled ones.
 enum ListMode { case live, drafts, settled }
 
+/// A page opened over the list from its top bar.
+enum ListPage: Identifiable { case pulls, issues; var id: Self { self } }
+
 /// A task saved for later, as `drafts.json` holds it. Only what a row draws.
 struct DraftItem: Decodable, Identifiable {
     let id: String
@@ -16,6 +19,8 @@ struct DraftItem: Decodable, Identifiable {
     let permissionMode: String?
     let fast: Bool?
     let useWorktree: Bool?
+    /// Where the worktree starts: a picked branch, or `dray draft new --base`'s.
+    let base: String?
 
     var title: String { prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt }
     var project: String? { projectPath.map { ($0 as NSString).lastPathComponent } }
@@ -26,18 +31,26 @@ struct SessionList: View {
     @Environment(NewTask.self) private var task
     @Binding var selection: SessionKey?
     @Binding var sheet: RootSheet?
+    /// This launch's one chance to open Settings' launch bot; anything the reader does first spends it.
+    /// The root's, so the new task page's dock spends it too.
+    @Binding var autoOpen: Bool
+    /// The list is a split view's sidebar, beside an open chat, rather than the whole screen.
+    var sidebar = false
+    /// Opens the new task page in the main pane.
+    var newTaskPage: () -> Void = {}
     @State private var project: String?
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
     @State private var shown = Self.pageSize
-    /// A bot with no chat, opened on its own page while sessions are hidden.
+    /// The launch bot with no chat yet, opened on its own page.
     @State private var starting: BotStart?
-    /// Settings › Appearance: the list is bots alone, with nothing that serves sessions.
-    @AppStorage(AppearanceSettings.hideSessionsKey) private var hideSessions = false
     @State private var newBot = false
+    @AppStorage(LaunchBot.key) private var launchBot = ""
+    /// The pull requests or issues page, opened over the list.
+    @State private var listPage: ListPage?
     @Environment(\.scenePhase) private var phase
-    /// This launch's one chance to open a lone bot's chat; anything the reader does first spends it.
-    @State private var autoOpen = true
+    /// The row whose Delete is waiting on its confirm.
+    @State private var deleting: ListRow?
 
     private static let pageSize = 40
 
@@ -60,19 +73,20 @@ struct SessionList: View {
         let names = store.live.flatMap { store.projects[$0.id] ?? [] }.map(\.name).filter { seen.insert($0).inserted }
         // A picked project that left the list narrows nothing.
         let filter = names.contains { $0 == project } ? project : nil
-        let all = mode == .drafts || hideSessions ? [] : store.runs(project: filter, settled: mode == .settled)
+        let all = mode == .drafts ? [] : store.runs(project: filter, settled: mode == .settled)
         // Paged: only the first `shown` rows are drawn, more as the last one comes on screen.
         let runs = page(all, shown)
         let more = runs.reduce(0) { $0 + $1.rows.count } < all.reduce(0) { $0 + $1.rows.count }
+        // Nested where its parent is listed anywhere: a pinned child draws at depth 0 still holding the link.
+        let listed = Set(all.flatMap { $0.rows.map(\.key) })
         // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
         let botRows = mode == .live ? store.allBots.map { b in
             (id: "\(b.server)/\(b.bot.id)", server: b.server, bot: b.bot, chat: store.botChat(b.server, b.bot).last)
         } : []
         let blank = mode == .live && runs.isEmpty && botRows.isEmpty
         // A picked filter keeps its strip, or there would be no way back to All.
-        let strip = !hideSessions && names.count > 1 && (filter != nil || !(mode == .drafts ? drafts.isEmpty : all.isEmpty))
-        // Bots only: a bot with no chat yet opens its own page, which carries the dock instead.
-        let dock = !store.live.isEmpty && !hideSessions
+        let strip = names.count > 1 && (filter != nil || !(mode == .drafts ? drafts.isEmpty : all.isEmpty))
+        let dock = !store.live.isEmpty
         let lone = autoOpen ? loneBot : nil
         let read = store.live.allSatisfy { store.read($0.id) } && store.awaitingShares.isEmpty
         VStack(spacing: 0) {
@@ -95,12 +109,13 @@ struct SessionList: View {
                         // No chat yet: the dock aims at its folder, and the first message starts one.
                         Button {
                             task.aim(at: b.bot, on: b.server)
-                            if hideSessions { starting = BotStart(server: b.server, bot: b.bot) }
+                            // Beside the main pane, the new task page is where that dock is.
+                            newTaskPage()
                         } label: {
                             BotListRow(server: b.server, bot: b.bot, chat: nil)
                         }
                         .buttonStyle(RowButtonStyle())
-                        .sessionRow(selected: task.bot?.bot.id == b.bot.id)
+                        .sessionRow(selected: selection == nil && task.bot?.bot.id == b.bot.id)
                     }
                 }
                 // Under the bots, since no filter narrows them; its top padding is the gap after them.
@@ -122,13 +137,26 @@ struct SessionList: View {
                 // One block per run: the gap between them is the whole signal, never a heading.
                 ForEach(Array(runs.enumerated()), id: \.element.stage) { i, run in
                     if i > 0 { Color.clear.frame(height: Theme.Space.l).plainRow() }
+                    // The one run with a heading: nothing else on the rows says why they lead.
+                    if run.stage == .pinned {
+                        // In line with the titles: the rows' 6pt inset and 14pt rail, past this row's own 16.
+                        Text("Pinned").font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                            .padding(.leading, Theme.Space.xs).padding(.bottom, Theme.Space.xs)
+                            .plainRow()
+                    }
                     ForEach(Array(run.rows.enumerated()), id: \.element.id) { j, row in
                         // Set aside fades as the desktop sidebar's does, back to full once it is the open one.
                         SessionRow(key: row.key, item: row.item, lines: elbows(run.rows, j))
                             .opacity(run.stage == .aside && selection != row.key ? 0.3 : 1)
                             .tag(row.key)
                             .sessionRow(selected: selection == row.key)
-                        if mode == .live, let ask = store.asks[row.key]?.first {
+                            .contextMenu {
+                                RowMenu(row: row, aside: run.stage == .aside || row.item.aside == true,
+                                        inheritsPin: run.stage == .pinned && row.depth > 0 && row.item.pinned != true,
+                                        nested: row.item.parentSessionId.map { listed.contains(SessionKey(server: row.key.server, id: $0)) } ?? false,
+                                        opened: { selection = $0 }, delete: { deleting = row })
+                            }
+                        if mode == .live, let ask = store.cards(row.key).first {
                             AskCard(key: row.key, event: ask)
                                 .padding(EdgeInsets(top: 2, leading: 14, bottom: Theme.Space.m, trailing: Theme.Space.m))
                                 .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
@@ -145,9 +173,11 @@ struct SessionList: View {
                 }
             }
             .listStyle(.plain)
+            // With a hardware keyboard a tap focused the row, and its focus ring drew a white box round it.
+            .focusable(false)
             .contentMargins(.top, Theme.Space.m, for: .scrollContent)
             // The resting dock's height, so the last row scrolls clear of the orb.
-            .contentMargins(.bottom, dock ? 160 : 0, for: .scrollContent)
+            .contentMargins(.bottom, dock ? (sidebar ? 96 : 160) : 0, for: .scrollContent)
             // The breaks between runs are 16pt, under the 44pt a list row otherwise takes.
             .environment(\.defaultMinListRowHeight, 1)
             .themedList()
@@ -161,22 +191,29 @@ struct SessionList: View {
             .overlay { if blank { empty(filter) } }
         }
         .overlay(alignment: .bottom) {
-            if dock {
+            // Beside the main pane the orb is the new task page's, opened from here.
+            if dock && sidebar {
+                Button {
+                    task.bot = nil
+                    newTaskPage()
+                } label: {
+                    Label("New task", systemImage: "square.and.pencil")
+                }
+                .buttonStyle(DockButtonStyle())
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.top, Theme.Space.xxl)
+                .padding(.bottom, Theme.Space.l)
+                .background {
+                    LinearGradient(stops: [.init(color: Theme.page.opacity(0), location: 0), .init(color: Theme.page, location: 0.4)],
+                                   startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+                }
+            } else if dock {
                 // Dim while nothing is connected: the screen above says why.
                 VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false }).opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
         // A new view or filter starts on its first page.
         .onChange(of: "\(mode)\(filter ?? "")") { shown = Self.pageSize }
-        // Its buttons go with the sessions, so a view left open would have no way back; the dock
-        // goes too, so a recording it held is stopped and kept, as leaving `BotStartView` does.
-        .onChange(of: hideSessions) {
-            guard hideSessions else { return }
-            mode = .live
-            if Dictations.shared.state(.newSession) == .recording {
-                Task { await Dictations.shared.stop(store, draft: .newSession) }
-            }
-        }
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
@@ -185,6 +222,30 @@ struct SessionList: View {
                 starting = nil
                 selection = key
             }
+        }
+        // Its own stack in a sheet: pushed inside the split view's sidebar, a page's own pushes looped.
+        .sheet(item: $listPage) { p in
+            NavigationStack {
+                switch p {
+                case .pulls: PullsView()
+                case .issues: IssuesView()
+                }
+            }
+            .presentationBackground(Theme.page)
+        }
+        // Confirmed apart from the menu, which closes on any pick: the desktop asks in place.
+        .confirmationDialog("Delete \u{201C}\(deleting?.item.title ?? "")\u{201D}?", isPresented: Binding(
+            get: { deleting != nil }, set: { if !$0 { deleting = nil } }
+        ), titleVisibility: .visible, presenting: deleting) { row in
+            Button("Delete", role: .destructive) {
+                Task {
+                    guard await store.delete(row.key) else { return Haptic.error() }
+                    // Deleting the open one falls back to the list, never a neighbour: the desktop's rule.
+                    if selection == row.key { selection = nil }
+                }
+            }
+        } message: { _ in
+            Text("Its conversation goes for good.")
         }
         .sheet(isPresented: $newBot) { BotSheet(editing: nil) { selection = $0 } }
         .onChange(of: lone, initial: true) { open(lone) }
@@ -197,6 +258,7 @@ struct SessionList: View {
         .onChange(of: "\(mode)\(project ?? "")") { autoOpen = false }
         .onChange(of: sheet?.id) { autoOpen = false }
         .onChange(of: newBot) { autoOpen = false }
+        .onChange(of: listPage) { autoOpen = false }
         .onChange(of: phase) { if phase == .background { autoOpen = false } }
         // ponytail: a server that takes longer than this to answer never opens its bot; a read-progress signal if that bites.
         .task { try? await Task.sleep(for: .seconds(10)); autoOpen = false }
@@ -212,16 +274,24 @@ struct SessionList: View {
     /// Settings on the left; the drafts and settled views sharing one glass pill
     /// on the right, then New bot. While one view is shown, the other dims, so the lit one reads as on.
     @ToolbarContentBuilder private var header: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
+        // The desktop's two pages beside Settings, each a push over the list. Whenever a server is on,
+        // up or not: both draw their kept lists while one reconnects, so a dropped socket hides nothing.
+        ToolbarItemGroup(placement: .topBarLeading) {
             Button { sheet = .settings(server: nil) } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("Settings")
+            if !store.live.isEmpty {
+                Button { listPage = .pulls } label: { Image(systemName: "arrow.triangle.pull") }
+                    .accessibilityLabel("Pull requests")
+                Button { listPage = .issues } label: { Image(systemName: "smallcircle.circle") }
+                    .accessibilityLabel("Issues")
+            }
         }
         // Each only where it has something to show, or is the view up now so there is a way back.
         ToolbarItemGroup(placement: .topBarTrailing) {
-            if !hideSessions, mode == .drafts || (anyConnected && !drafts.isEmpty) {
+            if mode == .drafts || (anyConnected && !drafts.isEmpty) {
                 viewToggle(.drafts, label: "Drafts") { Image(systemName: "circle.dashed") }
             }
-            if !hideSessions, mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
+            if mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
                 viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
             }
         }
@@ -254,6 +324,7 @@ struct SessionList: View {
             Button {
                 task.open(entry.draft, on: entry.server)
                 mode = .live
+                newTaskPage()
             } label: {
                 RowLine(title: entry.draft.title, time: entry.draft.created.flatMap(parseDate))
             }
@@ -278,19 +349,16 @@ struct SessionList: View {
         drafts = all.sorted { ($0.draft.created ?? "") > ($1.draft.created ?? "") }
     }
 
-    /// The bot to open at launch, where it would be the list's only row: one bot across every
-    /// server and no session shown beside it. Nil until every server's list is known, from the
-    /// cache or a read, so one still coming up never counts as empty — and the cache is what
-    /// lets a cold open go straight in without drawing the list first.
+    /// Settings' Open bot at launch, once its bot is on the list: the late path, for a bot with
+    /// no chat cached yet. A cached chat is the root's first screen already (`DrayApp.launch`).
     private var loneBot: BotStart? {
-        guard !store.live.isEmpty,
+        guard !launchBot.isEmpty, !store.live.isEmpty,
               store.live.allSatisfy({ store.known($0.id) }), store.awaitingShares.isEmpty,
-              store.allBots.count == 1, let b = store.allBots.first,
-              hideSessions || store.runs(project: nil).isEmpty else { return nil }
+              let b = LaunchBot.bot(store) else { return nil }
         return BotStart(server: b.server, bot: b.bot)
     }
 
-    /// Opens a lone bot as a tap on its row would, unanimated so the list never shows first.
+    /// Opens the launch bot as a tap on its row would, unanimated.
     private func open(_ b: BotStart?) {
         // A held orb is no tap, and a recording must not be carried off under the reader.
         guard let b, selection == nil, sheet == nil, starting == nil, !newBot, mode == .live,
@@ -311,6 +379,7 @@ struct SessionList: View {
 
     /// What the list says with no rows: no server yet, one coming up, or nothing started.
     private var anyConnected: Bool { store.live.contains { store.serverState[$0.id] == .connected } }
+    private var startHint: String { sidebar ? "Tap New task to start one." : "Tap the orb to start one." }
 
     /// The whole screen when the live list has nothing: pair, connecting, can't reach,
     /// or nothing to do yet — the last pointing at the orb, or at today's settled work.
@@ -363,18 +432,15 @@ struct SessionList: View {
                 .compactMap { r in parseDate(r.item.modified).map { (row: r, at: $0) } }
                 .filter { Calendar.current.isDateInToday($0.at) }
             Group {
-                if hideSessions {
-                    EmptyScreen(art: EmptyArt(kind: .tasks), title: "No bots yet",
-                                message: "Tap + to make one.")
-                } else if let last = today.max(by: { $0.at < $1.at }) {
+                if let last = today.max(by: { $0.at < $1.at }) {
                     EmptyScreen(art: SettledStack(title: last.row.item.title, time: shortAge(last.at)),
                                 title: "All clear", message: today.count == 1 ? "1 settled today." : "\(today.count) settled today.")
                 } else if let filter {
                     EmptyScreen(art: EmptyArt(kind: .project), title: "Nothing in \(filter)",
-                                message: "Tap the orb to start one.", pointsAtOrb: true)
+                                message: startHint, pointsAtOrb: true)
                 } else {
                     EmptyScreen(art: EmptyArt(kind: .tasks), title: "No tasks yet",
-                                message: "Tap the orb to start one.", pointsAtOrb: true)
+                                message: startHint, pointsAtOrb: true)
                 }
             }
             .padding(.horizontal, 40)
@@ -482,6 +548,92 @@ struct ProjectStrip: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(picked == value ? .isSelected : [])
+    }
+}
+
+/// A task row's long-press menu: the desktop sidebar's `RowMenu`, each item
+/// shown where it shows there. Settle lives here, since a phone row has no
+/// hover button to carry it.
+private struct RowMenu: View {
+    @Environment(Store.self) private var store
+    @Environment(\.displayScale) private var scale
+    let row: ListRow
+    /// Drawn in the set-aside run or flagged aside, so the item turns to Bring back.
+    let aside: Bool
+    /// In Pinned only through an ancestor: a pin here would move nothing and leave a flag behind.
+    let inheritsPin: Bool
+    /// Its parent is in the list, so there is a link to cut — the desktop's `isNested`.
+    let nested: Bool
+    let opened: (SessionKey) -> Void
+    let delete: () -> Void
+
+    var body: some View {
+        let key = row.key, item = row.item
+        let settled = item.archived == true
+        // Two because they differ in where the copy runs, not what it copies.
+        // Off mid-turn: the copy would inherit half a turn, and the server refuses it too.
+        Menu {
+            Button("Fork in new worktree") { fork(worktree: true) }
+            Button("Fork here") { fork(worktree: false) }
+        } label: { Label("Fork", systemImage: "arrow.triangle.branch") }
+            .disabled(item.busy)
+        // A settled list draws no Pinned run and no aside run, so neither verb would move anything there.
+        if !settled && !inheritsPin {
+            let pinned = item.pinned == true
+            Button(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin") {
+                // Pinning an aside row brings it back, or it would stay faded below.
+                set(item.aside == true && !pinned ? ["pinned": true, "aside": false] : ["pinned": .bool(!pinned)])
+            }
+        }
+        if !settled {
+            Button(aside ? "Bring back" : "Set aside", systemImage: aside ? "tray.and.arrow.up" : "archivebox") {
+                // Setting aside unpins, or the row would stay up in Pinned.
+                set(aside ? ["aside": false] : ["aside": true, "pinned": false])
+            }
+        }
+        // Only a read, finished session; a lazy fork has run nothing to read.
+        if item.status == "idle" && !settled && item.forkFrom == nil {
+            Button("Mark unread", systemImage: "circle.fill") { Task { await store.markUnread(key) } }
+        }
+        // Never mid-turn: settling stops the child, and the turn would die with nothing saying so.
+        if settled {
+            Button("Unsettle", systemImage: "arrow.uturn.backward") { set(["archived": false]) }
+        } else if !item.busy {
+            Button("Settle", systemImage: "checkmark") {
+                Haptic.success()
+                set(["archived": true])
+            }
+        }
+        if nested {
+            Button("Detach from parent", systemImage: "scissors") { Task { await store.detach(key) } }
+        }
+        // One bot is named on the item itself; a submenu only where there is a choice.
+        let bots = store.attachTargets(key, item)
+        if bots.count == 1, let bot = bots.first {
+            Button { attach(bot) } label: { Label { Text("Attach to \(bot.name)") } icon: { face(bot) } }
+        } else if !bots.isEmpty {
+            Menu {
+                ForEach(bots, id: \.id) { bot in
+                    Button { attach(bot) } label: { Label { Text(bot.name) } icon: { face(bot) } }
+                }
+            } label: { Label("Attach to bot", systemImage: "link") }
+        }
+        Button("Delete", systemImage: "trash", role: .destructive, action: delete)
+    }
+
+    private func set(_ flags: [String: JSON]) { Task { await store.setFlags(row.key, flags) } }
+
+    private func attach(_ bot: Bot) { Task { await store.attach(row.key, to: bot) } }
+
+    /// A bot's face as a bitmap: a menu draws only an image as an item's icon, never a Canvas.
+    private func face(_ bot: Bot) -> Image {
+        let r = ImageRenderer(content: BotFace(bot: bot, size: 22))
+        r.scale = scale
+        return r.uiImage.map { Image(uiImage: $0).renderingMode(.original) } ?? Image(systemName: "link")
+    }
+
+    private func fork(worktree: Bool) {
+        Task { if let key = await store.fork(row.key, worktree: worktree) { opened(key) } }
     }
 }
 

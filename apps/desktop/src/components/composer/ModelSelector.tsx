@@ -76,7 +76,7 @@ export function nextEffort(model: Model | undefined, current: Effort | null): Ef
 /// controls fit one track. The active one is read off the rows fx answered
 /// with.
 ///
-/// Unlike the agent beside it, this is *not* creation-time. fx takes a provider
+/// Like the agent beside it, this moves on a live session. fx takes a provider
 /// switch in place and a switched session keeps it: the change persists onto
 /// fx's own session record, so a later `session/resume` comes back on it rather
 /// than on whatever the settings file names by then (`provider_switch.jsonl`).
@@ -184,7 +184,6 @@ export default function ModelSelector({
   onFastChange,
   fastNote,
   isNewSession,
-  agentSwitch = false,
   busy,
   onChange,
   onRefreshModels,
@@ -207,14 +206,10 @@ export default function ModelSelector({
   /// The harness's own sentence about fast mode on the newest turn, drawn under
   /// the row. Never reconciled into `fast` above — see `fastNotice`.
   fastNote: string | null;
-  /// The agent is the child process, so it is fixed once a session exists. The
-  /// row of icons goes with it; the trigger's own mark stays, since naming the
-  /// agent a session runs is worth a glyph whether or not it can change. fx's
-  /// fast mode is settled the same way, so its row goes too.
+  /// A session keeps the row of agents: picking another one moves it there at
+  /// the next send, with the conversation (#1414). Held while a turn runs,
+  /// since the move stops the child running it.
   isNewSession: boolean;
-  /// A bot chat keeps the row: picking another agent there moves the chat at
-  /// the next send. Held while a turn runs, since the move ends this session.
-  agentSwitch?: boolean;
   /// Whether this session's turn is in flight. The provider switch waits on it,
   /// since it moves the child the moment it is clicked; model, effort and fast
   /// wait on it only where the harness cannot apply them mid-turn.
@@ -522,20 +517,16 @@ export default function ModelSelector({
 
       <DropdownMenuContent
         align="start"
-        // Fixed, not `min-w`: the base class sizes the menu to
-        // `--radix-dropdown-menu-trigger-width`, so the trigger's own label set
-        // the width — and fx's gateway names a model by its vendor too
-        // (`anthropic/claude-opus-5`), which made the menu visibly wider on
-        // that one harness for no reason a reader could see. Rows truncate.
-        //
-        // **The agent track is what sets the number, not the rows.** It is the
-        // one thing here that cannot truncate: five marks at `size-6` are 120px
-        // before the ⌘/Shift/A caps beside them, and at 200px the chord's last
-        // cap was clipped by the menu's edge. 8 (menu `p-1`) + 8 (track `p-1`)
-        // + 120 + 4 (`gap-1`) + 86 (three caps at `gap-1`, "Shift" spelled out)
-        // = 226. A sixth agent costs another 24 and wants this raised again —
-        // or the hint dropped, which is what the fx arm below already does.
-        className="w-[232px]"
+        // **The agent track sets the width, never the rows.** It is the one
+        // thing here that cannot truncate, and its width moves with the agents
+        // enabled, fx's providers, the platform (⌘ or Ctrl) and a rebound
+        // chord, so a fixed number clipped the chord's last cap each time an
+        // agent was added. `w-max` sizes the menu to it; every other child
+        // takes `contain: inline-size`, so it fills that width and adds none —
+        // a model row widening the menu is what the trigger-width base did
+        // (fx's `anthropic/claude-opus-5`), and rows truncate instead. 232px
+        // keeps the old shape when few agents are on.
+        className="w-max min-w-[232px] max-w-(--radix-dropdown-menu-content-available-width) [&>:not(:first-child)]:[contain:inline-size]"
       >
         {/* Not menu items: a segmented control says "one of these two" where
             two stacked rows would read as two more models. Plain buttons, so
@@ -543,92 +534,90 @@ export default function ModelSelector({
             models is one visit rather than two. `mb-1` is the whole separation
             from the list below: a rule there drew a box round a control that is
             already a different shape. */}
-        {(isNewSession || agentSwitch || harness === "fx") && (
-          <div className="mb-1 flex items-center gap-1 rounded-md bg-surface-well p-1">
-            {/* The one moving part. A thumb under the marks, placed by index,
-                so switching reads as the selection sliding across rather than
-                one pill blinking out and another in. Unknown harness parks it
-                under the first mark rather than off the track.
+        <div className="mb-1 flex items-center gap-1 rounded-md bg-surface-well p-1">
+          {/* The one moving part. A thumb under the marks, placed by index,
+              so switching reads as the selection sliding across rather than
+              one pill blinking out and another in. Unknown harness parks it
+              under the first mark rather than off the track.
 
-                `--surface-thumb` and a shadow, not `--accent`: the thumb has to
-                come up *past* the surface the menu is drawn at, out of the well
-                the track cuts. `--accent` is a white veil on glass, which over
-                a scrim is a few percent of light and read as nothing. */}
-            {(isNewSession || agentSwitch) && (
-              <div role="radiogroup" aria-label="Agent" className="relative flex items-center">
-                <span
-                  aria-hidden
-                  className="absolute top-0 left-0 size-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
-                  style={{ transform: `translateX(${Math.max(activeAgent, 0) * 100}%)` }}
-                />
-                {/* Dimmed by opacity, not by colour. A muted-to-foreground ladder
-                    only moves a mark drawn in `currentColor`, so it lit Codex on
-                    hover and left Claude — which carries its own rust — sitting
-                    at one state forever. Opacity is the one dial both marks
-                    answer to. */}
-                {agents.map((agent) => {
-                  const missing = availability?.some(
-                    (a) => a.harness === agent.id && !a.available,
-                  );
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={agent.id === harness}
-                      aria-label={
-                        missing ? `${agent.label} (not installed)` : agent.label
-                      }
-                      disabled={!isNewSession && busy}
-                      onClick={() => onHarnessChange(agent.id)}
-                      className="relative flex size-6 disabled:pointer-events-none items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
-                    >
-                      <AgentIcon harness={agent.id} brand className="size-3.5" />
-                      {/* Marked, not disabled. Disabling leaves nowhere to say
-                          why — a tooltip is the only slot left, and the cure is
-                          two lines and two buttons. Picking it is what draws the
-                          notice under the composer, so the mark is an invitation
-                          to find out rather than a closed door.
-  
-                          Drawn as a dot rather than a colour: the marks are
-                          brand art and already carry their own, so recolouring
-                          one says "Codex" more than it says "missing". */}
-                      {missing && (
-                        <span
-                          aria-hidden
-                          className="absolute -top-px -right-px size-1.5 rounded-full bg-destructive ring-1 ring-surface-well"
-                        />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {/* fx's providers take the slot the chord's keycap holds for every
-                other harness, on the same track: fx is the one agent with a
-                second thing to pick, and a well of its own under this one read
-                as two rows of chrome above a list of three models. The hint is
-                lost from sight here and nowhere else — ⌘⇧A still cycles. Not
-                creation-time — see [ProviderRow]. */}
-            {harness === "fx" ? (
-              <ProviderRow
-                providers={FX_PROVIDERS}
-                active={activeProvider}
-                current={currentProvider}
-                busy={busy}
-                onPick={switchProvider}
-                // Hard against the agent marks, not pushed to the far edge:
-                // the provider qualifies fx, and a gap between them reads as
-                // two unrelated controls sharing a track.
-                className="-ml-0.5"
-              />
-            ) : (
-              /* Inside the track, in the width the marks leave: a hint you have
-                 to hover to find is one nobody finds. */
-              <ShortcutKeys ids={["harness.next"]} className="ml-auto pr-0.5" />
-            )}
+              `--surface-thumb` and a shadow, not `--accent`: the thumb has to
+              come up *past* the surface the menu is drawn at, out of the well
+              the track cuts. `--accent` is a white veil on glass, which over
+              a scrim is a few percent of light and read as nothing. */}
+          <div role="radiogroup" aria-label="Agent" className="relative flex items-center">
+            <span
+              aria-hidden
+              className="absolute top-0 left-0 size-6 rounded-sm bg-surface-thumb shadow-(--shadow-button) transition-transform duration-150 ease-out"
+              style={{ transform: `translateX(${Math.max(activeAgent, 0) * 100}%)` }}
+            />
+            {/* Dimmed by opacity, not by colour. A muted-to-foreground ladder
+                only moves a mark drawn in `currentColor`, so it lit Codex on
+                hover and left Claude — which carries its own rust — sitting
+                at one state forever. Opacity is the one dial both marks
+                answer to. */}
+            {agents.map((agent) => {
+              const missing = availability?.some(
+                (a) => a.harness === agent.id && !a.available,
+              );
+              return (
+                <button
+                  key={agent.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={agent.id === harness}
+                  aria-label={
+                    missing ? `${agent.label} (not installed)` : agent.label
+                  }
+                  disabled={!isNewSession && busy}
+                  onClick={() => onHarnessChange(agent.id)}
+                  className="relative flex size-6 disabled:pointer-events-none items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
+                >
+                  <AgentIcon harness={agent.id} brand className="size-3.5" />
+                  {/* Marked, not disabled. Disabling leaves nowhere to say
+                      why — a tooltip is the only slot left, and the cure is
+                      two lines and two buttons. Picking it is what draws the
+                      notice under the composer, so the mark is an invitation
+                      to find out rather than a closed door.
+
+                      Drawn as a dot rather than a colour: the marks are
+                      brand art and already carry their own, so recolouring
+                      one says "Codex" more than it says "missing". */}
+                  {missing && (
+                    <span
+                      aria-hidden
+                      className="absolute -top-px -right-px size-1.5 rounded-full bg-destructive ring-1 ring-surface-well"
+                    />
+                  )}
+                </button>
+              );
+            })}
           </div>
-        )}
+          {/* fx's providers take the slot the chord's keycap holds for every
+              other harness, on the same track: fx is the one agent with a
+              second thing to pick, and a well of its own under this one read
+              as two rows of chrome above a list of three models. The hint is
+              lost from sight here and nowhere else — ⌘⇧A still cycles. Not
+              creation-time — see [ProviderRow]. */}
+          {harness === "fx" ? (
+            <ProviderRow
+              providers={FX_PROVIDERS}
+              active={activeProvider}
+              current={currentProvider}
+              busy={busy}
+              onPick={switchProvider}
+              // Hard against the agent marks, not pushed to the far edge:
+              // the provider qualifies fx, and a gap between them reads as
+              // two unrelated controls sharing a track.
+              className="-ml-0.5"
+            />
+          ) : (
+            /* Inside the track, in the width the marks leave: a hint you have
+               to hover to find is one nobody finds. `pl-1.5` holds it apart
+               from the marks once the track is what sizes the menu and
+               `ml-auto` has no slack left to give. */
+            <ShortcutKeys ids={["harness.next"]} className="ml-auto pl-1.5 pr-0.5" />
+          )}
+        </div>
 
         {/* Grouped only where a heading says something: pi answers with a
             provider per model, and a reader picking between two providers'

@@ -77,7 +77,7 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
     entries: [
       {
         q: "Which agents does Dray support?",
-        a: "Claude Code, Codex, pi, fx and Grok Build. Each session and each bot picks its own agent and model, so you can run several side by side.",
+        a: "Claude Code, Codex, pi, fx, Grok Build and OpenCode. Each session and each bot picks its own agent and model, so you can run several side by side.",
         link: { label: "Compare the agents", href: "/docs/using-dray/agents" },
       },
       {
@@ -100,7 +100,7 @@ const GROUPS: { title: string; entries: FaqEntry[] }[] = [
     entries: [
       {
         q: "Does Dray send my code off my machine?",
-        a: "No. Your sessions, transcripts and bot notes stay on your machine, and your agents talk to their own providers, as usual. Dray sends a few anonymous usage events, never your prompts or code, and DRAY_NO_ANALYTICS turns them off.",
+        a: "No. Your sessions, transcripts and bot notes stay on your machine, and your agents talk to their own providers, as usual. Dray sends a few anonymous usage events, never your prompts or code, and a switch in Settings turns them off.",
         link: { label: "What Dray sends", href: "/docs/reference/privacy" },
       },
       {

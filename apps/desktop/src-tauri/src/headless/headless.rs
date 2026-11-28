@@ -7,6 +7,8 @@
 //! account on the machine and a VPS is often shared, while DevTools reads
 //! files and cookies and drives the page. `--remote-debugging-pipe` is fd 3
 //! in and fd 4 out, NUL-delimited JSON, and only this process holds the ends.
+//! Windows has no fds to hand over, so the two handles ride the command line
+//! instead (`spawn_piped`).
 //!
 //! **Every tab arrives through `Target.attachedToTarget`.** Auto-attach is on
 //! at the browser level with `flatten`, so one pipe carries every page under
@@ -26,6 +28,7 @@ mod download;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -62,7 +65,9 @@ struct Chrome {
     /// next one's tabs.
     generation: u64,
     out: mpsc::Sender<Vec<u8>>,
-    _child: tokio::process::Child,
+    /// Dropped with the entry, which kills the process: `kill_on_drop` moved
+    /// into the task that waits on it.
+    _kill: oneshot::Sender<()>,
     /// Last driven, for the discard.
     seen: Instant,
     /// Tabs asked for and not yet attached, oldest first: an attach with no
@@ -79,11 +84,6 @@ static GENERATION: AtomicU64 = AtomicU64::new(1);
 /// the same pipe, so these start well clear of it and a reply is routed by
 /// which side of the line its id falls.
 const OWN: i32 = 1 << 30;
-/// Under a recording's 2x override this Chromium reads `Input.dispatchMouseEvent`
-/// in device pixels, so a click filmed unscaled lands at half its place and
-/// misses. CEF reads CSS pixels. Measured: a click at (720, 413) reached the
-/// page at (359, 206).
-const INPUT_IN_DEVICE_PIXELS: bool = true;
 static NEXT_CALL: AtomicI32 = AtomicI32::new(OWN);
 /// Each held with the generation it was written to, so a process exiting
 /// fails its own calls and never a successor's.
@@ -133,20 +133,22 @@ pub(crate) fn clear_stale_lock(dir: &Path) {
 }
 
 fn hostname() -> String {
-    let mut buf = [0u8; 256];
-    // SAFETY: the buffer is writable for its whole length.
-    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
-        return String::new();
-    }
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..end]).into_owned()
+    crate::platform::hostname()
 }
 
 /// Whether `pid` is alive and, where `/proc` can say, runs this binary: a
 /// resume reuses low pids, so a live pid alone is often someone else.
 fn holds_lock(pid: i32) -> bool {
+    // Only a pid this user may signal holds it, unlike `platform::pid_alive`:
+    // after a host rename a stale lock's pid can belong to a root daemon, and
+    // counting `EPERM` as alive would refuse the profile for good.
+    #[cfg(unix)]
     // SAFETY: signal 0 only checks the pid.
-    if unsafe { libc::kill(pid, 0) } != 0 {
+    if pid <= 0 || unsafe { libc::kill(pid, 0) } != 0 {
+        return false;
+    }
+    #[cfg(windows)]
+    if pid <= 0 || !crate::platform::pid_alive(pid as u32) {
         return false;
     }
     let comm = |p: &str| std::fs::read_to_string(format!("/proc/{p}/comm")).ok();
@@ -462,7 +464,7 @@ async fn chrome_for(session: &str) -> Result<(), String> {
     // and dropped, once and for the life of the process, where Chromium says
     // it cannot. Without it a renderer exploit runs as this server's user,
     // which is what the agent's own shell already is.
-    let root = unsafe { libc::geteuid() } == 0;
+    let root = crate::platform::is_root();
     let sandboxed = !root && !NO_SANDBOX.load(Ordering::Relaxed);
     match launch(session, &exe, sandboxed).await {
         Err(e) if sandboxed && e.contains("No usable sandbox") => {
@@ -474,22 +476,71 @@ async fn chrome_for(session: &str) -> Result<(), String> {
     }
 }
 
+/// Starts Chromium with the DevTools pipe's far ends, answering the child
+/// and this process's two ends: what Chromium reads, what it writes.
+///
+/// fd 3 is what Chromium reads, fd 4 what it writes. Copied clear of 3 and 4
+/// first, since either end may already sit on one of them; the copies are
+/// close-on-exec and the dup2'd pair is not.
+#[cfg(unix)]
+fn spawn_piped(
+    command: &mut tokio::process::Command,
+) -> Result<(tokio::process::Child, std::io::PipeWriter, std::io::PipeReader), String> {
+    let (chrome_reads, to_chrome) = std::io::pipe().map_err(|e| e.to_string())?;
+    let (from_chrome, chrome_writes) = std::io::pipe().map_err(|e| e.to_string())?;
+    let (read_fd, write_fd) = (chrome_reads.as_raw_fd(), chrome_writes.as_raw_fd());
+    command.arg("--remote-debugging-pipe");
+    unsafe {
+        command.pre_exec(move || {
+            let r = libc::fcntl(read_fd, libc::F_DUPFD_CLOEXEC, 10);
+            let w = libc::fcntl(write_fd, libc::F_DUPFD_CLOEXEC, 10);
+            if r < 0 || w < 0 || libc::dup2(r, 3) < 0 || libc::dup2(w, 4) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = command.spawn().map_err(|e| format!("could not start Chromium: {e}"))?;
+    Ok((child, to_chrome, from_chrome))
+}
+
+/// Windows: Chromium takes the pipe as two inherited handles named on its
+/// command line, `--remote-debugging-io-pipes=<read>,<write>`. They are made
+/// inheritable for the spawn alone, but std spawns with inheritance on and
+/// takes its own lock only around its stdio, so a process another thread
+/// starts in that window inherits them too and can hold the pipe open past
+/// Chromium. `launch` therefore watches the process itself for the exit. A
+/// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` would close the window, and std's
+/// way to set one is unstable.
+#[cfg(windows)]
+fn spawn_piped(
+    command: &mut tokio::process::Command,
+) -> Result<(tokio::process::Child, std::io::PipeWriter, std::io::PipeReader), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    let (chrome_reads, to_chrome) = std::io::pipe().map_err(|e| e.to_string())?;
+    let (from_chrome, chrome_writes) = std::io::pipe().map_err(|e| e.to_string())?;
+    let (r, w) = (chrome_reads.as_raw_handle(), chrome_writes.as_raw_handle());
+    command.arg("--remote-debugging-pipe").arg(format!("--remote-debugging-io-pipes={},{}", r as usize, w as usize));
+    let inherit = |on: bool| unsafe {
+        let flag = if on { HANDLE_FLAG_INHERIT } else { 0 };
+        SetHandleInformation(r, HANDLE_FLAG_INHERIT, flag) != 0 && SetHandleInformation(w, HANDLE_FLAG_INHERIT, flag) != 0
+    };
+    if !inherit(true) {
+        return Err(format!("could not hand Chromium its pipe: {}", std::io::Error::last_os_error()));
+    }
+    let spawned = command.spawn();
+    inherit(false);
+    let child = spawned.map_err(|e| format!("could not start Chromium: {e}"))?;
+    Ok((child, to_chrome, from_chrome))
+}
+
 async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String> {
     let profile = browser_dir().join(session);
     std::fs::create_dir_all(&profile).map_err(|e| format!("could not create {}: {e}", profile.display()))?;
     clear_stale_lock(&profile);
-    let (to_chrome, chrome_reads) = {
-        let (r, w) = std::io::pipe().map_err(|e| e.to_string())?;
-        (w, r)
-    };
-    let (chrome_writes, from_chrome) = {
-        let (r, w) = std::io::pipe().map_err(|e| e.to_string())?;
-        (w, r)
-    };
-    let (read_fd, write_fd) = (chrome_reads.as_raw_fd(), chrome_writes.as_raw_fd());
     let mut command = tokio::process::Command::new(exe);
     command
-        .arg("--remote-debugging-pipe")
         .arg(format!("--user-data-dir={}", profile.display()))
         .args([WINDOW, "--no-first-run", "--no-default-browser-check", "--mute-audio"])
         // The cookie key in a plain file. Otherwise Chromium asks the keyring
@@ -505,21 +556,7 @@ async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String
     if !sandboxed {
         command.arg("--no-sandbox");
     }
-    // fd 3 is what Chromium reads, fd 4 what it writes. Copied clear of 3 and
-    // 4 first, since either end may already sit on one of them; the copies
-    // are close-on-exec and the dup2'd pair is not.
-    unsafe {
-        command.pre_exec(move || {
-            let r = libc::fcntl(read_fd, libc::F_DUPFD_CLOEXEC, 10);
-            let w = libc::fcntl(write_fd, libc::F_DUPFD_CLOEXEC, 10);
-            if r < 0 || w < 0 || libc::dup2(r, 3) < 0 || libc::dup2(w, 4) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = command.spawn().map_err(|e| format!("could not start Chromium: {e}"))?;
-    drop((chrome_reads, chrome_writes));
+    let (mut child, to_chrome, from_chrome) = spawn_piped(&mut command)?;
 
     let stderr = Arc::new(Mutex::new(String::new()));
     if let Some(mut pipe) = child.stderr.take() {
@@ -570,9 +607,25 @@ async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String
             gone(&owner, generation);
         });
     }
+    // The process exiting is read off the process too, not only off the
+    // pipe's EOF: on Windows a process another thread started while the
+    // handles were inheritable holds the write end open, an agent's dev server
+    // for hours, and a crashed Chromium then never read as gone.
+    let (kill, killed) = oneshot::channel::<()>();
+    {
+        let owner = session.to_string();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = child.wait() => gone(&owner, generation),
+                _ = killed => {
+                    let _ = child.kill().await;
+                }
+            }
+        });
+    }
     CHROMES.lock().unwrap().insert(
         session.to_string(),
-        Chrome { generation, out, _child: child, seen: Instant::now(), creating: VecDeque::new() },
+        Chrome { generation, out, _kill: kill, seen: Instant::now(), creating: VecDeque::new() },
     );
 
     let ready = async {
@@ -704,6 +757,13 @@ fn dispatch(session: &str, message: &Value) {
                     let id = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
                     let _ = write(session, &json!({ "id": id, "method": "Target.getTargetInfo", "params": { "targetId": target } }));
                 }
+            }
+        }
+        // A main-frame document committing, a page-cache restore included;
+        // same-document moves are `navigatedWithinDocument`. See `navigated`.
+        "Page.frameNavigated" => {
+            if let Some(tab) = tab.filter(|_| params["frame"]["parentId"].is_null()) {
+                automation::navigated(tab);
             }
         }
         "Runtime.consoleAPICalled" => {

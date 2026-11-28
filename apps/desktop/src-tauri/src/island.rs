@@ -1,10 +1,12 @@
-//! Dray Island on Linux: `apps/island-linux`'s binary, run as this app's
-//! child (#833). Unlike the Mac's, it does not outlive the app: it holds the
-//! read end of a pipe on its stdin and quits at EOF, which the kernel delivers
-//! however the app goes — quit, crash or kill — with nothing to clean up.
+//! Dray Island on Linux and Windows: `apps/island-linux`'s binary, run as
+//! this app's child (#833). Unlike the Mac's, it does not outlive the app: it
+//! holds the read end of a pipe on its stdin and quits at EOF, which the
+//! kernel delivers however the app goes — quit, crash or kill — with nothing
+//! to clean up.
 //!
-//! The key rides `island.json` under the XDG config dir, the Mac's `defaults`
-//! domain's stand-in, which the island reads at every tap.
+//! The key rides `island.json` under the XDG config dir (`~/.config` on
+//! Windows too), the Mac's `defaults` domain's stand-in, which the island
+//! reads at every tap.
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -51,15 +53,21 @@ pub async fn configure(key: &str) -> Result<(), String> {
         .stdout(log.try_clone().map_err(|err| err.to_string())?)
         .stderr(log);
     // Off the AppImage's mount and its library paths, as the server is.
-    if let Some(dir) = crate::serve::appimage_safe_cwd() {
-        command.current_dir(dir);
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(dir) = crate::serve::appimage_safe_cwd() {
+            command.current_dir(dir);
+        }
+        for (key, value) in crate::serve::appimage_env_undo() {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
     }
-    for (key, value) in crate::serve::appimage_env_undo() {
-        match value {
-            Some(value) => command.env(key, value),
-            None => command.env_remove(key),
-        };
-    }
+    // A dev island is a console binary, which would open a window of its own.
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, crate::platform::CREATE_NO_WINDOW);
     let child = command.spawn().map_err(|err| format!("could not start Dray Island: {err}"))?;
     *island = Some(child);
     Ok(())
@@ -84,7 +92,8 @@ pub fn running() -> bool {
 /// build, the island crate's own target dir, since `tauri dev` builds the
 /// app alone.
 fn binary() -> Option<PathBuf> {
-    let beside = std::env::current_exe().ok()?.parent()?.join("dray-island");
+    let name = format!("dray-island{}", std::env::consts::EXE_SUFFIX);
+    let beside = std::env::current_exe().ok()?.parent()?.join(&name);
     if beside.exists() {
         return Some(beside);
     }
@@ -92,7 +101,7 @@ fn binary() -> Option<PathBuf> {
         return None;
     }
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../island-linux/target");
-    ["release", "debug"].into_iter().map(|profile| crate_dir.join(profile).join("dray-island")).find(|p| p.exists())
+    ["release", "debug"].into_iter().map(|profile| crate_dir.join(profile).join(&name)).find(|p| p.exists())
 }
 
 fn prefs_path() -> Option<PathBuf> {

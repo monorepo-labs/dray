@@ -1,4 +1,4 @@
-import { Cog6ToothIcon, SignalSlashIcon } from "@heroicons/react/16/solid";
+import { Cog6ToothIcon, FolderIcon, SignalSlashIcon, Square3Stack3DIcon } from "@heroicons/react/16/solid";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
@@ -9,23 +9,23 @@ import {
   CircleDashed,
   Ellipsis,
   GitBranchPlus,
+  Link2,
   Unlink,
   Pin,
   Plus,
   Search,
-  Layers,
   Trash2,
   Undo2,
 } from "lucide-react";
 import Orb from "@/components/Orb";
 import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
-import { greetingOf, previewLine, type BotEntry } from "@/lib/bots";
+import { botAt, greetingOf, previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
 import { setRailSlot } from "@/components/RailPop";
-import { IssuesIcon, NewBotIcon, NewTaskIcon } from "@/components/icons/SidebarIcons";
+import { IssuesIcon, NewBotIcon, NewTaskIcon, PullsIcon } from "@/components/icons/SidebarIcons";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
 import {
@@ -145,6 +145,9 @@ type SidebarProps = {
   /// one. Read here rather than derived from the selection, which the page
   /// deliberately leaves alone.
   issuesOpen: boolean;
+  /// Opens the pull requests page, the issues page's way.
+  onOpenPulls: () => void;
+  pullsOpen: boolean;
   /// Saved tasks not yet started, scoped by the caller like `items`. Drawn in
   /// the drafts view alone, grouped under their projects.
   drafts: Draft[];
@@ -163,6 +166,9 @@ type SidebarProps = {
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
+  /// Hands a task to a bot on its own server (#1395): it leaves this list for
+  /// the bot's Tasks.
+  onAttach?: (sessionId: string, bot: Bot) => Promise<void>;
   /// Puts the unread mark back on a session the reader has already read, so it
   /// rejoins the Completed run.
   onMarkUnread: (sessionId: string) => void;
@@ -778,10 +784,20 @@ export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boo
   );
 }
 
+/// The bots a row can be handed to: those on its own server, since its reports
+/// go out from there, and with a chat to hang it under, which the server
+/// refuses without. None for a settled row or a bot's own chat; a bot's tasks
+/// never reach the sidebar.
+export function attachTargets(bots: readonly BotEntry[], item: SessionIndexItem): Bot[] {
+  if (item.archived || botAt(bots.map((b) => b.bot), item.cwd)) return [];
+  const server = serverOfPath(item.cwd);
+  return bots.filter((b) => b.session && serverOfPath(b.bot.path) === server).map((b) => b.bot);
+}
+
 /// Sidebar toggle. Lives outside `Sidebar` because a collapsed sidebar renders
 /// nothing at all — the button has to survive its own pane disappearing, so the
 /// app header owns it and its y position never moves.
-export function SidebarToggle({ onToggle }: { onToggle: () => void }) {
+export function SidebarToggle({ onToggle, className }: { onToggle: () => void; className?: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -794,7 +810,7 @@ export function SidebarToggle({ onToggle }: { onToggle: () => void }) {
           aria-label="Toggle sidebar"
           // The chat tab's mark colour, open or shut: the pane itself says
           // which, and a strength flip read backwards on a sidebar kept open.
-          className="text-muted-foreground transition-colors hover:text-foreground"
+          className={cn("text-muted-foreground transition-colors hover:text-foreground", className)}
         >
           <PanelLeftIcon className="size-4.5" />
         </Button>
@@ -895,12 +911,14 @@ export function SpaceSwitcher({
   // Wraps: a click has no direction and no dot to slide, so a dead end at the
   // last space would just look broken. With nothing made yet there is only the
   // one place to go, and the dialog covers the strip once it opens.
+  const menu = useHoverMenu();
   const cycle = () => {
+    menu.clicked();
     if (offersNew) return onNew();
     onChange(entries[(activeIndex + 1) % entries.length]);
   };
 
-  return (
+  const face = (
     // No tooltip, unlike the two icon buttons beside it: this one draws its
     // answer in words, so one would only repeat the label. Unselectable because
     // the name is the target's face, not prose.
@@ -952,6 +970,45 @@ export function SpaceSwitcher({
       </div>
     </div>
   );
+
+  // Nothing to list before the first space, where the click is New space, nor
+  // while a few clicks reach every one.
+  if (offersNew || spaces.length < SPACE_MENU_FROM) return face;
+
+  // A click steps and resting opens the list, as the project filter does.
+  return (
+    <DropdownMenu {...menu.root}>
+      <DropdownMenuTrigger asChild {...menu.trigger}>
+        {face}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-52" {...menu.content}>
+        <SpaceList spaces={spaces} space={value} onChange={onChange} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/// The spaces as a picked-from list, All first, for both switchers' menus.
+function SpaceList({
+  spaces,
+  space,
+  onChange,
+}: {
+  spaces: string[];
+  space: string | null;
+  onChange: (space: string | null) => void;
+}) {
+  return (
+    // Radix radio values are strings, so All rides on the empty one, as in
+    // the project filter's list.
+    <DropdownMenuRadioGroup value={space ?? ""} onValueChange={(next) => onChange(next === "" ? null : next)}>
+      {spaceEntries(spaces).map((entry) => (
+        <DropdownMenuRadioItem key={entry ?? ""} value={entry ?? ""} className="text-ui">
+          <span className="truncate">{entry ?? "All Spaces"}</span>
+        </DropdownMenuRadioItem>
+      ))}
+    </DropdownMenuRadioGroup>
+  );
 }
 
 /// What the dev badge says for a given branch.
@@ -995,7 +1052,7 @@ function DevBadge() {
 /// Narrower, the rows' timestamps and marks eat the titles beside them, so a
 /// drag under it goes to the rail instead.
 export const SIDEBAR_MIN = 240;
-/// The icon-only sidebar: the top buttons and the bots, no tasks.
+/// The icon-only sidebar: the top buttons, the bots and the tasks as icons.
 export const SIDEBAR_RAIL = 56;
 
 /// Names a control in the icon rail, where its label is gone; held shut in the
@@ -1055,6 +1112,8 @@ export default function Sidebar({
   onNewSession,
   onOpenIssues,
   issuesOpen,
+  onOpenPulls,
+  pullsOpen,
   onSetFlags,
   onFork,
   onDelete,
@@ -1068,6 +1127,7 @@ export default function Sidebar({
   onSpaceChange,
   projectFilter,
   onDetach,
+  onAttach,
   onProjectFilterChange,
   onStepProjectFilter,
   onNewSessionInProject,
@@ -1328,6 +1388,10 @@ export default function Sidebar({
       )}
       style={{ ...style, "--rail": towardRail } as React.CSSProperties}
       ref={asideRef}
+      // The rail holds no text field and no link, so WebKit's own menu there
+      // only ever offers Reload and Inspect. A row's menu has already taken
+      // the event by the time it bubbles here.
+      onContextMenu={iconOnly ? (e) => e.preventDefault() : undefined}
     >
       {handle}
       {/* All three buttons are drawn as session rows: `/80` text and `--sidebar-accent`
@@ -1387,6 +1451,31 @@ export default function Sidebar({
           </Button>
         </RailTip>
 
+        {/* Under Issues: where the work those tasks became waits to land.
+            Drawn whether or not `gh` works, for the Issues row's reason — the
+            page's empty state is where the cure is offered. */}
+        <RailTip on={iconOnly} label="Pull requests" keys={["pulls.open"]}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onOpenPulls}
+            data-active={pullsOpen || undefined}
+            aria-label={iconOnly ? "Pull requests" : undefined}
+            className={cn(
+              STRIP,
+              "data-[active]:bg-sidebar-accent data-[active]:text-sidebar-accent-foreground",
+            )}
+          >
+            <PullsIcon />
+            {!iconOnly && <>
+              <span data-rail-hide className="flex flex-1 items-center">
+                Pull requests
+                <ShortcutKeys ids={["pulls.open"]} className="ml-auto" />
+              </span>
+            </>}
+          </Button>
+        </RailTip>
+
         <RailTip on={iconOnly} label="New bot">
           <Button
             variant="ghost"
@@ -1425,9 +1514,76 @@ export default function Sidebar({
         })}
       </div>}
 
-      {/* The rail carries no tasks: the top strip and the bots are all it
-          holds, and this spacer keeps its foot at the bottom. */}
-      {iconOnly ? <div className="flex-1" /> : <>
+      {/* The rail draws the same runs as the list, one icon per row: no
+          headings and no lineage, the break between runs is the grouping. */}
+      {iconOnly ? <>
+        {filterShown && <div className="mt-4 flex justify-center px-2">
+          <ProjectFilter
+            iconOnly
+            projects={projects}
+            value={projectFilter}
+            onChange={onProjectFilterChange}
+          />
+        </div>}
+        {/* The list's own ref and scroll handler, so the settled window opens
+            as the rail scrolls just as it does in the list. */}
+        <div
+          ref={listRef}
+          onScroll={more ? openMore : undefined}
+          className="scrollbar-none flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pt-1 pb-3"
+        >
+          {runs.flatMap((group, index) => [
+            index > 0 && <div key={`gap ${groupKeys[index]}`} aria-hidden className="h-4 shrink-0" />,
+            ...(group.kind === "drafts"
+              ? group.drafts.map((draft) => (
+                  <RailTask
+                    key={draft.id}
+                    label={draftTitle(draft)}
+                    active={draft.id === openDraftId}
+                    onOpen={() => onOpenDraft(draft.id)}
+                    menu={(trigger) => <DraftMenu onDelete={() => onDeleteDraft(draft.id)}>{trigger}</DraftMenu>}
+                  />
+                ))
+              : group.rows.map(({ item, depth }) => {
+                  const status = statusBySession[item.sessionId] ?? item.status;
+                  const aside = !archivedShown && ((group.kind === "stage" && group.state === "aside") || item.aside);
+                  const gone = offline(item.cwd);
+                  return (
+                    <RailTask
+                      key={item.sessionId}
+                      sessionId={item.sessionId}
+                      label={item.title}
+                      // Its last status is all a dropped server left, so the
+                      // dot claims no work, as the row's orb does not.
+                      status={gone && status === "in_progress" ? "idle" : status}
+                      asking={askingSessions.has(item.sessionId)}
+                      active={item.sessionId === selectedSessionId}
+                      dim={aside ? "opacity-30" : ((archivedShown && !isToday(item.modified)) || gone) ? "opacity-50" : undefined}
+                      onOpen={() => void onSelect(item.sessionId)}
+                      menu={(trigger) => (
+                        <SessionMenu
+                          item={item}
+                          status={status}
+                          aside={aside}
+                          nested={isNested(item, items)}
+                          inheritsPin={group.kind === "pinned" && depth > 0 && !item.pinned}
+                          onSetFlags={onSetFlags}
+                          onFork={onFork}
+                          onDelete={onDelete}
+                          onDetach={onDetach}
+                          attachBots={onAttach && attachTargets(bots, item)}
+                          onAttach={onAttach}
+                          onMarkUnread={onMarkUnread}
+                        >
+                          {trigger}
+                        </SessionMenu>
+                      )}
+                    />
+                  );
+                })),
+          ])}
+        </div>
+      </> : <>
       {filterShown && <div data-rail-hide className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
@@ -1676,6 +1832,8 @@ export default function Sidebar({
                     onFork={onFork}
                     onDelete={onDelete}
                     onDetach={onDetach}
+                    attachBots={onAttach && attachTargets(bots, item)}
+                    onAttach={onAttach}
                     onMarkUnread={onMarkUnread}
                   />
                 )) : []),
@@ -1728,25 +1886,7 @@ export default function Sidebar({
           {/* The floating cards land here: pinned bottom-left they would
               cover the chat, the rail being narrower than any of them. */}
           <div ref={iconOnly ? setRailSlot : undefined} className="flex flex-col items-center gap-0.5 empty:hidden" />
-          {/* The titlebar switcher's click, stepping to the next space, with
-              the one in force named in the tooltip. */}
-          {spaces.length > 0 && (
-            <RailTip on label={space ?? "All Spaces"}>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Space: ${space ?? "All Spaces"}`}
-                onClick={() => {
-                  const entries = spaceEntries(spaces);
-                  const at = Math.max(0, entries.indexOf(space));
-                  onSpaceChange(entries[(at + 1) % entries.length]);
-                }}
-                className="text-muted-foreground transition-colors hover:text-foreground"
-              >
-                <Layers className="size-4" />
-              </Button>
-            </RailTip>
-          )}
+          {spaces.length > 0 && <RailSpaces spaces={spaces} space={space} onChange={onSpaceChange} />}
           <SettingsButton onOpen={onOpenSettings} />
         </div>
       )}
@@ -1838,6 +1978,9 @@ export const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 /// through a long list is a scrub rather than a pick, and the dots stop being
 /// countable.
 const PROJECT_MENU_FROM = 3;
+/// The spaces' own threshold, one higher: there are fewer of them, and
+/// stepping through three is still a pick.
+const SPACE_MENU_FROM = 4;
 
 /// A group heading, and where the group is a project, the button that starts a
 /// task in it. The plus only appears under the cursor: the row is a label first
@@ -1877,9 +2020,10 @@ function BotRow({
   bot: Bot;
   /// The rail: the face alone, the name in a tooltip.
   iconOnly?: boolean;
-  /// The chat's last reply and the replies since the reader last wrote.
+  /// The chat's newest line — the reader's own, the bot's reaction, or its
+  /// reply — and the replies since the reader last wrote.
   preview?: BotPreview;
-  /// Its chat, for the jump digit; absent before the first message.
+  /// Its chat, for the jump digit and the hover read; absent before the first message.
   sessionId?: string;
   modified?: string;
   status: SessionStatus;
@@ -1896,9 +2040,12 @@ function BotRow({
   const badge = asking ? "asking" : unread ? "unread" : null;
   const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
   // Before its first chat, Dray Bot's greeting is what its chat opens on.
+  // A server that words the line sends it plain: cleaning it again would eat
+  // the reader's own `*`. An older one sends the raw reply.
   const last = preview?.text || (!sessionId && greetingOf(bot).at(-1));
-  const glimpse = last && previewLine(last);
+  const glimpse = last && (preview?.plain && preview.text ? last : previewLine(last));
   const offline = offlineLine(serverOfPath(bot.path));
+  const prefetch = useHoverPrefetch(offline ? null : sessionId);
 
   // StalledTasks' row layout, so a bot and its stalled tasks read alike.
   // The tooltip's root sits outside the menu and its trigger inside, since
@@ -1911,8 +2058,15 @@ function BotRow({
         <button
           type="button"
           onClick={onOpen}
-          onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
+          onPointerEnter={(e) => {
+            setHovered(true);
+            prefetch.onPointerEnter(e);
+          }}
+          onPointerLeave={() => {
+            setHovered(false);
+            prefetch.onPointerLeave();
+          }}
+          onPointerDown={prefetch.onPointerDown}
           aria-label={iconOnly ? bot.name : undefined}
           className={cn(
             "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
@@ -2012,6 +2166,103 @@ function BotRow({
   );
 }
 
+/// A filter's pick on the rail, where its name has no room: the first letter
+/// or digit knocked out of a filled square, a 16px glyph like the icons beside it.
+function Initial({ name }: { name: string }) {
+  return (
+    <span className="flex size-4 items-center justify-center rounded-[4px] bg-current">
+      <span className="text-[10px] leading-none font-semibold text-background">
+        {name.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "?"}
+      </span>
+    </span>
+  );
+}
+
+/// A task on the rail: a status dot in a bot row's box, the title in the
+/// tooltip, and the full row's right-click menu through `menu`.
+function RailTask({
+  sessionId,
+  label,
+  status = "idle",
+  asking = false,
+  active,
+  dim,
+  onOpen,
+  menu,
+}: {
+  /// Wraps the dot in the row's menu, `SessionMenu` or `DraftMenu`. A render
+  /// prop because the menu's trigger has to sit inside the tooltip's root.
+  menu: (trigger: React.ReactElement) => React.ReactNode;
+  /// Absent on a draft, which has no transcript to warm or digit to answer.
+  sessionId?: string;
+  label: string;
+  status?: SessionStatus;
+  asking?: boolean;
+  active: boolean;
+  dim?: string;
+  onOpen: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+  const prefetch = useHoverPrefetch(sessionId);
+  const digit = useJumpDigit(sessionId ?? "");
+  // An asking agent has stopped, so it keeps its yellow mark and no shimmer.
+  const working = status === "in_progress" && !asking;
+
+  return (
+    <Tooltip>
+      {menu(
+      <TooltipTrigger asChild>
+      <button
+        ref={ref}
+        type="button"
+        onClick={onOpen}
+        onPointerEnter={prefetch.onPointerEnter}
+        onPointerLeave={prefetch.onPointerLeave}
+        onPointerDown={prefetch.onPointerDown}
+        aria-label={label}
+        className={cn(
+          "group/task relative flex h-8 w-full shrink-0 cursor-pointer items-center justify-center rounded-md",
+          "transition-[color,background-color,opacity] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+          active
+            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            : cn(
+                "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 data-[state=open]:bg-sidebar-accent/50",
+                dim && cn(dim, "hover:opacity-100 data-[state=open]:opacity-100"),
+              ),
+        )}
+      >
+        {/* One dot that is the status: the full row's yellow and green for
+            asking and unread, muted otherwise, and `shimmer-text`'s band
+            passing over it while working. */}
+        <span
+          role="img"
+          aria-label={asking ? "Waiting for you" : status === "completed" ? "Unread" : working ? "Working" : undefined}
+          className={cn(
+            "relative size-2 overflow-hidden rounded-full transition-colors",
+            asking
+              ? "bg-accent-command"
+              : status === "completed"
+                ? "bg-accent-add"
+                : working || !active
+                  ? "bg-muted-foreground/60 group-hover/task:bg-muted-foreground"
+                  : "bg-foreground/70",
+            digit && "invisible",
+          )}
+        >
+          {working && <span className="shimmer-mask absolute inset-0 bg-foreground" />}
+        </span>
+        {digit && <Kbd className="absolute top-1/2 left-1/2 -translate-1/2">{digit}</Kbd>}
+      </button>
+      </TooltipTrigger>,
+      )}
+      <TooltipContent side="right">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function HeadingRow({
   onClick,
   label,
@@ -2067,6 +2318,153 @@ function HeadingRow({
   );
 }
 
+/// Hover-to-open for a filter's menu whose click does something else (steps to
+/// the next pick). Radix only opens on a press, and a pass-by must not open
+/// it, so both edges wait a beat. Spread `root` on the `DropdownMenu`,
+/// `trigger` on its trigger, `content` on its content; call `clicked` from the
+/// click.
+function useHoverMenu() {
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Somebody clicking through picks is not asking for the list, so a click
+  // holds hover-open off until the pointer leaves and comes back.
+  const clicked = useRef(false);
+  // A hover-opened list leaves focus where it was: taking it would pull the
+  // caret out of a draft the reader is mid-sentence in.
+  const byHover = useRef(false);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const hover = (next: boolean) => {
+    clearTimeout(timer.current);
+    if (next && clicked.current) return;
+    timer.current = setTimeout(() => {
+      if (next) byHover.current = true;
+      setOpen(next);
+    }, next ? 600 : 200);
+  };
+
+  return {
+    // Not modal: a modal menu locks pointer events on everything else, so
+    // leaving it could never close it.
+    root: {
+      open,
+      // Radix only opens it from the keyboard here, the press being ours.
+      onOpenChange: (next: boolean) => {
+        if (next) byHover.current = false;
+        setOpen(next);
+      },
+      modal: false,
+    },
+    trigger: {
+      onPointerEnter: () => hover(true),
+      onPointerLeave: () => {
+        clicked.current = false;
+        hover(false);
+      },
+      // Skips Radix's own toggle on press, so the click is the caller's alone.
+      onPointerDown: (e: React.PointerEvent) => e.preventDefault(),
+    },
+    content: {
+      // Focus handed back to the trigger on close opened its tooltip, which
+      // then sat there until the pointer left and came back.
+      onCloseAutoFocus: (e: Event) => e.preventDefault(),
+      // Untyped on purpose: Radix keeps `onOpenAutoFocus` off the public
+      // props but spreads it through to the focus scope all the same.
+      ...{ onOpenAutoFocus: (e: Event) => byHover.current && e.preventDefault() },
+      onPointerEnter: () => clearTimeout(timer.current),
+      onPointerLeave: () => hover(false),
+    },
+    clicked: () => {
+      clicked.current = true;
+      clearTimeout(timer.current);
+      setOpen(false);
+    },
+  };
+}
+
+/// Whether a filter's dots should be showing for a switch: true for a beat
+/// after `activeIndex` moves. The dots are the one thing on screen that says
+/// which entry of how many, which is exactly what a switch raises, and a chord
+/// or swipe moves the filter with the pointer nowhere near it. Skipped on
+/// mount, since arriving is not switching — and held as the index last flashed
+/// for rather than a "have we mounted" flag, or StrictMode replaying the mount
+/// effect over a ref that survives it reads the replay as a switch.
+function useFlash(activeIndex: number): boolean {
+  const [flashing, setFlashing] = useState(false);
+  const flashed = useRef(activeIndex);
+  useEffect(() => {
+    if (flashed.current === activeIndex) return;
+    flashed.current = activeIndex;
+    setFlashing(true);
+    const done = setTimeout(() => setFlashing(false), 1200);
+    return () => clearTimeout(done);
+  }, [activeIndex]);
+  return flashing;
+}
+
+/// The rail's space switcher: a click steps to the next space, as the
+/// titlebar's does, and resting on it opens the list, as the project filter's
+/// does. The space in force by its initial, the stack icon for All.
+function RailSpaces({
+  spaces,
+  space,
+  onChange,
+}: {
+  spaces: string[];
+  space: string | null;
+  onChange: (space: string | null) => void;
+}) {
+  const menu = useHoverMenu();
+  const label = space ?? "All Spaces";
+  const entries = spaceEntries(spaces);
+  const activeIndex = Math.max(0, entries.indexOf(space));
+  const flashing = useFlash(activeIndex);
+  const cycle = () => {
+    menu.clicked();
+    onChange(entries[(activeIndex + 1) % entries.length]);
+  };
+  // The rail project filter's band: the glyph over its dot track.
+  const band = (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Space: ${label}`}
+      onClick={cycle}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          cycle();
+        }
+      }}
+      className="group/spaces flex w-10 cursor-pointer flex-col items-center gap-1 rounded-md pt-2 pb-1 text-muted-foreground transition-colors select-none hover:bg-sidebar-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none"
+    >
+      {space === null ? <Square3Stack3DIcon className="size-4" /> : <Initial name={space} />}
+      <DotTrack
+        count={entries.length}
+        activeIndex={activeIndex}
+        className={cn(
+          "transition-opacity duration-150 group-hover/spaces:opacity-100",
+          flashing ? "opacity-100" : "opacity-0",
+        )}
+      />
+    </div>
+  );
+
+  if (spaces.length < SPACE_MENU_FROM) return <RailTip on label={label}>{band}</RailTip>;
+
+  return (
+    <DropdownMenu {...menu.root}>
+      <RailTip on={!menu.root.open} label={label}>
+        <DropdownMenuTrigger asChild {...menu.trigger}>
+          {band}
+        </DropdownMenuTrigger>
+      </RailTip>
+      <DropdownMenuContent side="right" align="end" className="min-w-52" {...menu.content}>
+        <SpaceList spaces={spaces} space={space} onChange={onChange} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /// The project filter. The label names the current scope and the dots under it
 /// are the map: one per entry, **the active one always in the middle**, so the
 /// row slides under a fixed centre rather than a marker travelling along a fixed
@@ -2079,10 +2477,14 @@ function ProjectFilter({
   projects,
   value,
   onChange,
+  iconOnly = false,
 }: {
   projects: Project[];
   value: string | null;
   onChange: (path: string | null) => void;
+  /// The rail's form: a folder for All, the project's initial otherwise, its
+  /// name in the tooltip.
+  iconOnly?: boolean;
 }) {
   // "All" is an entry rather than a special case, so the tap, the dots and
   // the menu all walk one list and can't disagree about what's next.
@@ -2129,23 +2531,7 @@ function ProjectFilter({
     onChange(entries[next].path);
   };
 
-  // The dots are the one thing on screen that says which entry of how many,
-  // which is exactly what a switch raises — so a switch shows them for a beat
-  // whether or not the cursor is anywhere near. ⌘⌥←/→ moves this control with
-  // the pointer nowhere near it, and hover-only left that step invisible.
-  // Skipped on mount, since arriving is not switching — and held as the index
-  // last flashed for rather than as a "have we mounted" flag, or StrictMode
-  // replaying the mount effect over a ref that survives it reads the replay as
-  // a switch and flashes the dots on every open.
-  const [flashing, setFlashing] = useState(false);
-  const flashed = useRef(activeIndex);
-  useEffect(() => {
-    if (flashed.current === activeIndex) return;
-    flashed.current = activeIndex;
-    setFlashing(true);
-    const done = setTimeout(() => setFlashing(false), 1200);
-    return () => clearTimeout(done);
-  }, [activeIndex]);
+  const flashing = useFlash(activeIndex);
 
   // The band is the control, not the label: aiming at 20 characters of text
   // is what read as the tap working only sometimes. Nothing inside is a button
@@ -2172,7 +2558,13 @@ function ProjectFilter({
       // stray frame rather than as the label being focused. Unselectable
       // because the label is the target's face, not prose — a double-click
       // aimed at the band highlighting it is only ever an accident.
-      className="group/projects -my-1 flex min-w-0 flex-1 cursor-pointer flex-col items-start py-1 pl-1 select-none focus-visible:outline-none"
+      aria-label={iconOnly ? `Project: ${active.name}` : undefined}
+      className={cn(
+        "group/projects flex cursor-pointer flex-col select-none focus-visible:outline-none",
+        iconOnly
+          ? "w-full items-center rounded-md pt-2 pb-1 transition-colors hover:bg-sidebar-accent/50 focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          : "-my-1 min-w-0 flex-1 items-start py-1 pl-1",
+      )}
     >
       {/* Hugs its own contents, so the dots stay centred under the label rather
           than under the band. */}
@@ -2180,7 +2572,13 @@ function ProjectFilter({
         {/* Lit from the band's hover rather than its own, so reaching anywhere
             on the strip says the strip is what answers. */}
         <span className="flex items-center gap-1 text-ui text-muted-foreground transition-colors group-hover/projects:text-foreground">
-          <span className="max-w-40 truncate">{active.name}</span>
+          {!iconOnly ? (
+            <span className="max-w-40 truncate">{active.name}</span>
+          ) : active.path === null ? (
+            <FolderIcon className="size-4" />
+          ) : (
+            <Initial name={active.name} />
+          )}
         </span>
 
         <DotTrack
@@ -2204,8 +2602,14 @@ function ProjectFilter({
   // the only thing a bare icon has to say for itself, where this control names
   // itself on its face. Passing over it on the way to the list below should not
   // put a chip on screen.
-  const withHint = (trigger: React.ReactNode) =>
-    entries.length < 2 ? (
+  const withHint = (trigger: React.ReactElement) =>
+    iconOnly ? (
+      // The name alone, the rail's face being an initial. Shut while the menu
+      // is open, which lists the same thing where the tip would sit.
+      <RailTip on={!menuOpen} label={active.name}>
+        {trigger}
+      </RailTip>
+    ) : entries.length < 2 ? (
       trigger
     ) : (
       <Tooltip delayDuration={400}>
@@ -2217,72 +2621,33 @@ function ProjectFilter({
       </Tooltip>
     );
 
-  // Hover-open state lives here rather than in the menu: Radix only opens on a
-  // press, and a pass-by must not open it, so both edges wait a beat.
-  const [menuOpen, setMenuOpen] = useState(false);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  // Somebody clicking through projects is not asking for the list, so a click
-  // holds hover-open off until the pointer leaves and comes back.
-  const clicked = useRef(false);
-  // A hover-opened list leaves focus where it was: taking it would pull the
-  // caret out of a draft the reader is mid-sentence in.
-  const byHover = useRef(false);
-  useEffect(() => () => clearTimeout(hoverTimer.current), []);
-  const hover = (open: boolean) => {
-    clearTimeout(hoverTimer.current);
-    if (open && clicked.current) return;
-    hoverTimer.current = setTimeout(() => {
-      if (open) byHover.current = true;
-      setMenuOpen(open);
-    }, open ? 600 : 200);
-  };
+  const menu = useHoverMenu();
+  const menuOpen = menu.root.open;
 
   // Below the threshold there is no menu, and closing one does nothing.
   function tap() {
-    clicked.current = true;
-    clearTimeout(hoverTimer.current);
-    setMenuOpen(false);
+    menu.clicked();
     cycle();
   }
 
   if (!menuMode) return withHint(band);
 
+  const trigger = (
+    <DropdownMenuTrigger asChild {...menu.trigger}>
+      {band}
+    </DropdownMenuTrigger>
+  );
+
   // A tap steps, as below the threshold, and a hover opens the list; the
-  // keyboard still opens it through the trigger. Not modal: a modal menu locks
-  // pointer events on everything else, so leaving it could never close it.
+  // keyboard still opens it through the trigger.
   return (
-    <DropdownMenu
-      open={menuOpen}
-      onOpenChange={(open) => {
-        // Radix only opens it from the keyboard here, the press being ours.
-        if (open) byHover.current = false;
-        setMenuOpen(open);
-      }}
-      modal={false}
-    >
-      <DropdownMenuTrigger
-        asChild
-        onPointerEnter={() => hover(true)}
-        onPointerLeave={() => {
-          clicked.current = false;
-          hover(false);
-        }}
-        // Skips Radix's own toggle on press, so the click is the tap's alone.
-        onPointerDown={(e) => e.preventDefault()}
-      >
-        {band}
-      </DropdownMenuTrigger>
-      {/* Focus handed back to the band on close opened its tooltip, which then
-          sat there until the pointer left and came back. */}
+    <DropdownMenu {...menu.root}>
+      {iconOnly ? withHint(trigger) : trigger}
       <DropdownMenuContent
         align="start"
+        side={iconOnly ? "right" : undefined}
         className="min-w-52"
-        onCloseAutoFocus={(e) => e.preventDefault()}
-        // Untyped on purpose: Radix keeps `onOpenAutoFocus` off the public
-        // props but spreads it through to the focus scope all the same.
-        {...{ onOpenAutoFocus: (e: Event) => byHover.current && e.preventDefault() }}
-        onPointerEnter={() => clearTimeout(hoverTimer.current)}
-        onPointerLeave={() => hover(false)}
+        {...menu.content}
       >
         <DropdownMenuRadioGroup
           // Radix radio values are strings, so All rides on the empty one — no
@@ -2382,6 +2747,9 @@ export function RowMenu({
   onSetAside,
   onDelete,
   onDetach,
+  detachLabel = "Detach from parent",
+  attachBots,
+  onAttach,
   onMarkUnread,
   onSettle,
   pin,
@@ -2399,6 +2767,12 @@ export function RowMenu({
   /// a disabled item on every row in the list would be noise rather than a
   /// promise of something coming.
   onDetach?: () => void;
+  /// What the parent is called, where "parent" undersells it: a bot.
+  detachLabel?: string;
+  /// The bots this row can be handed to. Absent or empty draws no item: a
+  /// bot's own chat or task, or no bot on the row's server.
+  attachBots?: Bot[];
+  onAttach?: (bot: Bot) => void;
   /// Absent where the mark would say nothing: a settled session is a history
   /// row with no Completed run to rejoin, and one already unread or mid-turn
   /// has nothing to take back.
@@ -2444,7 +2818,9 @@ export function RowMenu({
           the two elements the key lands on.
       */}
       <ContextMenuContent
-        className="w-40"
+        // Wider where one bot is named on its item, so the name has room; still
+        // fixed per row, which is what the width is for.
+        className={onAttach && attachBots?.length === 1 ? "w-56" : "w-40"}
         onKeyDown={(e) => {
           if (!forkOpen) return;
           const picked = forkRefs.current[Number(e.key) - 1];
@@ -2544,8 +2920,35 @@ export function RowMenu({
             {onDetach && (
               <ContextMenuItem className="text-ui" onSelect={onDetach}>
                 <Unlink />
-                Detach from parent
+                {detachLabel}
               </ContextMenuItem>
+            )}
+
+            {/* One bot is a pick already made, so it is named on the item itself. */}
+            {onAttach && attachBots?.length === 1 && (
+              <ContextMenuItem className="text-ui" onSelect={() => onAttach(attachBots[0])}>
+                <Link2 />
+                <span className="shrink-0">Attach to</span>
+                <BotAvatar seed={attachBots[0].id} avatar={attachBots[0].avatar} still className="size-4 shrink-0" />
+                <span className="truncate">{attachBots[0].name}</span>
+              </ContextMenuItem>
+            )}
+
+            {onAttach && attachBots && attachBots.length > 1 && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger className="text-ui">
+                  <Link2 />
+                  Attach to bot
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="max-w-56">
+                  {attachBots.map((bot) => (
+                    <ContextMenuItem key={bot.id} className="text-ui" onSelect={() => onAttach(bot)}>
+                      <BotAvatar seed={bot.id} avatar={bot.avatar} still className="size-4 shrink-0" />
+                      <span className="truncate">{bot.name}</span>
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
             )}
 
             {/* `preventDefault` holds the menu open — an item select closes it by
@@ -2590,15 +2993,13 @@ function DraftRow({
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
   return (
-    <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
-      <ContextMenuTrigger asChild>
+    <DraftMenu onDelete={() => onDelete(draft.id)}>
       <div
         ref={ref}
         role="button"
@@ -2624,7 +3025,17 @@ function DraftRow({
           {relativeTime(draft.created)}
         </span>
       </div>
-      </ContextMenuTrigger>
+    </DraftMenu>
+  );
+}
+
+/// A draft's right-click menu: Delete, asking first. Shared by the drafts
+/// view's row and the rail's dot.
+function DraftMenu({ onDelete, children }: { onDelete: () => void; children: React.ReactNode }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-40">
         {confirming ? (
           <>
@@ -2633,7 +3044,7 @@ function DraftRow({
               <ContextMenuItem className="flex-1 justify-center text-ui">Cancel</ContextMenuItem>
               <ContextMenuItem
                 variant="destructive"
-                onSelect={() => onDelete(draft.id)}
+                onSelect={onDelete}
                 className="flex-1 justify-center bg-destructive/10 text-ui"
               >
                 Delete
@@ -2658,6 +3069,91 @@ function DraftRow({
   );
 }
 
+/// A session's right-click menu, worked out from the row's own state. One
+/// place for the full row and the rail's dot, so the two can never offer
+/// different verbs on the same session.
+function SessionMenu({
+  item,
+  status,
+  aside,
+  nested,
+  inheritsPin,
+  onSetFlags,
+  onFork,
+  onDelete,
+  onDetach,
+  attachBots,
+  onAttach,
+  onMarkUnread,
+  children,
+}: Pick<
+  React.ComponentProps<typeof SessionRow>,
+  | "item"
+  | "status"
+  | "aside"
+  | "nested"
+  | "inheritsPin"
+  | "onSetFlags"
+  | "onFork"
+  | "onDelete"
+  | "onDetach"
+  | "attachBots"
+  | "onAttach"
+  | "onMarkUnread"
+> & { children: React.ReactNode }) {
+  return (
+    <RowMenu
+      onFork={(worktree) => void onFork(item.sessionId, worktree)}
+      forkDisabled={status === "in_progress"}
+      onDelete={() => void onDelete(item.sessionId)}
+      onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+      attachBots={attachBots}
+      onAttach={onAttach && ((bot) => void onAttach(item.sessionId, bot))}
+      // Never on a settled row, whose list draws no aside run.
+      aside={item.archived ? undefined : aside}
+      onSetAside={(v) =>
+        // Setting aside unpins, or the row would stay up in Pinned.
+        void onSetFlags(item.sessionId, v ? { aside: true, pinned: false } : { aside: false })
+      }
+      // Only a read, finished session can take the mark back: a settled one
+      // has left the live list the Completed run lives in, and anything but
+      // `idle` is either already unread or still working.
+      //
+      // `forkFrom` is the third: a fork is lazy, so its row sits at `idle`
+      // holding a copied conversation the CLI has not carried out yet and no
+      // turn of its own. An unread mark there would put a session that has
+      // never run into the Completed run and onto the dock badge. The flag is
+      // cleared by the first send, which is also the first turn there is
+      // anything to read. Known ceiling: a session whose spawn failed outright
+      // sits at `idle` having run nothing either, and the index says nothing
+      // that tells it from one that has run and been read.
+      onMarkUnread={
+        status === "idle" && !item.archived && !item.forkFrom
+          ? () => onMarkUnread(item.sessionId)
+          : undefined
+      }
+      // Absent on a row that follows a pinned ancestor: it sits in Pinned
+      // whichever way its own flag reads, so the verb would move nothing and
+      // leave a flag behind. Absent on a settled row too, where the list draws
+      // no Pinned group.
+      pin={
+        inheritsPin || item.archived
+          ? undefined
+          : {
+              pinned: !!item.pinned,
+              toggle: () =>
+                onSetFlags(
+                  item.sessionId,
+                  item.aside && !item.pinned ? { pinned: true, aside: false } : { pinned: !item.pinned },
+                ),
+            }
+      }
+    >
+      {children}
+    </RowMenu>
+  );
+}
+
 function SessionRow({
   item,
   depth,
@@ -2679,6 +3175,8 @@ function SessionRow({
   onFork,
   onDelete,
   onDetach,
+  attachBots,
+  onAttach,
   onMarkUnread,
 }: {
   item: SessionIndexItem;
@@ -2727,6 +3225,8 @@ function SessionRow({
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
+  attachBots?: Bot[];
+  onAttach?: (sessionId: string, bot: Bot) => Promise<void>;
   onMarkUnread: (sessionId: string) => void;
 }) {
   // The keyboard shortcut can walk the selection past the fold, and `nearest`
@@ -2750,50 +3250,19 @@ function SessionRow({
   const digit = useJumpDigit(item.sessionId);
 
   return (
-    <RowMenu
-      onFork={(worktree) => void onFork(item.sessionId, worktree)}
-      forkDisabled={status === "in_progress"}
-      onDelete={() => void onDelete(item.sessionId)}
-      onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
-      // Never on a settled row, whose list draws no aside run.
-      aside={item.archived ? undefined : aside}
-      onSetAside={(v) =>
-        // Setting aside unpins, or the row would stay up in Pinned.
-        void onSetFlags(item.sessionId, v ? { aside: true, pinned: false } : { aside: false })
-      }
-      // Only a read, finished session can take the mark back: a settled one
-      // has left the live list the Completed run lives in, and anything but
-      // `idle` is either already unread or still working.
-      //
-      // `forkFrom` is the third: a fork is lazy, so its row sits at `idle`
-      // holding a copied conversation the CLI has not carried out yet and no
-      // turn of its own. An unread mark there would put a session that has
-      // never run into the Completed run and onto the dock badge. The flag is
-      // cleared by the first send, which is also the first turn there is
-      // anything to read. Known ceiling: a session whose spawn failed outright
-      // sits at `idle` having run nothing either, and the index says nothing
-      // that tells it from one that has run and been read.
-      onMarkUnread={
-        status === "idle" && !item.archived && !item.forkFrom
-          ? () => onMarkUnread(item.sessionId)
-          : undefined
-      }
-      // Absent on a row that follows a pinned ancestor: it sits in Pinned
-      // whichever way its own flag reads, so the verb would move nothing and
-      // leave a flag behind. Absent on a settled row too, where the list draws
-      // no Pinned group.
-      pin={
-        inheritsPin || item.archived
-          ? undefined
-          : {
-              pinned: !!item.pinned,
-              toggle: () =>
-                onSetFlags(
-                  item.sessionId,
-                  item.aside && !item.pinned ? { pinned: true, aside: false } : { pinned: !item.pinned },
-                ),
-            }
-      }
+    <SessionMenu
+      item={item}
+      status={status}
+      aside={aside}
+      nested={nested}
+      inheritsPin={inheritsPin}
+      onSetFlags={onSetFlags}
+      onFork={onFork}
+      onDelete={onDelete}
+      onDetach={onDetach}
+      attachBots={attachBots}
+      onAttach={onAttach}
+      onMarkUnread={onMarkUnread}
     >
       {/* A button can't nest a button, so the row is a div with a click handler
           and the pin/settle controls are the only real buttons inside it. */}
@@ -3106,6 +3575,6 @@ function SessionRow({
           </div>
         </div>
       </div>
-    </RowMenu>
+    </SessionMenu>
   );
 }

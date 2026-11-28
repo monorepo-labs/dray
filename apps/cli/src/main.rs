@@ -14,15 +14,16 @@ mod bot;
 mod draft;
 mod machine;
 mod routine;
+mod secret;
 mod setup;
+mod upload;
 use draft::DraftCommand;
 use dray_proto::{
-    encode_line, AddVideo, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    encode_line, AddVideo, AttachSession, BrowserAction, MergeCard, IssueCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
     React, SessionSummary, SetAside, SetModel, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -32,6 +33,8 @@ use std::process::ExitCode;
 const SKILL: &str = include_str!("../skill/SKILL.md");
 
 const INSTALLER_URL: &str = "https://www.drayhq.com/install.sh";
+/// install.sh's Windows twin, which `dray update` runs there.
+const WINDOWS_INSTALLER_URL: &str = "https://www.drayhq.com/install.ps1";
 
 #[derive(Parser)]
 #[command(
@@ -47,8 +50,8 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`, and `session new`
-    /// takes `cloud` for a fresh Dray Cloud machine. A session id finds its machine on its own.
+    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`. A session id finds
+    /// its machine on its own.
     #[arg(long, global = true, value_name = "NAME")]
     machine: Option<String>,
 }
@@ -70,6 +73,9 @@ enum Command {
     /// Make, list, message, rename and delete bots.
     #[command(subcommand, arg_required_else_help = true)]
     Bot(bot::BotCommand),
+    /// Ask the user for a token or password privately, and find saved ones.
+    #[command(subcommand, arg_required_else_help = true)]
+    Secret(secret::SecretCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
     /// Put a video where this session's chat plays it.
@@ -82,6 +88,12 @@ enum Command {
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
     Share(ShareArgs),
+    // Hidden: it serves Dray's own contributors (#1501), and CONTRIBUTING.md is its doc.
+    /// Upload screenshots or recordings for a Dray pull request and print a
+    /// markdown line for each. For Dray contributors only. Signs in with
+    /// `gh auth token` or GITHUB_TOKEN.
+    #[command(arg_required_else_help = true, hide = true)]
+    Upload(upload::Upload),
     /// The machines this one reaches: add, list, rename, connect, remove.
     #[command(subcommand, arg_required_else_help = true)]
     Machine(machine::MachineCommand),
@@ -145,9 +157,21 @@ enum SessionCommand {
     SetAside(SessionArg),
     /// Take a session out of set-aside.
     UnsetAside(SessionArg),
+    /// Take a task out of the session that started it, like the sidebar's
+    /// Detach from parent: it stands on its own in the sidebar, shown even if
+    /// it ran hidden, and reports back to nobody. `attach` hands it to a bot.
+    Detach(SessionArg),
+    /// Hand a task to a bot, like the sidebar's Attach to bot: it leaves the
+    /// sidebar for the bot's Tasks, the bot is told where it stands, and its
+    /// reports go to the bot after every turn. Detach undoes it.
+    Attach(Attach),
     /// Post a card in this session's chat for a task's open pull request, so
     /// the user can merge it from the chat.
     MergeCard(SessionArg),
+    /// Post a card in this session's chat showing GitHub issues, one or
+    /// several. The user opens each in Dray, or presses Work on it, which
+    /// tells you to start on that issue.
+    IssueCard(IssueCardArgs),
     /// Say in one line what a stalled task needs from the user, for the "Waiting
     /// on you" card in this bot's chat. Cleared when the task moves; no text
     /// clears it now.
@@ -160,15 +184,37 @@ enum SessionCommand {
 
 #[derive(Args)]
 struct ReactArgs {
-    /// 👀 ✅ 🎉 👍 ❤️ 😂 😢, or its word: seen, done, celebrate, like, love,
-    /// laugh, sad.
+    /// 👀 ✅ 🎉 👍 👎 ❤️ 😂 😢, or its word: seen, done, celebrate, like,
+    /// dislike, love, laugh, sad.
     emoji: String,
+}
+
+#[derive(Args)]
+struct IssueCardArgs {
+    /// The repository, as owner/name.
+    repo: String,
+    /// Issue numbers, in the order to list them: 12 15 #18.
+    #[arg(required = true, value_parser = issue_number)]
+    numbers: Vec<u64>,
+}
+
+fn issue_number(said: &str) -> Result<u64, String> {
+    said.trim_start_matches('#').parse().map_err(|_| format!("\"{said}\" is not an issue number"))
 }
 
 #[derive(Args)]
 struct SessionArg {
     /// The session, as printed by `dray session ls`.
     session_id: String,
+}
+
+#[derive(Args)]
+struct Attach {
+    /// The task, as printed by `dray session ls`.
+    session_id: String,
+    /// The bot, by name or id, as `dray bot ls` prints it.
+    #[arg(long)]
+    bot: String,
 }
 
 #[derive(Args)]
@@ -183,8 +229,9 @@ struct Need {
 struct ModelArgs {
     /// The session, as printed by `dray session ls`.
     session_id: String,
-    /// A model alias its agent knows, like fable, opus or sonnet on
-    /// claude_code. Without it the model stays and only --effort moves.
+    /// A model alias, like fable, opus or sonnet on claude_code. Another
+    /// agent's model moves the session to that agent. Without it the model
+    /// stays and only --effort moves.
     model: Option<String>,
     /// low, medium, high, xhigh, max or ultra, where the model has it. Without
     /// it the session keeps its level if the new model has it, else takes the
@@ -238,13 +285,14 @@ struct New {
     #[arg(long)]
     effort: Option<String>,
 
-    /// Which agent runs it: claude_code, codex, pi, fx or grok.
+    /// Which agent runs it: claude_code, codex, pi, fx, grok or opencode.
     #[arg(long)]
     harness: Option<String>,
 
     /// Base the new session's worktree on existing work: a session id, a
-    /// branch, or any git ref. Committed work only. Defaults to
-    /// origin/<default>.
+    /// branch, or any git ref. A branch is worked on by its own name, fetched
+    /// first; a session or other ref gets a branch of its own. Committed work
+    /// only. Defaults to origin/<default>.
     #[arg(long, alias = "from", value_name = "SESSION|REF")]
     base: Option<String>,
 
@@ -491,19 +539,8 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     if let Some(machine) = cli.machine {
-        // These act on this machine, or on nothing a server answers.
-        if !matches!(
-            cli.command,
-            Command::Session(_)
-                | Command::Issue(_)
-                | Command::Draft(_)
-                | Command::Browser(_)
-                | Command::Share(_)
-                | Command::New(_)
-                | Command::Ls(_)
-                | Command::Send(_)
-        ) {
-            return Err("--machine takes session, draft, issue, browser and share commands".into());
+        if let Some(refusal) = machine_refusal(&cli.command) {
+            return Err(refusal);
         }
         let _ = MACHINE.set(machine);
     }
@@ -513,10 +550,12 @@ fn run() -> Result<(), String> {
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Draft(command) => draft::run(command),
         Command::Bot(command) => bot::run(command),
+        Command::Secret(command) => secret::run(command),
         Command::Browser(args) => browser(args),
         Command::Video(VideoCommand::Add(args)) => add_media(args.file, args.name, args.session, false),
         Command::Image(ImageCommand::Add(args)) => add_media(args.file, args.name, args.session, true),
         Command::Share(args) => share(args),
+        Command::Upload(args) => upload::run(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
         Command::Login => setup::login(),
@@ -524,7 +563,7 @@ fn run() -> Result<(), String> {
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
         Command::Completion { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "dray", &mut std::io::stdout());
+            clap_complete::generate(shell, &mut completion_command(), "dray", &mut std::io::stdout());
             Ok(())
         }
         Command::New(args) => new(args),
@@ -537,12 +576,30 @@ fn run() -> Result<(), String> {
     }
 }
 
+/// Why `--machine` cannot carry `command`, or `None` where it can.
+fn machine_refusal(command: &Command) -> Option<String> {
+    match command {
+        Command::Session(_)
+        | Command::Issue(_)
+        | Command::Draft(_)
+        | Command::Browser(_)
+        | Command::Share(_)
+        | Command::New(_)
+        | Command::Ls(_)
+        | Command::Send(_) => None,
+        Command::Bot(command) => bot::machine_refusal(command),
+        // These act on this machine, or on nothing a server answers.
+        _ => Some("--machine takes session, draft, issue, browser, share and bot commands".into()),
+    }
+}
+
 fn session(command: SessionCommand) -> Result<(), String> {
     let (request, said) = match command {
         SessionCommand::New(args) => return new(args),
         SessionCommand::Ls(args) => return ls(args),
         SessionCommand::Send(args) => return send_message(args),
         SessionCommand::MergeCard(args) => return merge_card(args),
+        SessionCommand::IssueCard(args) => return issue_card(args),
         SessionCommand::React(args) => return react(args),
         SessionCommand::Model(args) => return set_model(args),
         SessionCommand::Rename(args) => (
@@ -573,6 +630,13 @@ fn session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::UnsetAside(args) => {
             (Request::SetAside(SetAside { session_id: args.session_id, aside: false }), "Brought back")
         }
+        SessionCommand::Detach(args) => {
+            (Request::DetachSession(SessionRef { session_id: args.session_id }), "Detached")
+        }
+        SessionCommand::Attach(args) => (
+            Request::AttachSession(AttachSession { session_id: args.session_id, bot: args.bot }),
+            "Attached",
+        ),
     };
     match send(request)? {
         // Its machine did not answer, so all that is known is the id.
@@ -599,6 +663,7 @@ fn new(args: New) -> Result<(), String> {
         harness: args.harness,
         parent_session_id: parent_session_id(),
         base: args.base,
+        base_as_branch: false,
         title: args.title,
         issues: args.issues,
         // Absent rather than `false`, so leaving the flag off inherits the
@@ -625,7 +690,10 @@ fn new(args: New) -> Result<(), String> {
                 // `--base <session-id>` names a session, so the branch it
                 // resolved to is news: the caller asked with an id and only the
                 // app could say what that session's work is on.
+                // A branch worked on by its own name comes back as the
+                // session's branch.
                 match &base_ref {
+                    Some(base) if session.branch.as_deref() == Some(base) => format!(", on branch {base}"),
                     Some(base) => format!(", based on {base}"),
                     None => String::new(),
                 }
@@ -762,6 +830,22 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
     match send(request)? {
         Response::MergeCard { number, url, title } => {
             eprintln!("Posted a merge card for #{number} \"{title}\": {url}");
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn issue_card(args: IssueCardArgs) -> Result<(), String> {
+    let session_id = parent_session_id().ok_or("run this from inside a Dray session: the card goes in its chat.")?;
+    let request = Request::IssueCard(IssueCard { session_id, repo: args.repo, numbers: args.numbers, title: None });
+    match send(request)? {
+        Response::IssueCard { issues } => {
+            eprintln!("Posted an issue card:");
+            for issue in issues {
+                eprintln!("  {issue}");
+            }
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -1158,7 +1242,8 @@ fn print_table(sessions: &[SessionSummary]) {
 ///
 /// To a file first, not `curl | sh`: `pipefail` is not POSIX, so piped straight
 /// into a shell a failed download runs an empty script and reports success.
-/// curl or wget, the pair the installer itself accepts.
+/// curl or wget, the pair the installer itself accepts. On Windows, install.ps1
+/// through PowerShell, where a failed download throws and exits non-zero.
 fn update(args: Update) -> Result<(), String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
@@ -1177,17 +1262,11 @@ fn update(args: Update) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut sh = std::process::Command::new("sh");
-    sh.args([
-        "-c",
-        "t=$(mktemp) && trap 'rm -f \"$t\"' EXIT && \
-         if command -v curl >/dev/null; then curl -fsSL \"$0\" -o \"$t\"; else wget -qO \"$t\" \"$0\"; fi && \
-         sh \"$t\"",
-        INSTALLER_URL,
-    ])
+    let mut sh = installer();
     // Where this binary lives, not ~/.local/bin. Renaming over a running
-    // unix binary is safe: the process keeps the inode it started from.
-    .env("DRAY_INSTALL_DIR", dir)
+    // binary is safe on both: a unix process keeps the inode it started from,
+    // and install.ps1 renames a running exe aside rather than writing over it.
+    sh.env("DRAY_INSTALL_DIR", dir)
     // An update is not a first install: no setup questions.
     .env("DRAY_UPDATING", "1")
     .env("DRAY_CHANNEL", args.channel.as_deref().unwrap_or(own_channel()));
@@ -1206,7 +1285,7 @@ fn update(args: Update) -> Result<(), String> {
 
     // The installer exits 0 on "already installed" too, so success alone says
     // nothing about the server being left behind. A replaced binary does.
-    let serve = dir.join("dray-serve");
+    let serve = dir.join(format!("dray-serve{}", std::env::consts::EXE_SUFFIX));
     let stamp = || std::fs::metadata(&serve).and_then(|meta| meta.modified()).ok();
     let before = stamp();
 
@@ -1227,13 +1306,37 @@ fn update(args: Update) -> Result<(), String> {
     }
 }
 
+/// The installer as a command: its URL fetched and run by the platform's shell.
+fn installer() -> std::process::Command {
+    if cfg!(windows) {
+        let mut ps = std::process::Command::new("powershell");
+        ps.args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &format!("$ErrorActionPreference = 'Stop'; iex (irm -UseBasicParsing '{WINDOWS_INSTALLER_URL}')"),
+        ]);
+        return ps;
+    }
+    let mut sh = std::process::Command::new("sh");
+    sh.args([
+        "-c",
+        "t=$(mktemp) && trap 'rm -f \"$t\"' EXIT && \
+         if command -v curl >/dev/null; then curl -fsSL \"$0\" -o \"$t\"; else wget -qO \"$t\" \"$0\"; fi && \
+         sh \"$t\"",
+        INSTALLER_URL,
+    ]);
+    sh
+}
+
 /// The release the `dray-serve` beside this binary was built as, for a machine
 /// whose app ships `dray`: its launches rewrite `dray` and never `dray-serve`,
 /// so this binary's version would stop the installer at "already current" with
 /// the server left behind. No `dray-serve` there is no pair to keep, so this
 /// binary's tag; one too old to say is reinstalled.
 fn serve_tag_beside(dir: &std::path::Path) -> Option<String> {
-    let serve = dir.join("dray-serve");
+    let serve = dir.join(format!("dray-serve{}", std::env::consts::EXE_SUFFIX));
     if !serve.exists() {
         return Some(current_tag());
     }
@@ -1344,10 +1447,86 @@ fn send(request: Request) -> Result<Response, String> {
     send_to(&endpoint, request)
 }
 
+#[cfg(unix)]
+fn connect(endpoint: &str) -> std::io::Result<std::os::unix::net::UnixStream> {
+    std::os::unix::net::UnixStream::connect(endpoint)
+}
+
+/// The server's named pipe for this socket path (`dray_proto::pipe_name`).
+/// Every instance busy reads as `ERROR_PIPE_BUSY`, which a moment cures.
+#[cfg(windows)]
+fn connect(endpoint: &str) -> std::io::Result<std::fs::File> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let pipe = dray_proto::pipe_name(endpoint);
+    let mut tries = 0;
+    loop {
+        match std::fs::OpenOptions::new().read(true).write(true).open(&pipe) {
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Ok(file) if !served_by_this_user(&file) => {
+                return Err(std::io::Error::other(
+                    "another account serves this pipe; nothing was sent",
+                ))
+            }
+            other => return other,
+        }
+    }
+}
+
+/// Whether the pipe's server process runs as this process's user. The pipe
+/// namespace is machine-wide and the name derivable, so another account can
+/// take it before Dray starts; on Unix the socket's `0700` directory rules
+/// that out. Anything unreadable answers no.
+#[cfg(windows)]
+fn served_by_this_user(pipe: &std::fs::File) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{EqualSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    /// The token user of `process`, in a buffer aligned for `TOKEN_USER`.
+    unsafe fn user_of(process: HANDLE) -> Option<Vec<u64>> {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
+            return None;
+        }
+        let mut len = 0u32;
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len);
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        let read = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len);
+        CloseHandle(token);
+        (read != 0).then_some(buf)
+    }
+
+    // SAFETY: every handle is checked and closed; each SID is read from a
+    // buffer the call that filled it sized.
+    unsafe {
+        let mut pid = 0u32;
+        if GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) == 0 {
+            return false;
+        }
+        let server = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if server.is_null() {
+            return false;
+        }
+        let theirs = user_of(server);
+        CloseHandle(server);
+        let (Some(theirs), Some(ours)) = (theirs, user_of(GetCurrentProcess())) else {
+            return false;
+        };
+        let sid = |buf: &Vec<u64>| (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid;
+        EqualSid(sid(&theirs), sid(&ours)) != 0
+    }
+}
+
 /// [`send`] to a socket the caller names.
 fn send_to(endpoint: &str, request: Request) -> Result<Response, String> {
-    let mut stream =
-        UnixStream::connect(&endpoint).map_err(|e| connect_failure(&e, &endpoint))?;
+    let mut stream = connect(endpoint).map_err(|e| connect_failure(&e, endpoint))?;
 
     let line = encode_line(&Envelope::new(request)).map_err(|e| e.to_string())?;
     stream
@@ -1483,7 +1662,11 @@ fn repo_root(dir: &Path) -> Option<String> {
         return None;
     }
 
-    main_worktree(&String::from_utf8(output.stdout).ok()?)
+    let root = main_worktree(&String::from_utf8(output.stdout).ok()?)?;
+    // Git answers `C:/x/repo` on Windows; the spelling a reader types back.
+    #[cfg(windows)]
+    let root = root.replace('/', "\\");
+    Some(root)
 }
 
 /// The first record's path, or `None` for a bare repo — nothing is checked out
@@ -1505,6 +1688,18 @@ fn main_worktree(porcelain: &str) -> Option<String> {
     (!path.is_empty()).then(|| path.to_string())
 }
 
+/// The CLI as completion scripts see it. clap_complete still lists hidden
+/// commands, so theirs go in with no description, as bare names.
+fn completion_command() -> clap::Command {
+    let mut cmd = Cli::command();
+    let hidden: Vec<String> =
+        cmd.get_subcommands().filter(|c| c.is_hide_set()).map(|c| c.get_name().to_string()).collect();
+    for name in hidden {
+        cmd = cmd.mut_subcommand(name, |c| c.about(None).long_about(None));
+    }
+    cmd
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1513,6 +1708,7 @@ mod tests {
     /// A wrong answer either stops the installer with the server left behind
     /// or lets leaving beta downgrade it.
     #[test]
+    #[cfg(unix)]
     fn hands_the_installer_the_servers_version() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("dray-serve-tag-{}", std::process::id()));
@@ -1764,6 +1960,13 @@ mod tests {
         assert_eq!(expand_home("/srv/~".into()), PathBuf::from("/srv/~"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn a_backslash_tilde_is_home_too() {
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(expand_home(r"~\notes".into()), home.join("notes"));
+    }
+
     /// The old spellings still parse — agents with an older skill, and remote
     /// servers the app runs `dray service start` and `dray tunnel` on — and a
     /// bare group prints its help rather than acting.
@@ -1816,6 +2019,52 @@ mod tests {
             let cli = Cli::try_parse_from(argv).unwrap();
             assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
         }
+    }
+
+    /// `upload` is for Dray's own contributors (#1501): it runs, but neither
+    /// `--help` nor a completion's description offers it.
+    #[test]
+    fn upload_runs_but_is_not_offered() {
+        assert!(matches!(
+            Cli::try_parse_from(["dray", "upload", "shot.png"]),
+            Ok(Cli { command: Command::Upload(_), .. })
+        ));
+        let help = Cli::command().render_help().to_string();
+        assert!(!help.contains("upload"), "{help}");
+        let mut zsh = Vec::new();
+        clap_complete::generate(clap_complete::Shell::Zsh, &mut completion_command(), "dray", &mut zsh);
+        assert!(!String::from_utf8(zsh).unwrap().contains("Upload screenshots"));
+    }
+
+    /// Every bot verb rides `--machine` to that machine's server, `--ask`
+    /// included (#1463), bar a routine whose default bot is this one's (#1461).
+    #[test]
+    fn machine_takes_bot_commands() {
+        let refusal = |argv: &[&str]| {
+            let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+            assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
+            machine_refusal(&cli.command)
+        };
+        for argv in [
+            &["dray", "--machine", "vps", "bot", "ls"][..],
+            &["dray", "bot", "ls", "--json", "--machine", "vps"],
+            &["dray", "--machine", "vps", "bot", "new", "Ops", "--colour", "teal"],
+            &["dray", "--machine", "vps", "bot", "send", "Ops", "hi"],
+            &["dray", "--machine", "vps", "bot", "send", "--ask", "Ops", "hi"],
+            &["dray", "--machine", "vps", "bot", "rename", "Ops", "Release"],
+            &["dray", "--machine", "vps", "bot", "rm", "Ops"],
+            &["dray", "--machine", "vps", "bot", "routine", "add", "PR", "look", "--every", "2h", "--bot", "Ops"],
+            &["dray", "--machine", "vps", "bot", "routine", "ls"],
+            &["dray", "--machine", "vps", "bot", "routine", "pause", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "resume", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "run", "PR"],
+            &["dray", "--machine", "vps", "bot", "routine", "rm", "PR"],
+        ] {
+            assert_eq!(refusal(argv), None, "{argv:?}");
+        }
+        let add = refusal(&["dray", "--machine", "vps", "bot", "routine", "add", "PR", "look", "--every", "2h"]).unwrap();
+        assert!(add.contains("--bot"), "{add}");
+        assert!(refusal(&["dray", "--machine", "vps", "skill", "install"]).unwrap().contains("bot"));
     }
 
     #[test]
@@ -1892,6 +2141,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).ok()?;
         let dir = std::fs::canonicalize(&dir).ok()?;
+        // Windows' canonical form is `\\?\C:\…`, which git never prints.
+        #[cfg(windows)]
+        let dir = PathBuf::from(dir.to_string_lossy().trim_start_matches(r"\\?\"));
 
         if !git(&dir, &["init", "-q", "."]) {
             return None;

@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { CornerDownLeft } from "lucide-react";
 
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// The list that opens over the composer while `/` or `@` is being typed.
@@ -66,6 +67,7 @@ export default function PickerMenu<T>({
   emptyNote,
   header,
   keepOpenHint = false,
+  extraHint,
 }: {
   groups: PickerGroup<T>[];
   /// Named for assistive tech, which otherwise reads an unlabelled listbox.
@@ -108,6 +110,8 @@ export default function PickerMenu<T>({
   header?: ReactNode;
   /// Names ⌘⏎ in the hint row, for the one picker that keeps the list open on it.
   keepOpenHint?: boolean;
+  /// One more key in the hint row, after the rest.
+  extraHint?: ReactNode;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -206,13 +210,14 @@ export default function PickerMenu<T>({
       </KbdGroup>
       {keepOpenHint && (
         <KbdGroup>
-          <Kbd>⌘</Kbd>
+          <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
           <Kbd>
             <CornerDownLeft strokeWidth={2} />
           </Kbd>
           <span className="ml-0.5">add another</span>
         </KbdGroup>
       )}
+      {extraHint}
     </div>
   );
 
@@ -289,8 +294,9 @@ export default function PickerMenu<T>({
             row — so a line beneath it cut a menu this small into two panels
             over a distinction the shapes make on their own. The framed state
             insets it to match the list's own `p-1`; the bare one has no box to
-            be held away from. */}
-        {header && <div className={cn(!bare && "p-1 pb-0")}>{header}</div>}
+            be held away from, but keeps the 4px under it that `p-1` gives the
+            framed list, or the switch sits flush on the highlighted first row. */}
+        {header && <div className={cn(bare ? "pb-1" : "p-1 pb-0")}>{header}</div>}
 
         <div
           ref={listRef}

@@ -6,11 +6,15 @@ struct DrayApp: App {
     @UIApplicationDelegateAdaptor private var delegate: AppDelegate
     @State private var store: Store
     @State private var task: NewTask
+    /// Settings' Open bot at launch, read off the cached list before the first frame so the
+    /// list never shows first; a bot with no cached chat opens later, from the list.
+    private let launch: SessionKey?
 
     init() {
         let store = Store()
         _store = State(initialValue: store)
         _task = State(initialValue: NewTask(store: store))
+        launch = LaunchBot.bot(store).flatMap { store.botChat($0.server, $0.bot).last }
         // Before launch ends, so a tapped or answered alert that launched the app reaches it.
         Push.shared.start(store)
     }
@@ -18,7 +22,7 @@ struct DrayApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(launch: launch)
                 .environment(store)
                 .environment(task)
                 .preferredColorScheme(.dark)
@@ -28,6 +32,11 @@ struct DrayApp: App {
                 .tint(Theme.text)
                 // Before the docks decide between the orb and keyboard mode.
                 .task { await AppleSpeech.shared.refresh() }
+                // Off, a server's kept issues and PRs go, so none draws and it is read afresh once back on.
+                .onChange(of: store.servers.filter { !$0.on }.map(\.id), initial: true) { _, off in
+                    IssuesModel.shared.forget(Set(off))
+                    PullsModel.shared.forget(Set(off))
+                }
         }
         .onChange(of: phase) { _, now in
             if now == .active { store.resume() }
@@ -53,30 +62,71 @@ enum RootSheet: Identifiable {
 struct RootView: View {
     @Environment(Store.self) private var store
     @Environment(\.scenePhase) private var phase
+    /// Read outside the split view: a column inside one reports compact even beside the detail.
+    @Environment(\.horizontalSizeClass) private var width
+    @Environment(NewTask.self) private var task
     @State private var selection: SessionKey?
+    @State private var columns = NavigationSplitViewVisibility.automatic
+    /// The main pane as wide as the window: a sidebar up now is laid over it rather than beside it.
+    @State private var paneWidth: CGFloat = 0
+    @State private var windowWidth: CGFloat = 0
     @State private var sheet: RootSheet?
+    @State private var autoOpen: Bool
     /// Tasks opened over a bot's chat, so Back walks back to the bot.
     @State private var opened: [SessionKey] = []
 
+    init(launch: SessionKey?) {
+        _selection = State(initialValue: launch)
+        // Opened already: the list must not open it again once Back leaves it.
+        _autoOpen = State(initialValue: launch == nil)
+    }
+
     var body: some View {
-        NavigationSplitView {
-            SessionList(selection: $selection, sheet: $sheet)
-        } detail: {
-            if let selection {
-                NavigationStack(path: $opened) {
-                    TranscriptView(key: selection)
-                        .id(selection)
-                        .navigationDestination(for: SessionKey.self) { TranscriptView(key: $0).id($0) }
-                }
-                .environment(\.openTask) { opened.append($0) }
-                .environment(\.openSession) { self.selection = $0 }
-            } else {
-                EmptyState(title: "No session open", message: "Pick one from the list.") {
-                    Orb(state: .idle, size: 40)
-                }
-                .page()
+        NavigationSplitView(columnVisibility: $columns) {
+            SessionList(selection: $selection, sheet: $sheet, autoOpen: $autoOpen, sidebar: width == .regular) {
+                // A phone's dock is under its list, already on screen.
+                guard width == .regular else { return }
+                selection = nil
+                // As a row tap does: a sidebar over the page gets out of its way, one beside it stays.
+                if paneWidth >= windowWidth - 1 { columns = .detailOnly }
             }
+        } detail: {
+            Group {
+                if let selection {
+                    NavigationStack(path: $opened) {
+                        TranscriptView(key: selection)
+                            .id(selection)
+                            .navigationDestination(for: SessionKey.self) { TranscriptView(key: $0).id($0) }
+                    }
+                    .environment(\.openTask) { opened.append($0) }
+                    .environment(\.openSession) { self.selection = $0 }
+                } else if width == .regular && !store.live.isEmpty {
+                    // The new task page: the phone's dock under its list, with the main pane to itself.
+                    Color.clear
+                        .overlay(alignment: .bottom) {
+                            VoiceDock(task: task, started: { selection = $0 }, engaged: { autoOpen = false })
+                                .opacity(store.live.contains { store.serverState[$0.id] == .connected } ? 1 : 0.3)
+                        }
+                        .page()
+                        .navigationTitle(task.bot?.bot.name ?? "New task")
+                        .navigationBarTitleDisplayMode(.inline)
+                        // A row picked mid-recording takes the dock and its Done away: stopped and kept,
+                        // as leaving `BotStartView` does, its words here next visit.
+                        .onDisappear {
+                            if Dictations.shared.state(.newSession) == .recording {
+                                Task { await Dictations.shared.stop(store, draft: .newSession) }
+                            }
+                        }
+                } else {
+                    EmptyState(title: "No session open", message: "Pick one from the list.") {
+                        Orb(state: .idle, size: 40)
+                    }
+                    .page()
+                }
+            }
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { paneWidth = $0 }
         }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { windowWidth = $0 }
         .sheet(item: $sheet) { s in
             switch s {
             case .settings(let server): SettingsView(focus: server)

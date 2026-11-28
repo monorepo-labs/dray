@@ -6,6 +6,7 @@ import SessionAvatar from "@/components/SessionAvatar";
 import ClampedBody from "@/components/chat/ClampedBody";
 import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
+import { ReactionBadge } from "@/components/chat/Reactions";
 import { InlineButton, InlineLink, inlineMark } from "@/components/chat/InlineMark";
 import { useChatSession } from "@/hooks/useChatSession";
 import { absolutePath } from "@/lib/filePath";
@@ -26,6 +27,11 @@ import { stripSenderPrefix } from "@/lib/relay";
 import { useSendProgress } from "@/lib/uploads";
 import { cn } from "@/lib/utils";
 import type { Bot, ImageRef, IssueRef, MessageSender } from "@/types/events";
+
+/// Where a bot's reaction sits: out to the side of the top corner, in the 15% no
+/// bubble reaches and inside the bubble's own height, so it lands without
+/// moving the message or anything after it — see `Reactable`.
+const BADGE_CORNER = "absolute top-0 -left-6";
 
 /// The user's own text, echoed from the event log rather than local state — the
 /// backend synthesizes and persists it, so this renders the same live or replayed.
@@ -121,6 +127,7 @@ export default function UserMessage({
   // cleared out from under a transcript that still names it. `ImageRow` drops
   // those, so this row is what is left to say about them.
   const missing = images.filter((image) => !image.path && !image.url);
+  const pictured = images.length > missing.length;
   // Dimmed the way a queued prompt is: the same message a moment early.
   const uploading = useSendProgress(eventId ?? "");
 
@@ -149,9 +156,16 @@ export default function UserMessage({
           read before the sentence written about it, on the way in and on the way
           back out. `end` so the row grows leftwards from the same edge the
           bubble sits on. */}
-      {/* A message of images alone has no bubble to sit on. */}
-      {reaction && !body && <ReactionBadge emoji={reaction} />}
-      <ImageRow images={images} variant="sent" />
+      {/* A message of images alone has no bubble, so the badge sits on the
+          pictures' corner. In the row only where no picture draws either. */}
+      {reaction && !body && !pictured && <ReactionBadge emoji={reaction} />}
+      {pictured && (
+        <div className="relative max-w-full">
+          <ImageRow images={images} variant="sent" />
+          {/* Further onto a picture, which can fill the column and has no text to cover. */}
+          {reaction && !body && <ReactionBadge emoji={reaction} className="absolute top-0 -left-3" />}
+        </div>
+      )}
 
       {body && (
         // `none` in dark, where the bubble already reads as raised by being
@@ -163,7 +177,7 @@ export default function UserMessage({
         <div
           className={cn(
             "user-bubble max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground shadow-(--shadow-card)",
-            reaction && "relative mt-3",
+            reaction && "relative",
           )}
           // The colour rides in and App.css paints it — a palette that fills
           // this bubble has to answer differently to one that doesn't, and only
@@ -204,14 +218,25 @@ export default function UserMessage({
 
                 if (!path) {
                   return (
-                    <span key={i} className={SEGMENT_COLOR.mention} title={raw}>
+                    <span
+                      key={i}
+                      className={SEGMENT_COLOR.mention}
+                      title={raw}
+                      data-copy={segment.text}
+                    >
                       @{name}
                     </span>
                   );
                 }
 
                 return (
-                  <FileLink key={i} path={path} title={raw} className={SEGMENT_COLOR.mention}>
+                  <FileLink
+                    key={i}
+                    path={path}
+                    title={raw}
+                    copy={segment.text}
+                    className={SEGMENT_COLOR.mention}
+                  >
                     @{name}
                   </FileLink>
                 );
@@ -232,7 +257,12 @@ export default function UserMessage({
 
                 if (!path) {
                   return (
-                    <span key={i} className={SEGMENT_COLOR.path} title={segment.text}>
+                    <span
+                      key={i}
+                      className={SEGMENT_COLOR.path}
+                      title={segment.text}
+                      data-copy={segment.text}
+                    >
                       @{name}
                     </span>
                   );
@@ -244,6 +274,7 @@ export default function UserMessage({
                     path={path}
                     line={segment.line}
                     title={segment.text}
+                    copy={segment.text}
                     className={SEGMENT_COLOR.path}
                   >
                     @{name}
@@ -365,7 +396,7 @@ export default function UserMessage({
               );
             })}
           </ClampedBody>
-          {reaction && <ReactionBadge emoji={reaction} className="absolute -top-4 -left-3" />}
+          {reaction && <ReactionBadge emoji={reaction} className={BADGE_CORNER} />}
         </div>
       )}
 
@@ -384,35 +415,5 @@ export default function UserMessage({
         </span>
       )}
     </div>
-  );
-}
-
-const REACTION_LABELS: Record<string, string> = {
-  "👀": "Seen",
-  "✅": "Done",
-  "🎉": "Celebrating",
-  "👍": "Like",
-  "❤️": "Love",
-  "😂": "Laughing",
-  "😢": "Sad",
-};
-
-/// A bot's reaction, as iMessage draws a tapback: a round chip on the bubble's top
-/// corner on the bot's side, a step lighter than the chat's page colour and
-/// edged by a hairline. Mixed off `--background` rather than `--muted`, which
-/// turns into a translucent veil on glass and let the bubble show through.
-function ReactionBadge({ emoji, className }: { emoji: string; className?: string }) {
-  return (
-    <span
-      role="img"
-      aria-label={`Bot reacted: ${REACTION_LABELS[emoji] ?? emoji}`}
-      className={cn(
-        "flex size-7 items-center justify-center rounded-full border-[0.5px] border-border bg-[color-mix(in_oklab,var(--background),white_7%)] text-[15px] leading-none select-none",
-        "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-200",
-        className,
-      )}
-    >
-      {emoji}
-    </span>
   );
 }

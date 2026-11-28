@@ -3,7 +3,9 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -13,7 +15,7 @@ use clap::{Args, Subcommand};
 #[derive(Args)]
 pub struct Install {
     /// Install these without asking, which is how a run with no terminal
-    /// installs anything: git, gh, claude_code, codex, pi, fx, grok, and on
+    /// installs anything: git, gh, claude_code, codex, pi, fx, grok, opencode, and on
     /// Linux browser and ffmpeg.
     #[arg(long, alias = "install", value_delimiter = ',', value_name = "TOOL")]
     tools: Vec<String>,
@@ -245,6 +247,11 @@ fn may_serve() -> Result<(), String> {
     if app_runs_this_home() {
         return Err("the Dray app runs this Mac's server".into());
     }
+    // The Windows app starts its own at sign-in, on the same home; a second
+    // would only lose `serve.lock` to it.
+    if cfg!(windows) && app_updates_this_cli() {
+        return Err("the Dray app runs this machine's server".into());
+    }
     Ok(())
 }
 
@@ -266,7 +273,7 @@ fn own_home() -> bool {
 
 /// Whether a Dray app here copies its own `dray` to ~/.local/bin: any Mac app,
 /// and on Linux the AppImage or `.deb` binary the app records on launch
-/// (cli.rs), while that file is still there. Its server is the app's child on Linux, so this says
+/// (cli.rs), on Windows its `.exe`, while that file is still there. Its server is the app's child on Linux, so this says
 /// nothing about who serves. install.sh asks the same.
 pub(crate) fn app_ships_this_cli() -> bool {
     if MAC {
@@ -276,13 +283,19 @@ pub(crate) fn app_ships_this_cli() -> bool {
         return false;
     };
     std::fs::read(home.join(APPIMAGE_RECORD)).is_ok_and(|image| {
-        use std::os::unix::ffi::OsStrExt;
-        !image.is_empty() && Path::new(std::ffi::OsStr::from_bytes(&image)).is_file()
+        #[cfg(unix)]
+        let image = {
+            use std::os::unix::ffi::OsStrExt;
+            std::ffi::OsStr::from_bytes(&image).to_os_string()
+        };
+        #[cfg(not(unix))]
+        let image = std::ffi::OsString::from(String::from_utf8_lossy(&image).into_owned());
+        !image.is_empty() && Path::new(&image).is_file()
     })
 }
 
-/// Written by the Linux app on launch, naming the AppImage or `.deb` binary it
-/// runs from.
+/// Written by the Linux and Windows app on launch, naming the AppImage, `.deb`
+/// binary or `.exe` it runs from.
 const APPIMAGE_RECORD: &str = ".local/share/dray/appimage";
 
 /// The app's login agent, which every launch installs, or its bundle, for one
@@ -387,16 +400,36 @@ fn browser_script() -> String {
 /// Where vendor installers put a binary, reaching `PATH` only through
 /// `.bashrc`: which this process never read, and nor does the login shell the
 /// server falls back to, since Ubuntu's `.bashrc` stops for a non-interactive
-/// shell. Grok and pi land in their own dirs, the rest in `~/.local/bin`.
-const HOME_BIN_DIRS: [&str; 5] = [".local/bin", ".grok/bin", ".pi/agent/bin", ".bun/bin", ".npm-global/bin"];
+/// shell. Grok, pi and OpenCode land in their own dirs, the rest in `~/.local/bin`.
+const HOME_BIN_DIRS: [&str; 6] =
+    [".local/bin", ".grok/bin", ".pi/agent/bin", ".opencode/bin", ".bun/bin", ".npm-global/bin"];
 
 fn find(bin: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let home = std::env::home_dir();
     std::env::split_paths(&path)
         .chain(home.iter().flat_map(|h| HOME_BIN_DIRS.map(|d| h.join(d))))
-        .map(|dir| dir.join(bin))
-        .find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+        .flat_map(|dir| EXE_SUFFIXES.map(|suffix| dir.join(format!("{bin}{suffix}"))))
+        .find(|p| p.metadata().is_ok_and(|m| m.is_file() && executable(&m)))
+}
+
+/// What a bare name is found under: itself, or on Windows the launchers npm
+/// and the installers leave (`claude.exe`, `codex.cmd`). Never the bare name
+/// there: npm leaves a `sh` script of that name beside the shim.
+#[cfg(unix)]
+const EXE_SUFFIXES: [&str; 1] = [""];
+#[cfg(windows)]
+const EXE_SUFFIXES: [&str; 2] = [".exe", ".cmd"];
+
+#[cfg(unix)]
+fn executable(meta: &std::fs::Metadata) -> bool {
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// Windows has no execute bit; the suffix said it already.
+#[cfg(windows)]
+fn executable(_: &std::fs::Metadata) -> bool {
+    true
 }
 
 pub fn setup(args: Install) -> Result<(), String> {
@@ -413,7 +446,7 @@ pub fn setup(args: Install) -> Result<(), String> {
         done("Found", &names.join(", "));
     }
 
-    let tty = OpenOptions::new().read(true).write(true).open("/dev/tty").ok();
+    let tty = open_tty();
     let picked: Vec<&Tool> = if missing.is_empty() || !args.tools.is_empty() {
         missing.into_iter().filter(|t| args.tools.iter().any(|n| n == t.id)).collect()
     } else if let Some(tty) = &tty {
@@ -440,7 +473,7 @@ pub fn setup(args: Install) -> Result<(), String> {
     let mut todo = Vec::new();
     for tool in picked {
         println!("{BAR}\n\x1b[36m●\x1b[0m  Installing {}", tool.name);
-        match install(tool, tty.as_ref()) {
+        match install(tool, tty.as_ref().map(|t| &t.input)) {
             Ok(()) if present(tool) => done(&format!("{} installed", tool.name), ""),
             Ok(()) => warn(&format!("{} installed, but not where dray can see it yet", tool.name)),
             Err(Manual(command)) => todo.push(command),
@@ -457,16 +490,38 @@ pub fn setup(args: Install) -> Result<(), String> {
     }
 
     if may_serve().is_err() {
-        println!("\x1b[90m└\x1b[0m  Done. The Dray app runs this Mac's server.");
+        println!("\x1b[90m└\x1b[0m  Done. The Dray app runs this {} server.", if MAC { "Mac's" } else { "machine's" });
         return Ok(());
+    }
+    // No SSH line to paste: the app adds a server over SSH with a Unix shell
+    // on the other end, which Windows' OpenSSH does not give it.
+    if cfg!(windows) {
+        match windows_start() {
+            Ok(note) => {
+                done("Server running in the background", &note);
+                println!("\x1b[90m└\x1b[0m  Done.");
+                return Ok(());
+            }
+            Err(why) => {
+                warn(&why);
+                println!("\x1b[90m└\x1b[0m");
+                return Err("the server is not running".into());
+            }
+        }
     }
     match service_start() {
         Ok(note) => done("Server running in the background", &note),
-        // No line to paste: it would point the app at a server that is not there.
-        Err(why) => {
+        // No line to paste: it would point the app at a server that is not
+        // there. The reason is the error itself, `dray: …` being the line the
+        // app's install dialog shows the reader.
+        Err(why) if MAC => {
             warn(&why);
             println!("\x1b[90m└\x1b[0m");
             return Err("the server is not running".into());
+        }
+        Err(why) => {
+            println!("\x1b[90m└\x1b[0m");
+            return Err(why);
         }
     }
     println!("\x1b[90m└\x1b[0m  In the Dray app, Add server and paste:\n\n   {}\n{}", ssh_line(), private_note());
@@ -510,13 +565,36 @@ fn install(tool: &Tool, tty: Option<&File>) -> Result<(), InstallError> {
         "gh" if LINUX => GH_LINUX.to_string(),
         "gh" if find("brew").is_some() => "brew install gh".to_string(),
         "gh" => return Err(Failed("get it from https://cli.github.com".into())),
-        id => dray_proto::AGENTS.iter().find(|a| a.id == id).map(|a| a.install.to_string()).unwrap_or_default(),
+        id => match dray_proto::AGENTS.iter().find(|a| a.id == id) {
+            Some(agent) => return install_agent(agent, stdin()),
+            None => String::new(),
+        },
     };
     sh(&script, stdin())
 }
 
+/// The vendor's own installer: `install.sh` through `sh`, and on Windows the
+/// `install.ps1` it publishes there, since Claude Code's `install.sh` exits
+/// under Git Bash. Where a vendor publishes none, its install page.
+fn install_agent(agent: &dray_proto::Agent, stdin: Stdio) -> Result<(), InstallError> {
+    if !cfg!(windows) {
+        return sh(agent.install, stdin);
+    }
+    if agent.install_windows.is_empty() {
+        return Err(Failed(format!("no Windows installer; see {}", agent.docs)));
+    }
+    ran(Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", agent.install_windows])
+        .stdin(stdin)
+        .status())
+}
+
 fn sh(script: &str, stdin: Stdio) -> Result<(), InstallError> {
-    match Command::new("sh").args(["-c", script]).stdin(stdin).status() {
+    ran(Command::new("sh").args(["-c", script]).stdin(stdin).status())
+}
+
+fn ran(status: std::io::Result<std::process::ExitStatus>) -> Result<(), InstallError> {
+    match status {
         Ok(s) if s.success() => Ok(()),
         Ok(s) => Err(Failed(s.to_string())),
         Err(e) => Err(Failed(e.to_string())),
@@ -527,6 +605,9 @@ fn sh(script: &str, stdin: Stdio) -> Result<(), InstallError> {
 /// the command — a password prompt in the middle of an installer is easy to
 /// miss and easy to fat-finger.
 fn install_git(stdin: Stdio) -> Result<(), InstallError> {
+    if cfg!(windows) {
+        return Err(Failed("get it from https://git-scm.com/downloads/win".into()));
+    }
     if !LINUX {
         return Err(Manual("xcode-select --install".into()));
     }
@@ -567,7 +648,7 @@ mkdir -p "$HOME/.local/bin" && mv "$t/$n/bin/gh" "$HOME/.local/bin/gh"
 "#;
 
 /// Logins still to do, as commands. Asked where a CLI answers by exit code;
-/// pi, fx and grok have no such question, so they are listed whenever present.
+/// pi, fx, grok and opencode have no such question, so they are listed whenever present.
 fn logins_to_do() -> Vec<String> {
     let signed_in = |bin: &PathBuf, args: &[&str]| {
         Command::new(bin).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
@@ -649,13 +730,25 @@ fn output(cmd: &str, args: &[&str]) -> Option<String> {
 pub fn serve(args: Run) -> Result<(), String> {
     may_serve()?;
     let bin = beside("dray-serve")?;
-    let err = Command::new(&bin).args(args.args).exec();
-    Err(format!("could not run {}: {err}", bin.display()))
+    #[cfg(unix)]
+    {
+        let err = Command::new(&bin).args(args.args).exec();
+        Err(format!("could not run {}: {err}", bin.display()))
+    }
+    // No exec on Windows: wait on the server and leave with its code.
+    #[cfg(windows)]
+    {
+        let status = Command::new(&bin)
+            .args(args.args)
+            .status()
+            .map_err(|e| format!("could not run {}: {e}", bin.display()))?;
+        std::process::exit(status.code().unwrap_or(1))
+    }
 }
 
 fn beside(name: &str) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("could not find the running dray binary: {e}"))?;
-    let bin = exe.with_file_name(name);
+    let bin = exe.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     if bin.is_file() {
         Ok(bin)
     } else {
@@ -670,6 +763,15 @@ fn beside(name: &str) -> Result<PathBuf, String> {
 pub fn service(command: ServiceCommand) -> Result<(), String> {
     if MAC {
         return agent_service(command);
+    }
+    if cfg!(windows) {
+        return windows_service(command);
+    }
+    if cfg!(target_os = "linux") {
+        if !systemd_booted() {
+            return detached_service(command);
+        }
+        find_user_manager();
     }
     match command {
         ServiceCommand::Start => {
@@ -876,10 +978,30 @@ fn service_start() -> Result<String, String> {
     if MAC {
         return agent_start();
     }
-    if !systemctl(true, &["show-environment"]) {
+    // Windows reaches here from `tunnel on`, which never had a systemd to
+    // find; the fallbacks below are Linux's alone.
+    if !cfg!(target_os = "linux") {
         return Err("No systemd user session here, so nothing can keep the server running. \
                     Start it yourself under tmux or nohup: dray server run"
             .into());
+    }
+    if !systemd_booted() {
+        return detached_start();
+    }
+    find_user_manager();
+    // Before the unit, not after: linger is what starts the user manager for
+    // a login that came without one.
+    let lingering = linger();
+    if !wait_for_user_manager() {
+        let user = output("id", &["-un"]).unwrap_or_default();
+        return Err(if lingering {
+            format!("systemd did not start your user services. See why: systemctl status user@{}", uid())
+        } else {
+            format!(
+                "systemd runs your services only while you are logged in, and this login may not change that. \
+                 Run sudo loginctl enable-linger {user} there, then try again."
+            )
+        });
     }
     let serve = beside("dray-serve")?;
     // Agents run in the server's cgroup, being its children, so under the
@@ -905,7 +1027,7 @@ fn service_start() -> Result<String, String> {
     }
 
     let mut note = String::from("dray server status");
-    if !linger() {
+    if !lingering {
         let user = output("id", &["-un"]).unwrap_or_default();
         note += &format!(
             "\n{BAR}  It stops when you log out. To keep it running: sudo loginctl enable-linger {user}"
@@ -925,9 +1047,168 @@ fn already_running() -> String {
     )
 }
 
+/// `dray server` on Windows: the user's `Run` key in place of a unit, so the
+/// server starts at each sign-in with no admin ([`dray_proto::login`]).
+fn windows_service(command: ServiceCommand) -> Result<(), String> {
+    match command {
+        ServiceCommand::Start => {
+            let note = windows_start()?;
+            println!("The server is running in the background.\n{note}");
+        }
+        ServiceCommand::Status => {
+            may_serve()?;
+            let pid = windows_server_pid().ok_or("the server is not running")?;
+            println!("The server is running, pid {pid}. Log: {}", dray_home()?.join("server.log").display());
+            if let Some(url) = tunnel_address()? {
+                println!("\n{}", connect_text(&url)?);
+            }
+        }
+        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
+        ServiceCommand::Tunnel { state: OnOff::Off } => {
+            tunnel_off()?;
+            println!("The tunnel is down.");
+        }
+        ServiceCommand::Uninstall => {
+            #[cfg(windows)]
+            let installed = dray_proto::login::read(dray_proto::login::CLI_VALUE).is_some();
+            #[cfg(not(windows))]
+            let installed = false;
+            // The tree, so the agents go with it, as systemd's stop takes them.
+            let stopped = windows_server_pid()
+                .map(|pid| Command::new("taskkill").args(["/T", "/F", "/PID", &pid]).output().is_ok_and(|o| o.status.success()))
+                .unwrap_or(false);
+            #[cfg(windows)]
+            dray_proto::login::remove(dray_proto::login::CLI_VALUE)
+                .map_err(|e| format!("could not remove the server from sign-in: {e}"))?;
+            println!(
+                "{}",
+                match (installed, stopped) {
+                    (true, _) => "Removed the background server.",
+                    (false, true) => "Stopped the background server.",
+                    (false, false) => "No background server is installed.",
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Starts `dray-serve` at every sign-in through the `Run` key, and now where
+/// none runs. Headless `conhost`, since `dray-serve` is a console program and
+/// would otherwise open a window at each sign-in; its own `--log`, since a
+/// `Run` command has nowhere to send output. Rewritten every time, so it
+/// follows wherever `dray` was last run from, and never restarts a running
+/// server — that would stop its agents.
+fn windows_start() -> Result<String, String> {
+    may_serve()?;
+    let serve = beside("dray-serve")?;
+    let home = std::path::absolute(dray_home()?).map_err(|e| format!("could not resolve DRAY_HOME: {e}"))?;
+    std::fs::create_dir_all(&home).map_err(|e| format!("could not create {}: {e}", home.display()))?;
+    let log = home.join("server.log");
+    let conhost = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()))
+        .join("System32")
+        .join("conhost.exe");
+    let (serve, log, conhost) = (serve.display().to_string(), log.display().to_string(), conhost.display().to_string());
+    let home_pair = format!("DRAY_HOME={}", home.display());
+    let mut args = vec![conhost.as_str(), "--headless", serve.as_str(), "--log", log.as_str()];
+    if own_home() {
+        args.extend(["--env", home_pair.as_str()]);
+    }
+    #[cfg(windows)]
+    dray_proto::login::write(dray_proto::login::CLI_VALUE, &dray_proto::login::command_line(&args))
+        .map_err(|e| format!("could not start the server at sign-in: {e}"))?;
+
+    let was_running = windows_server_pid().is_some();
+    if !was_running {
+        // Directly, not through `conhost --headless`, which exits at once when
+        // started with no console handles to host.
+        spawn_detached(&args[2..]).map_err(|e| format!("could not start the server: {e}"))?;
+        // A server that cannot bind exits at once.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        if windows_server_pid().is_none() {
+            return Err(format!("The server did not stay up. See why: Get-Content -Tail 20 \"{log}\""));
+        }
+    }
+    let mut note = format!("dray server status\n{BAR}  It starts again each time you sign in to Windows.");
+    if was_running {
+        note += &already_running();
+    }
+    Ok(note)
+}
+
+/// Starts `args` with no window, out of this terminal's process group and,
+/// where the job allows it, out of an SSH session's job, which takes its
+/// processes with it on disconnect. Inheriting no handle at all: `std`
+/// spawns with every inheritable one, an SSH session's pipes among them
+/// (through the shell that ran `dray`), and a server holding those would keep
+/// the session from ever ending. The server writes to its `--log` instead.
+#[cfg(windows)]
+fn spawn_detached(args: &[&str]) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, PROCESS_INFORMATION,
+        STARTUPINFOW,
+    };
+    let mut line: Vec<u16> = dray_proto::login::command_line(args).encode_utf16().chain(Some(0)).collect();
+    let mut tried = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB;
+    loop {
+        // SAFETY: zeroed structs of the documented size; `line` is a mutable
+        // NUL-terminated buffer, as CreateProcessW requires.
+        let made = unsafe {
+            let mut startup: STARTUPINFOW = std::mem::zeroed();
+            startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+            let ok = CreateProcessW(
+                std::ptr::null(),
+                line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                tried,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            );
+            if ok != 0 {
+                CloseHandle(info.hProcess);
+                CloseHandle(info.hThread);
+            }
+            ok != 0
+        };
+        if made {
+            return Ok(());
+        }
+        // A job that forbids breaking away refuses the flag; stay inside it.
+        if tried & CREATE_BREAKAWAY_FROM_JOB != 0 {
+            tried &= !CREATE_BREAKAWAY_FROM_JOB;
+            continue;
+        }
+        return Err(std::io::Error::last_os_error());
+    }
+}
+
+#[cfg(not(windows))]
+fn spawn_detached(_: &[&str]) -> std::io::Result<()> {
+    Err(std::io::Error::other("Windows alone"))
+}
+
+/// The pid `serve-port` names, while it still runs a `dray-serve`: the file
+/// outlives a server that died, and its pid can be anything's by now.
+fn windows_server_pid() -> Option<String> {
+    let written = std::fs::read_to_string(dray_home().ok()?.join("serve-port")).ok()?;
+    let pid = written.lines().nth(2)?.trim().to_string();
+    pid.parse::<u32>().ok()?;
+    let list = output("tasklist", &["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])?;
+    list.to_ascii_lowercase().contains("\"dray-serve.exe\"").then_some(pid)
+}
+
 /// How the reader restarts the background server onto the `dray-serve` now on
 /// disk, if one is installed.
 pub fn installed_restart() -> Option<String> {
+    #[cfg(windows)]
+    return dray_proto::login::read(dray_proto::login::CLI_VALUE).map(|_| restart_command());
+    #[allow(unreachable_code)]
     let installed = if MAC { agent_plist_path() } else { unit_path() }.is_ok_and(|p| p.exists());
     installed.then(restart_command)
 }
@@ -938,6 +1219,8 @@ fn restart_command() -> String {
     if MAC {
         let plist = agent_plist_path().map(|p| sh_quote(&p.display().to_string())).unwrap_or_default();
         format!("launchctl bootout {} && launchctl bootstrap {} {plist}", agent_target(), agent_domain())
+    } else if cfg!(windows) {
+        "dray server stop; dray server start".into()
     } else {
         "systemctl --user restart dray".into()
     }
@@ -1028,10 +1311,11 @@ fn agent_start() -> Result<String, String> {
     let home = std::path::absolute(dray_home()?).map_err(|e| format!("could not resolve DRAY_HOME: {e}"))?;
     // 0700, which the server's orchestration socket insists on. launchd opens
     // the log in it before the server could make it.
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&home)
+    let mut dir = std::fs::DirBuilder::new();
+    dir.recursive(true);
+    #[cfg(unix)]
+    dir.mode(0o700);
+    dir.create(&home)
         .map_err(|e| format!("could not create {}: {e}", home.display()))?;
     let log = home.join("server.log");
     let mut env = vec![("PATH", unit_env_path(&serve)?)];
@@ -1111,27 +1395,234 @@ fn linger() -> bool {
         || quiet(Command::new("sudo").args(["-n", "loginctl", "enable-linger", &user]))
 }
 
+fn uid() -> String {
+    output("id", &["-u"]).unwrap_or_default()
+}
+
+/// Whether systemd is PID 1, asked the way `sd_booted` asks.
+fn systemd_booted() -> bool {
+    Path::new("/run/systemd/system").is_dir()
+}
+
+/// Points `systemctl --user` at this user's manager where the login did not
+/// say where it is. A non-interactive SSH login can arrive with no logind
+/// session (a Pi on Ubuntu 25.10 did), so no `XDG_RUNTIME_DIR`, and systemctl
+/// failed there as if the machine had no systemd at all.
+fn find_user_manager() {
+    let runtime = match std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => {
+            let dir = PathBuf::from(format!("/run/user/{}", uid()));
+            std::env::set_var("XDG_RUNTIME_DIR", &dir);
+            dir
+        }
+    };
+    if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none_or(|a| a.is_empty()) {
+        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={}", runtime.join("bus").display()));
+    }
+}
+
+/// Whether the user manager answers, given the few seconds one that linger
+/// just started takes to come up.
+fn wait_for_user_manager() -> bool {
+    for _ in 0..40 {
+        if systemctl(true, &["show-environment"]) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    false
+}
+
+/// The background server where systemd is not there to run one: started
+/// detached, writing to `server.log`, with nothing to bring it back after a
+/// reboot. Never restarts a running server — that would kill its agents.
+fn detached_start() -> Result<String, String> {
+    let serve = beside("dray-serve")?;
+    let home = dray_home()?;
+    std::fs::create_dir_all(&home).map_err(|e| format!("could not create {}: {e}", home.display()))?;
+    let log = home.join("server.log");
+    let again = format!("\n{BAR}  No systemd here, so it will not come back after a reboot. Start it again then: dray server start");
+    if let Some(pid) = detached_pid() {
+        return Ok(format!("dray server status{again}\n{BAR}  It was already running, as pid {pid}."));
+    }
+    let open = || OpenOptions::new().create(true).append(true).open(&log);
+    let (out, err) = open()
+        .and_then(|f| Ok((f.try_clone()?, f)))
+        .map_err(|e| format!("could not open {}: {e}", log.display()))?;
+    let mut command = Command::new(&serve);
+    command
+        .env("PATH", unit_env_path(&serve)?)
+        .env(dray_proto::SELF_RESTART_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(out)
+        .stderr(err);
+    // Its own process group, so neither a terminal hanging up nor Ctrl-C in
+    // the shell that ran this reaches it.
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|e| format!("could not start {}: {e}", serve.display()))?;
+    // Up once it writes its pid under its port, after binding; a server that
+    // cannot bind exits first.
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if detached_pid() == Some(child.id()) {
+            return Ok(format!("dray server status{again}"));
+        }
+        if child.try_wait().is_ok_and(|s| s.is_some()) {
+            break;
+        }
+    }
+    Err(format!("The server did not stay up. See why: tail -n 20 {}", sh_quote(&log.display().to_string())))
+}
+
+/// The pid `serve-port` names, while a `dray-serve` still runs under it: the
+/// file outlives a server that died, and its pid can be anything's by now.
+fn detached_pid() -> Option<u32> {
+    let written = std::fs::read_to_string(dray_home().ok()?.join("serve-port")).ok()?;
+    let pid: u32 = written.lines().nth(2)?.trim().parse().ok()?;
+    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    (name.trim() == "dray-serve").then_some(pid)
+}
+
+/// `dray server` on a Linux with no systemd: a detached server, found by its
+/// pid, since nothing else keeps track of it.
+fn detached_service(command: ServiceCommand) -> Result<(), String> {
+    match command {
+        ServiceCommand::Start => {
+            let note = detached_start()?;
+            println!("The server is running in the background.\n{note}");
+        }
+        ServiceCommand::Status => {
+            let pid = detached_pid().ok_or("the server is not running")?;
+            println!("The server is running, as pid {pid}. No systemd here, so it will not come back after a reboot.");
+            if let Some(url) = tunnel_address()? {
+                println!("\n{}", connect_text(&url)?);
+            }
+        }
+        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
+        ServiceCommand::Tunnel { state: OnOff::Off } => {
+            tunnel_off()?;
+            println!("The tunnel is down; the server is reachable over SSH alone.");
+        }
+        ServiceCommand::Uninstall => {
+            let Some(pid) = detached_pid() else {
+                println!("No background server is running.");
+                return Ok(());
+            };
+            let stopped = Command::new("kill").args(["-TERM", &pid.to_string()]).status().is_ok_and(|s| s.success());
+            if !stopped {
+                return Err(format!("could not stop the server, pid {pid}"));
+            }
+            println!("Stopped the background server.");
+        }
+    }
+    Ok(())
+}
+
+/// The terminal itself, apart from stdin, which under `curl | sh` is the
+/// installer. One file on Unix; Windows' console is two, `CONIN$` and
+/// `CONOUT$`, since neither end of it can do the other's job.
+struct Tty {
+    input: File,
+    output: File,
+}
+
+fn open_tty() -> Option<Tty> {
+    let open = |path: &str| OpenOptions::new().read(true).write(true).open(path).ok();
+    if cfg!(windows) {
+        return Some(Tty { input: open("CONIN$")?, output: open("CONOUT$")? });
+    }
+    let tty = open("/dev/tty")?;
+    Some(Tty { output: tty.try_clone().ok()?, input: tty })
+}
+
+/// The terminal in raw mode for as long as this lives: keys one at a time,
+/// unechoed. Put back on every way out, panics included, or the reader's
+/// shell is left with no echo.
+struct RawTerminal<'a> {
+    tty: &'a Tty,
+    #[cfg(unix)]
+    saved: String,
+    #[cfg(windows)]
+    saved: (u32, u32, u32),
+}
+
+#[cfg(unix)]
+fn stty(tty: &File, args: &[&str]) -> Option<String> {
+    let out = Command::new("stty").args(args).stdin(tty.try_clone().ok()?).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[cfg(unix)]
+impl<'a> RawTerminal<'a> {
+    fn enter(tty: &'a Tty) -> Result<Self, String> {
+        let saved = stty(&tty.input, &["-g"]).ok_or("could not read the terminal's settings")?;
+        stty(&tty.input, &["raw", "-echo"]).ok_or("could not set up the terminal")?;
+        Ok(Self { tty, saved })
+    }
+
+    fn restore(&self) {
+        stty(&self.tty.input, &[self.saved.as_str()]);
+    }
+}
+
+/// Windows' console has no `stty`: line input and echo come off the input
+/// handle's mode, and virtual terminal input makes an arrow the same three
+/// bytes a Unix terminal sends. Ctrl-C arrives as a byte too, with processed
+/// input off, so the picker cancels on it as it does elsewhere. Output goes
+/// to `CONOUT$` as bytes, read in the console's code page, so that is UTF-8
+/// while the picker draws, or `│` lands as `Γöé`.
+#[cfg(windows)]
+impl<'a> RawTerminal<'a> {
+    fn enter(tty: &'a Tty) -> Result<Self, String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Console::{
+            GetConsoleMode, GetConsoleOutputCP, SetConsoleMode, SetConsoleOutputCP, ENABLE_ECHO_INPUT,
+            ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+        };
+        const CP_UTF8: u32 = 65001;
+        let (input, output) = (tty.input.as_raw_handle(), tty.output.as_raw_handle());
+        let (mut i, mut o) = (0, 0);
+        if unsafe { GetConsoleMode(input, &mut i) } == 0 || unsafe { GetConsoleMode(output, &mut o) } == 0 {
+            return Err("could not read the terminal's settings".into());
+        }
+        let this = Self { tty, saved: (i, o, unsafe { GetConsoleOutputCP() }) };
+        let raw = (i & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT;
+        if unsafe { SetConsoleMode(input, raw) } == 0
+            || unsafe { SetConsoleMode(output, o | ENABLE_VIRTUAL_TERMINAL_PROCESSING) } == 0
+            || unsafe { SetConsoleOutputCP(CP_UTF8) } == 0
+        {
+            return Err("could not set up the terminal".into());
+        }
+        Ok(this)
+    }
+
+    fn restore(&self) {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::Console::{SetConsoleMode, SetConsoleOutputCP};
+        unsafe {
+            SetConsoleMode(self.tty.input.as_raw_handle(), self.saved.0);
+            SetConsoleMode(self.tty.output.as_raw_handle(), self.saved.1);
+            SetConsoleOutputCP(self.saved.2);
+        }
+    }
+}
+
+impl Drop for RawTerminal<'_> {
+    fn drop(&mut self) {
+        let _ = write!(&self.tty.output, "\x1b[?25h");
+        self.restore();
+    }
+}
+
 /// A checklist in the `npx skills` style, read off the terminal rather than
 /// stdin, which under `curl | sh` is the installer itself. Arrows move, space
 /// ticks, enter confirms; ctrl-c cancels.
-fn multiselect(tty: &File, title: &str, items: &[(String, bool)]) -> Result<Vec<bool>, String> {
-    let stty = |args: &[&str]| -> Option<String> {
-        let out = Command::new("stty").args(args).stdin(tty.try_clone().ok()?).output().ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
-    let saved = stty(&["-g"]).ok_or("could not read the terminal's settings")?;
-    stty(&["raw", "-echo"]).ok_or("could not set up the terminal")?;
-    // Restored on every way out, panics included, or the reader's shell is
-    // left with no echo.
-    struct Restore<'a>(&'a dyn Fn(&[&str]) -> Option<String>, String, &'a File);
-    impl Drop for Restore<'_> {
-        fn drop(&mut self) {
-            (self.0)(&[self.1.as_str()]);
-            let _ = write!(self.2, "\x1b[?25h");
-        }
-    }
-    let _restore = Restore(&stty, saved, tty);
-    let (mut out, mut input) = (tty, tty);
+fn multiselect(tty: &Tty, title: &str, items: &[(String, bool)]) -> Result<Vec<bool>, String> {
+    let _raw = RawTerminal::enter(tty)?;
+    let (mut out, mut input) = (&tty.output, &tty.input);
 
     let mut on: Vec<bool> = items.iter().map(|(_, on)| *on).collect();
     let mut at = 0;
@@ -1197,6 +1688,7 @@ mod tests {
     /// Runs the browser script against a fake apt that knows only the old
     /// spellings plus `libasound2t64`, and reads back what it installed.
     #[test]
+    #[cfg(unix)]
     fn browser_script_picks_names_after_updating() {
         use std::os::unix::fs::PermissionsExt;
         let script = super::browser_script();
@@ -1226,6 +1718,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_quoted_path_reaches_sh_as_one_word() {
         let path = "/Users/a b'c/x.plist";
         let out = std::process::Command::new("sh")

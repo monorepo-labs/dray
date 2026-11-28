@@ -4,10 +4,14 @@ import "streamdown/styles.css";
 import App from "./App";
 import AccountGate from "@/components/AccountGate";
 import CrashScreen from "@/components/CrashScreen";
+import Onboarding from "@/components/onboarding/Onboarding";
 import { trackActiveDay } from "@/lib/analytics";
+import { copyChipText } from "@/lib/chipCopy";
 import { onFocusChange } from "@/lib/focus";
 import { cancelsWindow, runUnhandledEscape } from "@/lib/escape";
 import { applyIsland } from "@/lib/island";
+import { gatesSignIn } from "@/lib/signInGate";
+import { noteUseDay } from "@/lib/signInNudge";
 import { startSurveys } from "@/lib/surveys";
 import { startAgentUpdateChecks } from "@/hooks/useAgentUpdates";
 import { applyZoom } from "@/lib/zoom";
@@ -17,8 +21,13 @@ import { applyZoom } from "@/lib/zoom";
 // cannot see. Subscribed here rather than from an effect: it lives for the
 // process, and StrictMode double-invokes a mount.
 onFocusChange((focused) => {
-  if (focused) trackActiveDay();
+  if (!focused) return;
+  trackActiveDay();
+  noteUseDay();
 });
+// Launch counts too, as it does for `active_day`: a window that opens
+// frontmost reports no focus change.
+noteUseDay();
 
 // Here for the same reason, and not in an effect for the same reason: the SDK
 // lives for the process, and a mount that runs twice would initialise it twice.
@@ -26,6 +35,8 @@ onFocusChange((focused) => {
 void startSurveys();
 startAgentUpdateChecks();
 void applyIsland();
+// A path drawn as an `@name` chip copies as the path, wherever it is selected.
+document.addEventListener("copy", copyChipText);
 // The webview opens at 100% whatever the reader left it at.
 applyZoom();
 // An Escape or ⌘. nothing handled is passed on to the window, which macOS reads
@@ -41,9 +52,15 @@ window.addEventListener("keydown", (e) => {
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <CrashScreen>
-      <AccountGate>
+      {gatesSignIn(import.meta.env) ? (
+        <AccountGate>
+          <App />
+        </AccountGate>
+      ) : (
         <App />
-      </AccountGate>
+      )}
+      {/* Over the gate as well as the app: a new reader meets it first. */}
+      <Onboarding />
     </CrashScreen>
   </React.StrictMode>,
 );

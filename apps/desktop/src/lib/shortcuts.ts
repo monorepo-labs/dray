@@ -17,12 +17,13 @@ export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Compo
 
 /// The pairs allowed to ship the same default chord, and why.
 ///
-/// `issues.search` lives on the issues page and `composer.fast` on the composer,
-/// and the two are never on screen together — the page replaces the main column
-/// and every composer control with it. Both bindings are gated accordingly, and
-/// `useHotkey` claims a chord only while its binding is enabled, which is the
-/// whole reason [`IssuesView`] releases ⌘⇧F when the page is closed rather than
-/// leaving it bound and eating the key from whatever *is* on screen.
+/// `issues.search` lives on the issues and pull requests pages and
+/// `composer.fast` on the composer, and the two are never on screen together —
+/// a page replaces the main column and every composer control with it. Both
+/// bindings are gated accordingly, and `useHotkey` claims a chord only while
+/// its binding is enabled, which is the whole reason [`PageSearch`] releases
+/// ⌘⇧F when its page is closed rather than leaving it bound and eating the
+/// key from whatever *is* on screen.
 ///
 /// It is a list of pairs rather than a flag on the entry so that adding one is
 /// a deliberate act naming both sides: a `sharesChord: true` on a single row
@@ -35,7 +36,7 @@ export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Compo
 /// `tab.reopen` and `worktree.toggle` share ⌘⇧T on the same terms: the tab row
 /// is mounted only with a session up, the toggle only on the new-task composer.
 ///
-/// [`IssuesView`]: ../components/IssuesView.tsx
+/// [`PageSearch`]: ../components/PageSearch.tsx
 export const SHARED_CHORDS: [string, string][] = [
   ["issues.search", "composer.fast"],
   ["doc.save", "composer.draft"],
@@ -89,7 +90,8 @@ export const SHORTCUTS = [
   { id: "tab.reopen", label: "Reopen closed tab", group: "Panels and views", chord: k("t", { shift: true }) },
   { id: "chat.bottom", label: "Scroll chat to bottom", group: "Panels and views", chord: k("ArrowDown") },
   { id: "issues.open", label: "Open issues", group: "Panels and views", chord: k("i") },
-  { id: "issues.search", label: "Search issues", group: "Panels and views", chord: k("f", { shift: true }) },
+  { id: "pulls.open", label: "Open pull requests", group: "Panels and views", chord: k("p") },
+  { id: "issues.search", label: "Search issues or pull requests", group: "Panels and views", chord: k("f", { shift: true }) },
 
   { id: "dictate", label: "Dictate", group: "Composer", chord: k("d") },
   { id: "attach", label: "Attach files", group: "Composer", chord: k("o", { alt: true }) },
@@ -139,6 +141,8 @@ export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   "mode.toggle": null,
   "agent.update": null,
   "server.next": null,
+  // Was ⌘⇧I; ⌘P was free in the app and the menu bar.
+  "pulls.open": k("i", { shift: true }),
 };
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [

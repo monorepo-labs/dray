@@ -7,7 +7,7 @@ sidebar:
 
 A session is one conversation with one agent, in one project. You start it from the composer on a new task, and it lives in the sidebar from then on.
 
-Click **New Task** at the top of the sidebar, or press `⌘N`. The composer sits in the middle of the window, with a row of controls above it.
+After onboarding, Dray opens on Dray Bot's chat (see [First launch](/get-started/install#first-launch)). To work in a session of your own, click **New Task** at the top of the sidebar, or press `⌘N`. The composer sits in the middle of the window, with a row of controls above it.
 
 {/* screenshot: the new-task composer with its control row: attach, model picker, project, Worktree switch, branch, permission */}
 
@@ -20,12 +20,12 @@ Click **New Task** at the top of the sidebar, or press `⌘N`. The composer sits
     Once you have projects, the same control is a menu. Pick a project, or choose **Attach project…** to add another. `⌘⇧P` steps to the next one.
   </Step>
   <Step title="Pick an agent and a model">
-    Open the model picker, the control showing an agent mark and a model name. The row of marks at the top is the agent: Claude Code, Codex, pi, fx and Grok Build. Click one, then pick a model from the list below it. `⌘⇧A` steps to the next agent, and `⇧Tab` to the next model.
+    Open the model picker, the control showing an agent mark and a model name. The row of marks at the top is the agent: Claude Code, Codex, pi, fx, Grok and OpenCode. Click one, then pick a model from the list below it. `⌘⇧A` steps to the next agent, and `⇧Tab` to the next model.
 
     A model with effort levels opens a submenu when you hover it. **Fast mode** sits under the models where the agent and model have one. See [Agents](/using-dray/agents) for what each one offers.
   </Step>
   <Step title="Choose where it runs">
-    Turn on **Worktree** to give the session its own checkout. Dray makes a new git worktree under `<project>/.claude/worktrees/`, on a branch named `worktree-<name>`. The line beside the switch shows where it starts, like `from origin/main`. Your own checkout is left alone, so several agents can work in one project at once. `⌘⇧T` toggles it. See [Worktrees](/using-dray/worktrees).
+    Turn on **Worktree** to give the session its own checkout. Dray makes a new git worktree under `<project>/.claude/worktrees/`, on a branch named `worktree-<name>`. The branch button beside the switch shows where it starts, like `from origin/main`; click it to start from another branch. Your own checkout is left alone, so several agents can work in one project at once. `⌘⇧T` toggles it. See [Worktrees](/using-dray/worktrees).
 
     Leave it off to run in the project's own folder. Then the branch picker shows the branch checked out there. Picking another branch checks it out for real. If you have uncommitted files, Dray asks first:
 
@@ -41,7 +41,7 @@ Click **New Task** at the top of the sidebar, or press `⌘N`. The composer sits
   </Step>
 </Steps>
 
-Project, branch, worktree and agent are fixed once the session starts, so those controls go away. Model, effort, fast mode and permission mode stay, and you can change them between turns. Some agents take a change during a turn too: see [Agents](/using-dray/agents).
+Project, branch and worktree are fixed once the session starts, so those controls go away. Model, effort, fast mode and permission mode stay, and you can change them between turns. Some agents take a change during a turn too: see [Agents](/using-dray/agents). You can even move the session to another agent, conversation and all: see [Switch to another agent](/using-dray/composer#switch-to-another-agent).
 
 ## What the transcript shows
 
@@ -51,7 +51,7 @@ Project, branch, worktree and agent are fixed once the session starts, so those 
 - A question card when the agent asks you to choose between options. You can also type your own answer.
 - A red row with the agent's own words if a turn fails.
 
-To see everything the session changed in files, open the right panel with `⌘E` and pick **Changes**.
+To see what the latest turn changed in files, open the right panel with `⌘E` and pick **Changes**. The **Diff** tab above the transcript shows the whole repository; see [Tabs](/using-dray/sessions#tabs).
 
 ## Stop a turn
 
@@ -69,5 +69,5 @@ Shortcuts here are the defaults. You can change any of them in Settings → Shor
 
 ## Limits
 
-- One agent per session. To try another agent on the same work, start a new session.
+- One agent at a time per session. Switching agents waits for the running turn to end.
 - A project's branch picker only appears for a git repository.

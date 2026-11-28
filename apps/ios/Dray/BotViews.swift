@@ -60,7 +60,9 @@ struct BotListRow: View {
                     }
                 }
                 // No line at all with nothing to say, so the name sits level with the face.
-                let line = previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? "")
+                // A server that words the line sends it plain; an older one sends the raw reply.
+                let line = preview.flatMap { $0.plain == true ? $0.text : nil }
+                    ?? previewLine(preview?.text ?? bot.greeting?.last ?? bot.welcome ?? "")
                 if item?.busy == true && !asking {
                     TypingDots().frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
                 } else if !line.isEmpty {
@@ -187,18 +189,6 @@ struct BotStartView: View {
 
 /// A bot's chat: the conversation, a line where it started or messaged a task,
 /// merge cards, lessons, and a time label wherever 15 minutes passed between rows.
-/// Between two sessions of one bot chat: the agent the later one runs (`AGENT_LABELS`).
-struct SwitchLine: View {
-    let harness: String?
-
-    var body: some View {
-        Text("Switched to \(harness.map { Picks.agentLabels[$0] ?? $0 } ?? "another agent")")
-            .font(Theme.Font.footnote)
-            .foregroundStyle(Theme.tertiary)
-            .frame(maxWidth: .infinity)
-    }
-}
-
 struct BotChatRows: View {
     /// Any of the chat's sessions: its rows reach only for the server.
     let key: SessionKey
@@ -215,11 +205,8 @@ struct BotChatRows: View {
                 Text(label).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity).padding(.top, Theme.Space.s)
             }
-            if case .item(.switchTo(_, let harness, _)) = row {
-                SwitchLine(harness: harness)
-            } else {
-                BotRowView(key: key, row: row, late: late(items, row))
-            }
+            BotRowView(key: key, row: row, late: late(items, row))
+                .heldRow(row.id)
         }
     }
 
@@ -237,15 +224,22 @@ struct BotChatRows: View {
     }
 }
 
-/// An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge.
+/// An agent's reply as a bot chat draws it: a card-filled bubble short of the trailing edge,
+/// the reader's reaction beside its bottom corner.
 struct ReplyBubble: View {
     let text: String
+    var reaction: String? = nil
+    /// Takes the reader's pick. Nil where nothing reacts: a settled chat, a reply quoted in a sheet.
+    var react: ((String) -> Void)? = nil
 
     var body: some View {
-        MarkdownText(text: text)
+        MarkdownText(text: text, selectable: react == nil)
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, 10)
             .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            // The press and the set are the bubble's own; the badge hangs outside both.
+            .reactable(current: reaction, react)
+            .reaction(reaction, mine: true)
             .padding(.trailing, 32)
     }
 }
@@ -294,12 +288,18 @@ private struct BotRowView: View {
             switch item {
             case .user(_, let text, let images, let reaction, _):
                 UserBubble(text: text, from: nil, images: images, reaction: reaction)
-            case .assistant(_, let text, _):
-                ReplyBubble(text: text)
+            case .assistant(let id, let text, let reaction, let sessionId, _):
+                // The session it was said in, which an earlier one of the chat's still holds.
+                let said = SessionKey(server: key.server, id: sessionId)
+                // A routine's run sits in its bot's folder and draws as its chat, but the server refuses a reaction there.
+                let closed = store.items[said].map { $0.archived == true || $0.routineRun != nil } ?? false
+                ReplyBubble(text: text, reaction: reaction, react: closed ? nil : { emoji in Task { await store.react(said, id, emoji) } })
             case .notice(_, let text, _):
                 FailureRow(text: text)
             case .card(_, let card, _):
                 MergeCardView(server: key.server, card: card, compact: late)
+            case .issues(let id, let card, let sessionId, let started, _):
+                IssueCardView(session: SessionKey(server: key.server, id: sessionId), cardId: id, card: card, started: started)
             case .task(_, let id, let title, _):
                 line("Started a new task") { taskChip(id, title: title) }
             case .sent:
@@ -319,8 +319,8 @@ private struct BotRowView: View {
                         .strikethrough(undone).lineLimit(1)
                 }
                 .font(Theme.Font.subhead)
-            case .switchTo:
-                EmptyView()
+            case .secret(let e):
+                SecretLine(key: key, event: e)
             }
         }
     }
@@ -332,11 +332,16 @@ private struct BotRowView: View {
         }
     }
 
-    /// The task by its index entry, or by a prefix of its id as `dray session send` takes one.
+    /// The task by its index entry, or by a prefix of its id as `dray session send` takes one: on the
+    /// bot's server first, then on any server, since a task on another machine (`--machine`) is that
+    /// machine's, reached as a shared server or a paired one.
     private func task(_ id: String) -> SessionKey? {
         let exact = SessionKey(server: key.server, id: id)
         if store.items[exact] != nil { return exact }
-        let hits = store.items.keys.filter { $0.server == key.server && $0.id.hasPrefix(id.lowercased()) }
+        let prefix = id.lowercased()
+        let hits = store.items.keys.filter { $0.id.hasPrefix(prefix) }
+        let own = hits.filter { $0.server == key.server }
+        if own.count == 1 { return own[0] }
         return hits.count == 1 ? hits[0] : nil
     }
 
@@ -547,6 +552,127 @@ struct MergeCardView: View {
         case .blocked: return ("Blocked", Theme.accent)
         case .conflict, .draft, .unstable, .ready: return nil
         }
+    }
+}
+
+// MARK: Issue card
+
+/// GitHub issues a bot posted with `dray session issue-card`, each on a tile of
+/// its own. A tile opens its issue; its play button hands the issue back to the
+/// bot, and the tile then reads Started. The desktop's `IssueCard`.
+struct IssueCardView: View {
+    @Environment(Store.self) private var store
+    let session: SessionKey
+    let cardId: String
+    let card: IssueCard
+    let started: Set<Int>
+    @State private var opened: IssueCardRow?
+    @State private var sending: Int?
+
+    var body: some View {
+        // A settled chat has no agent to tell, as a reaction there is refused too.
+        let settled = store.items[session].map { $0.archived == true || $0.routineRun != nil } ?? false
+        VStack(alignment: .leading, spacing: 2) {
+            Text(card.repo).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary).lineLimit(1)
+                .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
+            ForEach(card.issues) { row in
+                tile(row, canStart: !settled && !row.closed && !started.contains(row.number))
+            }
+        }
+        .padding(4)
+        .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.group, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.group, style: .continuous).strokeBorder(Theme.hairline))
+        .sheet(item: $opened) { row in
+            NavigationStack {
+                IssueDetailView(issue: issue(row), server: session.server, updated: { _ in }, approve: {
+                    opened = nil
+                    Task { await start(row) }
+                }, startable: !settled && !row.closed && !started.contains(row.number))
+                .toolbar { ToolbarItem(placement: .topBarLeading) { CloseButton() } }
+            }
+        }
+    }
+
+    private func tile(_ row: IssueCardRow, canStart: Bool) -> some View {
+        HStack(spacing: Theme.Space.xs) {
+            Button { opened = row } label: {
+                HStack(spacing: Theme.Space.s) {
+                    Text("#\(String(row.number))")
+                        .font(Theme.Font.subhead.font.monospacedDigit())
+                        .foregroundStyle(row.closed ? Theme.closedIssue : Theme.tertiary)
+                    Text(row.title)
+                        .font(Theme.Font.subhead)
+                        .foregroundStyle(row.closed ? Theme.secondary : Theme.text)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !row.labels.isEmpty {
+                        HStack(spacing: 3) {
+                            ForEach(row.labels.prefix(4), id: \.name) { l in
+                                Circle().fill(Color(trackerHex: l.color)).frame(width: 7, height: 7)
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 10)
+                .padding(.vertical, 10)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("#\(row.number), \(row.closed ? "closed" : "open"), \(row.title)")
+            .accessibilityAddTraits(.isButton)
+            // One width for the button, Started and nothing, so the rows line up. A ZStack, since
+            // an empty Group takes no frame and the labels then slid to the edge.
+            ZStack {
+                if started.contains(row.number) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.add)
+                        .frame(width: 40, height: 40)
+                        .accessibilityLabel("Started")
+                } else if sending == row.number {
+                    ProgressView().controlSize(.small)
+                } else if canStart {
+                    Button { Task { await start(row) } } label: {
+                        Image(systemName: "play")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.secondary)
+                            .frame(width: 40, height: 40)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Work on it")
+                }
+            }
+            .frame(width: 44, alignment: .trailing)
+            .padding(.trailing, 4)
+        }
+        .background(Theme.raised.opacity(0.55), in: .rect(cornerRadius: Theme.Radius.group - 4, style: .continuous))
+    }
+
+    /// Tells the bot to work on it; the logged hand-off it answers with turns the tile to Started.
+    private func start(_ row: IssueCardRow) async {
+        sending = row.number
+        defer { sending = nil }
+        do {
+            _ = try await store.call(session.server, "approve_issue",
+                                     ["sessionId": .string(session.id), "cardId": .string(cardId), "number": .number(Double(row.number))],
+                                     as: JSON.self)
+            Haptic.success()
+        } catch {
+            store.lastError = error.localizedDescription
+            Haptic.error()
+        }
+    }
+
+    /// The row as the issues page's own, whose detail view reads the rest.
+    private func issue(_ row: IssueCardRow) -> Issue {
+        Issue(tracker: "github", id: "", identifier: "\(card.repo)#\(row.number)", title: row.title, url: row.url,
+              state: IssueState(id: "", name: row.closed ? "Closed" : "Open", kind: row.closed ? "completed" : "unstarted",
+                                color: row.closed ? "#a371f7" : "#3fb950"),
+              priority: "none", assignee: nil, author: nil,
+              labels: row.labels.map { IssueLabel(name: $0.name, color: $0.color) }, team: nil, project: nil,
+              updatedAt: "", pullRequests: [], issueType: nil)
     }
 }
 
@@ -986,6 +1112,8 @@ struct BotTasksSheet: View {
     let tasks: [SessionKey]
     /// The bot's chat, newest session first, whose subagents and shells list under the tasks.
     var runs: [SessionKey] = []
+    /// The bot, whose routines list under its attachments.
+    var bot: Bot?
     let open: (SessionKey) -> Void
 
     var body: some View {
@@ -1010,7 +1138,11 @@ struct BotTasksSheet: View {
                         if i > 0 || !pinned.isEmpty { Color.clear.frame(height: 16) }
                         ForEach(run, id: \.self, content: draw)
                     }
-                    if !runs.isEmpty { RunsSections(keys: runs) }
+                    if !runs.isEmpty {
+                        RunsSections(keys: runs)
+                        BotAttachments(chat: runs)
+                    }
+                    if let bot { BotRoutines(server: server, botId: bot.id) }
                 }
                 .padding(.horizontal, Theme.Space.s)
                 .padding(.top, Theme.Space.l)
@@ -1026,6 +1158,8 @@ struct BotTasksSheet: View {
             }
             .background(Theme.card.ignoresSafeArea())
         }
+        // Attachments read from the bot's machine.
+        .environment(\.imageServer, store.connection(server))
         .presentationDetents([.medium, .large])
         .presentationBackground(Theme.card)
         // Tasks are hidden, so the list never reads their repos' marks, and the order rests on them.

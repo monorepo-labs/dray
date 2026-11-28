@@ -1,0 +1,12 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+# Firebase client config, kept out of git: see PLAN.md, Push setup.
+app/google-services.json
+# Play upload key and its passwords: never committed. See app/build.gradle.kts.
+keystore.properties
+*.jks
+*.keystore

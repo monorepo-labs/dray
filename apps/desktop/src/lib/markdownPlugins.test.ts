@@ -4,12 +4,15 @@ import { Streamdown } from "streamdown";
 import { describe, expect, it } from "vitest";
 
 import {
+  FILE_CODE_CLASS,
   FILE_LINK_CLASS,
   FILE_PATH_CLASS,
+  IMAGE_ROW_CLASS,
   linkBareUrls,
   LOCAL_IMAGE_CLASS,
   localImagePath,
   REHYPE_PLUGINS,
+  REHYPE_PLUGINS_WITH_FILE_LINKS,
   REHYPE_PLUGINS_WITH_FILE_PATHS,
   TABLE_CELL_CLASS,
   walk,
@@ -279,19 +282,58 @@ describe("rehypeFilePaths", () => {
     expect(marked(tree)).toEqual([]);
   });
 
-  /// Where an agent puts a path most of the time.
-  it("marks a path inside inline code", () => {
+  /// Inline code is copied as a command, so a path in it drawn as `@fx` was
+  /// copied as `@fx` and the command failed (#1487).
+  it("leaves a path inside inline code as written", () => {
+    const command = "! boat ssh bx_r2n3rxr7 -t /home/user/.local/bin/fx login grok";
     const tree = paragraph([
       {
         type: "element",
         tagName: "code",
         properties: {},
-        children: [{ type: "text", value: "/a/b.ts" }],
+        children: [{ type: "text", value: command }],
       },
     ]);
     walk(tree);
 
-    expect(marked(tree)[0].children).toEqual([{ type: "text", value: "/a/b.ts" }]);
+    expect(marked(tree)).toEqual([]);
+    expect(tree.children![0].children![0].children).toEqual([{ type: "text", value: command }]);
+  });
+
+  /// A lone path in code still opens, but its text stays as written.
+  it("marks inline code that is one path and nothing else", () => {
+    const tree = paragraph([
+      {
+        type: "element",
+        tagName: "code",
+        properties: {},
+        children: [{ type: "text", value: "src/a.ts:12" }],
+      },
+    ]);
+    walk(tree);
+
+    const [span] = marked(tree);
+    expect(span.properties).toMatchObject({
+      className: [FILE_PATH_CLASS, FILE_CODE_CLASS],
+      title: "src/a.ts",
+      dataLine: "12",
+    });
+    expect(span.children).toEqual([{ type: "text", value: "src/a.ts:12" }]);
+  });
+
+  /// Through Streamdown, since what reaches the walk as inline code is its call.
+  it("marks a path in prose and leaves one in code as written", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        Streamdown,
+        { mode: "static", rehypePlugins: REHYPE_PLUGINS_WITH_FILE_PATHS },
+        "See /a/b.ts and `/a/d.ts`, then run `fx -t /home/user/.local/bin/fx login`.\n\n```sh\ncat /a/c.ts\n```",
+      ),
+    );
+    const titles = [...html.matchAll(new RegExp(`class="${FILE_PATH_CLASS}" title="([^"]*)"`, "g"))];
+    expect(titles.map((m) => m[1])).toEqual(["/a/b.ts"]);
+    expect(html).toContain("fx -t /home/user/.local/bin/fx login</code>");
+    expect(html).toContain(`class="${FILE_PATH_CLASS} ${FILE_CODE_CLASS}" title="/a/d.ts">/a/d.ts</span>`);
   });
 
   it("leaves a tree with no path in it untouched", () => {
@@ -518,6 +560,34 @@ describe("local images", () => {
     expect(html).toContain('src="https://example.com/a.png"');
   });
 
+  it("loads relative images in a markdown file, and links only what was written", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        Streamdown,
+        { mode: "static", rehypePlugins: REHYPE_PLUGINS_WITH_FILE_LINKS },
+        [
+          "![shot](images/a.png) See [the plan](docs/PLAN.md#top), src/lib/foo.ts and [site](https://example.com).",
+          "[a](guide.md) [b](../README.md) [c](docs/) [d](/abs/x.ts#L4) [e](#heading) [f](mailto:a@b.c)",
+        ].join("\n\n"),
+      ),
+    );
+    expect(marked(html)).toEqual(["images/a.png"]);
+    const links = [...html.matchAll(/class="([^"]*)" title="([^"]*)"/g)].filter((m) =>
+      m[1].includes(FILE_PATH_CLASS),
+    );
+    expect(links.map((m) => m[2])).toEqual([
+      "./docs/PLAN.md",
+      "./guide.md",
+      "../README.md",
+      "./docs/",
+      "/abs/x.ts",
+    ]);
+    expect(html).toContain('data-line="4"');
+    expect(links[0][1]).toContain(FILE_LINK_CLASS);
+    expect(html).toContain("src/lib/foo.ts and");
+    expect(html).toContain('data-streamdown="link"');
+  });
+
   it("reads which sources name a file", () => {
     expect(localImagePath("/a/b.png")).toBe("/a/b.png");
     expect(localImagePath("/a/My%20b.png")).toBe("/a/My b.png");
@@ -533,5 +603,46 @@ describe("local images", () => {
     ]) {
       expect(localImagePath(src)).toBeNull();
     }
+  });
+});
+
+describe("image rows", () => {
+  function render(md: string): string {
+    return renderToStaticMarkup(
+      createElement(Streamdown, { mode: "static", rehypePlugins: REHYPE_PLUGINS_WITH_FILE_PATHS }, md),
+    );
+  }
+
+  /// Each row's pictures, as the sources and local paths it holds.
+  function rows(html: string): string[][] {
+    const parts = html.split(`class="${IMAGE_ROW_CLASS}"`).slice(1);
+    return parts.map((part) => {
+      const inner = part.split("<p")[0];
+      return [...inner.matchAll(/(?:src|title)="([^"]*)"/g)].map((m) => m[1]);
+    });
+  }
+
+  it("gathers image-only paragraphs into one row, web and local alike", () => {
+    const html = render(
+      [
+        "Screens:",
+        "![a](https://img.drayhq.com/a.png)\n![b](https://img.drayhq.com/b.png)",
+        "![c](/tmp/c.png)",
+        "![d](https://img.drayhq.com/d.png)",
+        "And the desktop one:",
+        "![e](https://img.drayhq.com/e.png)",
+      ].join("\n\n"),
+    );
+    expect(rows(html)).toEqual([
+      ["https://img.drayhq.com/a.png", "https://img.drayhq.com/b.png", "/tmp/c.png", "https://img.drayhq.com/d.png"],
+      ["https://img.drayhq.com/e.png"],
+    ]);
+  });
+
+  it("leaves an image in a sentence or a link where it is", () => {
+    const html = render(
+      "See ![x](https://img.drayhq.com/x.png) here.\n\n[![badge](https://img.shields.io/b.svg)](https://example.com)",
+    );
+    expect(html).not.toContain(IMAGE_ROW_CLASS);
   });
 });

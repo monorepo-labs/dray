@@ -65,7 +65,11 @@ impl Recorder {
         // Refused before anything is filmed: a recording that cannot be
         // converted is one the agent would only find out about at the end.
         if !cfg!(target_os = "macos") && ffmpeg().is_none() {
-            return Err("recording needs ffmpeg on this server; run `dray setup` and pick it".into());
+            return Err(if cfg!(windows) {
+                "recording needs ffmpeg on this machine; install it with `winget install Gyan.FFmpeg`".into()
+            } else {
+                "recording needs ffmpeg on this server; run `dray setup` and pick it".into()
+            });
         }
         std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         let mov = dir.join(format!("{stem}.mov"));
@@ -272,7 +276,7 @@ fn holds_mp4(path: &Path) -> bool {
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
-    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+    matches!((dunce::canonicalize(a), dunce::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
 /// macOS converts what AVFoundation reads and turns to ffmpeg, where there is
@@ -349,9 +353,13 @@ fn run(name: &str, mut command: std::process::Command) -> Result<(), String> {
 /// by systemd or launchd has a short `PATH`.
 fn ffmpeg() -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
+    // winget's links, which a process started before the install has no
+    // `PATH` entry for.
+    let winget = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join(r"Microsoft\WinGet\Links"));
     std::env::split_paths(&path)
         .chain(["/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/snap/bin"].map(PathBuf::from))
-        .map(|dir| dir.join("ffmpeg"))
+        .chain(winget.filter(|_| cfg!(windows)))
+        .map(|dir| dir.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }))
         .find(|p| p.is_file())
 }
 
@@ -616,6 +624,24 @@ mod tests {
             let refused = add(&source, &filed, None).unwrap_err();
             assert!(!refused.is_empty());
             assert_eq!(std::fs::read_dir(&filed).unwrap().count(), 0, "{refused}");
+        }
+    }
+
+    /// T3 Code found an agent asks for a secret in chat unless the way to ask
+    /// is always in front of it, so every harness and the skill carry it.
+    #[test]
+    fn every_prompt_and_the_skill_say_how_to_ask_for_a_secret() {
+        for prompt in [
+            include_str!("harness/claude_code/system_prompt.md"),
+            include_str!("harness/codex/developer_instructions.md"),
+            include_str!("harness/fx/system_prompt.md"),
+            include_str!("harness/grok/system_prompt.md"),
+            include_str!("harness/pi/system_prompt.md"),
+            include_str!("harness/opencode/system_prompt.md"),
+            include_str!("../../../cli/skill/SKILL.md"),
+        ] {
+            assert!(prompt.contains("dray secret request"));
+            assert!(prompt.contains("never invent one"));
         }
     }
 

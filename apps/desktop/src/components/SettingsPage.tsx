@@ -10,6 +10,7 @@ import {
   Square3Stack3DIcon,
   PaintBrushIcon,
   KeyIcon,
+  LockClosedIcon,
   NewspaperIcon,
   ServerStackIcon,
 } from "@heroicons/react/16/solid";
@@ -63,20 +64,24 @@ import AppShell from "@/components/layout/AppShell";
 import WindowControls from "@/components/layout/WindowControls";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
+import SecretsSettings from "@/components/settings/SecretsSettings";
 import HandoffSettings from "@/components/settings/HandoffSettings";
 import SettingRow from "@/components/settings/SettingRow";
 import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
-import { HAS_DICTATION, IS_LINUX, IS_MAC } from "@/lib/platform";
+import { IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
+import { SETTINGS_TABS as SETTINGS_TAB_IDS, type SettingsTab } from "@/lib/settingsTabs";
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
-import { invoke } from "@/lib/transport";
+import { startSurveys } from "@/lib/surveys";
+import { invoke, LOCAL } from "@/lib/transport";
 import { hasLightMode, modeFor, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import type {
+  AnalyticsSetting,
   ExternalApp,
   Project,
   UpdateChannel,
@@ -87,6 +92,9 @@ import type {
 /// the next person with the same bug can find; a direct message is beside it for
 /// what an issue is too heavy for.
 const CONTACT_URL = "https://x.com/yogesharc";
+
+/// The privacy page's list of every analytics event, error reports included.
+const TRACKED_URL = "https://www.drayhq.com/docs/reference/privacy#what-is-sent";
 const REPO_URL = "https://github.com/monorepo-labs/dray";
 const ISSUES_URL = `${REPO_URL}/issues/new`;
 // The landing page's own link, so both ask through one door.
@@ -232,6 +240,7 @@ export default function SettingsPage({
         ),
         servers: <ServersSettings />,
         accounts: <AccountsSettings cwd={cwd} />,
+        secrets: <SecretsSettings />,
         transcription: (
           <TranscriptionSettings
             status={transcription.status}
@@ -278,6 +287,7 @@ export default function SettingsPage({
                   View changelog
                 </Button>
               </SettingRow>
+              <AnalyticsRow />
             </Section>
             {/* The two blocks here with no label of their own, so they are the
                 ones that still want a heading over them. */}
@@ -402,11 +412,11 @@ function OpenFilesRow() {
   const choices = fileOpenerChoices(apps ?? []);
   const pick = pickFileOpener(apps ?? [], stored);
   const editors = choices.filter((app) => app.kind === "editor");
-  // Finder on a Mac; on Linux whichever file manager the scan listed.
+  // Finder on a Mac; off it, whichever file manager the scan listed.
   const files = choices.find((app) => app.kind === "files")?.name ?? (IS_MAC ? "Finder" : "the file manager");
 
-  const unavailable = !IS_MAC && !IS_LINUX
-    ? "Opening a file in another app needs macOS or Linux for now."
+  const unavailable = !IS_MAC && !IS_LINUX && !IS_WINDOWS
+    ? "Opening a file in another app needs macOS, Linux or Windows for now."
     : apps !== null && editors.length === 0
       ? `No editor Dray knows about is installed, so filenames open in ${files}.`
       : null;
@@ -728,6 +738,66 @@ function UpdatesRow({
       ) : (
         button
       )}
+    </SettingRow>
+  );
+}
+
+/// The analytics opt-out. This Mac's server owns the setting, since it and
+/// the app both read it before any webview exists.
+function AnalyticsRow() {
+  const id = useId();
+  /// `null` until the first read lands; the switch stays disabled rather than
+  /// guessing, since either guess is wrong for somebody.
+  const [setting, setSetting] = useState<AnalyticsSetting | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    invoke<AnalyticsSetting>("analytics_setting", {}, LOCAL)
+      .then((now) => live && setSetting(now))
+      .catch((e) => console.error("[analytics setting]", e));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /// Drawn from the server's answer, not optimistically, so a failed write
+  /// leaves the switch where the truth is.
+  const toggle = (on: boolean) => {
+    invoke<AnalyticsSetting>("set_analytics_enabled", { on }, LOCAL)
+      .then((now) => {
+        setSetting(now);
+        void startSurveys();
+      })
+      .catch((e) => console.error("[analytics setting]", e));
+  };
+
+  return (
+    <SettingRow
+      id={id}
+      label="Share usage analytics"
+      description={
+        setting?.locked ? (
+          "Turned off by DRAY_NO_ANALYTICS."
+        ) : (
+          <>
+            Anonymous counts of what gets used. Never your prompts or code.{" "}
+            <button
+              type="button"
+              onClick={() => void openUrl(TRACKED_URL)}
+              className="cursor-pointer text-foreground underline-offset-4 hover:underline"
+            >
+              See what's tracked
+            </button>
+          </>
+        )
+      }
+    >
+      <Switch
+        id={id}
+        disabled={!setting || setting.locked}
+        checked={setting?.enabled ?? false}
+        onCheckedChange={toggle}
+      />
     </SettingRow>
   );
 }
@@ -1165,8 +1235,9 @@ function IslandSettings() {
             </DropdownMenuContent>
           </DropdownMenu>
         </SettingRow>
-        {/* Linux's island opens on one tap, two opening it listening, and
-            takes its screenshot on Super+Shift+2: neither is a pick there. */}
+        {/* The Linux and Windows island opens on one tap, two opening it
+            listening, and takes its screenshot on Super/Win+Shift+2: neither
+            is a pick there. */}
         {IS_MAC && (
           <SettingRow
             id={tapId}
@@ -1211,7 +1282,7 @@ function IslandSettings() {
             labelledBy={layoutId}
           />
         </SettingRow>
-        {/* The Linux island draws no transcript above the draft yet. */}
+        {/* The Linux and Windows island draws no transcript above the draft yet. */}
         {IS_MAC && (
           <SettingRow
             id={messagesId}
@@ -1327,14 +1398,14 @@ function PositionPicture({ bottom }: { bottom: boolean }) {
   );
 }
 
-/// The Mac's `notch` is the top of the screen on Linux, which has none.
+/// The Mac's `notch` is the top of the screen on Linux and Windows, which have none.
 const ISLAND_PLACEMENTS = [
-  IS_LINUX
-    ? { id: "notch", label: "Top", hint: "At the top of the screen.", picture: <PositionPicture bottom={false} /> }
-    : { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> },
-  IS_LINUX
-    ? { id: "bottom", label: "Bottom", hint: "At the bottom of the screen.", picture: <PositionPicture bottom /> }
-    : { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> },
+  IS_MAC
+    ? { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> }
+    : { id: "notch", label: "Top", hint: "At the top of the screen.", picture: <PositionPicture bottom={false} /> },
+  IS_MAC
+    ? { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> }
+    : { id: "bottom", label: "Bottom", hint: "At the bottom of the screen.", picture: <PositionPicture bottom /> },
 ] as const;
 const ISLAND_LAYOUTS = [
   { id: "compact", label: "Compact", hint: "The orb beside the input.", picture: <LayoutPicture expanded={false} /> },
@@ -1408,7 +1479,9 @@ function CaptureKeyRow({
             }}
           >
             {recording ? (
-              <span className="text-ui text-muted-foreground">Press a shortcut, ⌫ for none…</span>
+              <span className="text-ui text-muted-foreground">
+                Press a shortcut, {IS_MAC ? "⌫" : "Backspace"} for none…
+              </span>
             ) : capture ? (
               <KbdGroup>
                 {captureCaps(capture).map((cap) => (
@@ -1447,30 +1520,29 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
   );
 }
 
-/// Set *and* order, so a group added later is one entry plus one body. Icons
-/// are Heroicons' filled 16px set, drawn for small sizes, at the sidebar rows'
-/// own 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
-const ALL_TABS = [
-  { id: "appearance", label: "Appearance", Icon: PaintBrushIcon },
-  { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
-  { id: "servers", label: "Servers", Icon: ServerStackIcon },
-  { id: "accounts", label: "Agents", Icon: KeyIcon },
-  { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
-  { id: "integrations", label: "Integrations", Icon: PuzzlePieceIcon },
-  { id: "shortcuts", label: "Shortcuts", Icon: BoltIcon },
-  { id: "island", label: "Island", Icon: ComputerDesktopIcon },
-  { id: "composer", label: "Composer", Icon: ChatBubbleBottomCenterTextIcon },
-  { id: "breaks", label: "Breaks", Icon: ClockIcon },
-  { id: "changelog", label: "Changelog", Icon: NewspaperIcon },
-  { id: "about", label: "About", Icon: InformationCircleIcon },
-] as const;
+/// Set and order live in [settingsTabs.ts](../lib/settingsTabs.ts), so a group
+/// added later is one id there, one entry here and one body. Icons are
+/// Heroicons' filled 16px set, drawn for small sizes, at the sidebar rows' own
+/// 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
+const TAB_LOOKS: Record<SettingsTab, { label: string; Icon: typeof PaintBrushIcon }> = {
+  appearance: { label: "Appearance", Icon: PaintBrushIcon },
+  spaces: { label: "Spaces", Icon: Square3Stack3DIcon },
+  servers: { label: "Servers", Icon: ServerStackIcon },
+  accounts: { label: "Agents", Icon: KeyIcon },
+  secrets: { label: "Vault", Icon: LockClosedIcon },
+  transcription: { label: "Transcription", Icon: MicrophoneIcon },
+  integrations: { label: "Integrations", Icon: PuzzlePieceIcon },
+  shortcuts: { label: "Shortcuts", Icon: BoltIcon },
+  island: { label: "Island", Icon: ComputerDesktopIcon },
+  composer: { label: "Composer", Icon: ChatBubbleBottomCenterTextIcon },
+  breaks: { label: "Breaks", Icon: ClockIcon },
+  changelog: { label: "Changelog", Icon: NewspaperIcon },
+  about: { label: "About", Icon: InformationCircleIcon },
+};
 
-export type SettingsTab = (typeof ALL_TABS)[number]["id"];
+export type { SettingsTab };
 
-/// Dray Island runs on a Mac and on Linux, so elsewhere its tab would be a page of controls for nothing.
-const SETTINGS_TABS = ALL_TABS.filter(
-  (t) => (IS_MAC || IS_LINUX || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
-);
+const SETTINGS_TABS = SETTINGS_TAB_IDS.map((id) => ({ id, ...TAB_LOOKS[id] }));
 
 /// A line under a tab's title saying what the tab is for. Accounts has one
 /// because its harness switches change what the composer's picker offers,
@@ -1479,6 +1551,7 @@ const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
   accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
   composer:
     "The buttons that rise out of the composer's top edge on hover. Each sends its prompt as if you had typed it.",
+  secrets: "Saved on each machine. Values can't be read back.",
   // Agents add machines with `dray machine add`, which nothing here would say.
   servers: "Ask your bot or any session to set one up for you. No need to add each by hand.",
   // Nothing on the island says it has a menu.
@@ -1567,7 +1640,7 @@ function SettingsTabs({
               </TooltipContent>
             </Tooltip>
           </div>
-          <WindowControls />
+          <WindowControls padded />
         </header>
       }
       sidebar={

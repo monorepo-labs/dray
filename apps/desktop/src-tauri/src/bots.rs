@@ -80,6 +80,9 @@ const POINTER_TEXT: &str = "@AGENTS.md\n";
 /// A folder, one `YYYY-MM-DD-title.md` per memory. Never put in the prompt:
 /// the bot lists and greps it when it needs to, so it costs nothing to keep.
 pub const MEMORY: &str = "memory";
+/// Documents the bot makes for the user to open later, sorted into category
+/// folders by the bot. Made empty so the prompt's path is real from the start.
+pub const DOCS: &str = "docs";
 
 /// Past this the bot is told to ask the user what to cut. The agent loads the
 /// file whole, so one let grow without bound crowds out the conversation.
@@ -143,10 +146,10 @@ pub const ASK_NAME: &str = "What should I call you?";
 /// What a bot may call the user, best source first (#1313).
 #[derive(Debug, Clone, PartialEq)]
 pub enum UserName {
-    /// Told to a bot, written in its [`USER_FILE`], or a real name off the account.
+    /// Told to a bot, written in its [`USER_FILE`], or the account's first name.
     Known(String),
-    /// The account's name reads as a handle or email prefix: offered back to
-    /// confirm, never used unasked.
+    /// The account's name is only its GitHub login: offered back to confirm,
+    /// never used unasked.
     Handle(String),
     Unknown,
 }
@@ -170,30 +173,17 @@ impl UserName {
     }
 }
 
-/// What the signed-in account's name gives the bots. GitHub falls back to the
-/// login where a profile has no name, and email sign-up names the account
-/// after the address's local part, so a name only counts as real where it
-/// reads like one: a capitalised word of letters, not the username.
+/// What the signed-in account's name gives the bots: its first word, as typed,
+/// since sign-up asks for a name. The exception is GitHub's fallback to the
+/// login where a profile has no name, which is offered back to confirm.
 fn account_name(user: &crate::dray_account::DrayUser) -> UserName {
     let Some(name) = clean_name(user.name.split('@').next().unwrap_or_default()) else {
         return UserName::Unknown;
     };
-    let first = name.split_whitespace().next().unwrap_or_default();
-    let joiner = |c: char| matches!(c, '-' | '\'' | '’');
-    let lead = first.chars().next().unwrap_or_default();
-    // An uncased script (CJK and the like) has no capital to look for.
-    let capital = lead.is_uppercase() || (lead.is_alphabetic() && !lead.is_lowercase());
-    // A capital mid-word reads as a handle ("YogeshArc"); after a hyphen it is a name ("Anne-Marie").
-    let lettered = first
-        .chars()
-        .zip(first.chars().skip(1))
-        .all(|(before, c)| joiner(c) || (c.is_alphabetic() && (!c.is_uppercase() || joiner(before))));
-    let handle = user.username.as_deref().is_some_and(|u| u.eq_ignore_ascii_case(&name));
-    if capital && lettered && !handle && !user.name.contains('@') {
-        UserName::Known(first.to_string())
-    } else {
-        UserName::Handle(name)
+    if user.github_login.as_deref().is_some_and(|login| login.eq_ignore_ascii_case(&name)) {
+        return UserName::Handle(name);
     }
+    UserName::Known(name.split_whitespace().next().unwrap_or_default().to_string())
 }
 
 /// What `bot` may call the user: a name told to any bot wins, then one in its
@@ -343,6 +333,9 @@ async fn mark_welcome(session_id: &str, bot: &Bot) {
 /// Marks a new chat in `cwd`: for the conversation so far where the bot has
 /// talked before, which is an agent switch, else for its welcome.
 pub async fn mark_new_chat(session_id: &str, cwd: &str, harness: Harness) {
+    if !opens_chat(session_id) {
+        return;
+    }
     let Some(bot) = bot_at(cwd).await else { return };
     let earlier: Vec<SessionIndexItem> = chat_sessions(&bot.path)
         .await
@@ -360,6 +353,14 @@ pub async fn mark_new_chat(session_id: &str, cwd: &str, harness: Harness) {
     }
     let text = handover_prompt(&earlier, harness).await;
     restore_handover(session_id, text);
+}
+
+/// Whether new session `session_id` in a bot's folder is the chat itself. A
+/// routine's run shares the folder but is never the chat: read as an agent
+/// switch, every run killed the chat's agent mid-turn and was handed the whole
+/// conversation (#1588).
+pub(crate) fn opens_chat(session_id: &str) -> bool {
+    crate::routines::pending_run(session_id).is_none()
 }
 
 /// Marks a chat being resumed that took over from an earlier agent and has no
@@ -428,6 +429,17 @@ pub fn take_handover(session_id: &str) -> Option<String> {
     let mut handovers = HANDOVERS.lock().unwrap();
     let at = handovers.iter().position(|(id, _)| id == session_id)?;
     Some(handovers.remove(at).1)
+}
+
+/// Queues `text` ahead of `session_id`'s next prompt, after anything already
+/// waiting there. For a running task handed to a bot, whose child read its
+/// system prompt before it had a bot to report to.
+pub fn lead_in(session_id: &str, text: String) {
+    let mut handovers = HANDOVERS.lock().unwrap();
+    match handovers.iter_mut().find(|(id, _)| id == session_id) {
+        Some((_, waiting)) => waiting.push_str(&text),
+        None => handovers.push((session_id.to_string(), text)),
+    }
 }
 
 /// Queues a hand-over, or puts one back after a send that failed, so the
@@ -881,6 +893,7 @@ enum Note {
     Renamed,
     UserName,
     Moved,
+    Docs,
 }
 
 /// Tells the bot at `path` `note` ahead of its next prompt.
@@ -890,6 +903,7 @@ fn note_bot(path: &str, kind: Note, note: String) {
         Note::Renamed => "The user renamed you",
         Note::UserName => "The user asked to be called",
         Note::Moved => "Your instructions moved",
+        Note::Docs => "Your folder now has",
     };
     notes.retain(|(p, n)| !(same_dir(p, path) && n.starts_with(tag(&kind))));
     debug_assert!(note.starts_with(tag(&kind)));
@@ -998,7 +1012,7 @@ async fn handover_prompt(earlier: &[SessionIndexItem], harness: Harness) -> Stri
     let older = if cut { "Older messages are left out. " } else { "" };
 
     format!(
-        "[Dray: the user just moved you, this bot, to {agent}. You are the same bot, with the same instructions and memory; only the agent running you changed. Below is the conversation so far, oldest first, text only. {older}The full logs, one JSON event per line, are:\n{logs}{tasks}\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\nThe user's new message:\n\n",
+        "[Dray: the user just moved you, this bot, to {agent}. You are the same bot, with the same instructions and memory; only the agent running you changed. Below is the conversation so far, oldest first, text only. {older}The full logs, one JSON event per line, are:\n{logs}{tasks}\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\n{NEW_MESSAGE_CUE}\n\n",
         agent = harness.label(),
         logs = logs.join("\n"),
     )
@@ -1047,6 +1061,258 @@ fn replay(events: &[crate::events::AgentEvent]) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// How much of a task's conversation a new agent is handed (#1414): a quarter
+/// of a 200k-token window, at about four bytes a token. A bot's chat is mostly
+/// talk, so it keeps [`HANDOVER_CAP`].
+const TASK_HANDOVER_CAP: usize = 200_000;
+/// The opening stretch of a task kept whatever the cap cuts: its brief and the
+/// first steers, which the newest messages rarely restate.
+const TASK_HANDOVER_HEAD: usize = 30_000;
+
+/// Whether `e` shows the agent it names took part in the conversation: a
+/// prompt reached it or a turn of its own closed. A turn that says nothing (an
+/// early Stop, an API error) still leaves the CLI holding the conversation.
+fn joined(e: &crate::events::AgentEvent) -> bool {
+    use crate::events::AgentEventPayload as P;
+    e.subagent.is_none()
+        && matches!(
+            e.payload,
+            P::UserMessage { .. } | P::TurnCompleted { .. } | P::AssistantText { .. } | P::ToolCallStarted { .. }
+        )
+}
+
+/// What followed a task's newest agent switch, as `agent` saw it: the
+/// switch's `(to, resumed)`, whether a prompt reached `agent` since (its CLI
+/// then holds the conversation), and whether it answered (text or a tool
+/// call). Another agent's lines never count: a killed child's reader can log
+/// one after the switch. Stops at the first answer, which leaves nothing owed.
+async fn since_switch(id: &str, agent: Harness) -> (Option<(Harness, bool)>, bool, bool) {
+    use crate::events::AgentEventPayload as P;
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+    let prompted = AtomicBool::new(false);
+    let found = crate::store::find_newest(id, |events| {
+        events.iter().rev().filter(|e| e.subagent.is_none()).find_map(|e| match &e.payload {
+            P::AgentSwitched { to, resumed, .. } => Some(Some((*to, *resumed))),
+            _ if e.harness != agent => None,
+            P::AssistantText { .. } | P::ToolCallStarted { .. } => Some(None),
+            _ if joined(e) => {
+                prompted.store(true, Relaxed);
+                None
+            }
+            _ => None,
+        })
+    })
+    .await
+    .ok()
+    .flatten();
+    let prompted = prompted.load(Relaxed);
+    match found {
+        Some(None) => (None, true, true),
+        Some(switch) => (switch, prompted, false),
+        None => (None, prompted, false),
+    }
+}
+
+/// Whether the agent a task runs on now holds a conversation under its id, so
+/// a switch back to it can resume. An unspawned fork holds none of its own,
+/// bar pi's, whose session file was copied whole at the fork.
+pub async fn agent_joined(item: &SessionIndexItem) -> bool {
+    (item.fork_from.is_none() || item.harness == Harness::Pi) && since_switch(&item.session_id, item.harness).await.1
+}
+
+/// How every hand-over ends, right before the reader's own words. Dropped
+/// where the lead-in has to follow those words instead (`lead_in_around`).
+pub const NEW_MESSAGE_CUE: &str = "The user's new message:";
+
+/// The last replay queued for each task, kept whole so it is found in
+/// [`HANDOVERS`] by its own text: a conversation about this very code can hold
+/// any marker a search for its edges would use.
+static TASK_REPLAYS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Takes a task's waiting replay out of [`HANDOVERS`], leaving any lead-in
+/// beside it.
+pub fn drop_task_handover(session_id: &str) {
+    let mut replays = TASK_REPLAYS.lock().unwrap();
+    let Some(at) = replays.iter().position(|(id, _)| id == session_id) else { return };
+    let (_, replay) = replays.remove(at);
+    let mut handovers = HANDOVERS.lock().unwrap();
+    let Some(at) = handovers.iter().position(|(id, _)| id == session_id) else { return };
+    let text = &mut handovers[at].1;
+    if let Some(start) = text.find(&replay) {
+        text.replace_range(start..start + replay.len(), "");
+    }
+    if text.is_empty() {
+        handovers.remove(at);
+    }
+}
+
+/// Whether `session_id`'s queued replay still waits in [`HANDOVERS`], taken by
+/// no send yet or put back by a failed one.
+fn replay_waiting(session_id: &str) -> bool {
+    let replays = TASK_REPLAYS.lock().unwrap();
+    let Some((_, replay)) = replays.iter().find(|(id, _)| id == session_id) else { return false };
+    HANDOVERS.lock().unwrap().iter().any(|(id, text)| id == session_id && text.contains(replay.as_str()))
+}
+
+/// Hands a task's next prompt the conversation where its newest agent switch
+/// has no answer yet: the send that made it, a retry after a failed send or a
+/// restart, or one after a turn that ended before the agent said anything,
+/// whose prompt the CLI may have dropped. Answers whether the agent resumes a
+/// conversation of its own; `None` where no switch is waiting.
+pub async fn mark_switch_if_unanswered(item: &SessionIndexItem) -> Option<bool> {
+    if !item.switched {
+        return None;
+    }
+    let id = &item.session_id;
+    let (switch, prompted, answered) = since_switch(id, item.harness).await;
+    let Some((_, resumed)) = switch.filter(|(to, _)| !answered && *to == item.harness) else {
+        TASK_REPLAYS.lock().unwrap().retain(|(i, _)| i != id);
+        return None;
+    };
+    if !replay_waiting(id) {
+        let events = crate::store::list_session_events(id).await.unwrap_or_default();
+        let replay = task_handover_prompt(item, &events, resumed).await;
+        // After anything already waiting, such as a bot's lead-in note.
+        lead_in(id, replay.clone());
+        let mut replays = TASK_REPLAYS.lock().unwrap();
+        replays.retain(|(i, _)| i != id);
+        replays.push((id.clone(), replay));
+    }
+    Some(resumed || prompted)
+}
+
+/// The hidden note a task's new agent reads ahead of the reader's message:
+/// the conversation replayed from the log, as a bot's is. An agent picking its
+/// own conversation back up is handed only what happened since it left.
+async fn task_handover_prompt(item: &SessionIndexItem, events: &[crate::events::AgentEvent], resumed: bool) -> String {
+    use crate::events::AgentEventPayload as P;
+    let switches: Vec<(usize, Harness)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e.payload {
+            P::AgentSwitched { from, .. } => Some((i, from)),
+            _ => None,
+        })
+        .collect();
+    let Some(&(end, _)) = switches.last() else { return String::new() };
+    let to = item.harness;
+    // Back to an agent: from the switch that took the task off it after it
+    // last joined, since a stay with no send gave it nothing to remember.
+    let start = match resumed {
+        true => events[..end]
+            .iter()
+            .rposition(|e| e.harness == to && joined(e))
+            .and_then(|last| switches.iter().find(|(i, _)| *i > last))
+            .map_or(0, |(i, _)| *i),
+        false => 0,
+    };
+
+    let mut entries = Vec::new();
+    if start == 0 {
+        entries.push(format!("[on {}]", switches[0].1.label()));
+    }
+    let mut tools: Vec<String> = Vec::new();
+    for e in events[start..end].iter().filter(|e| e.subagent.is_none()) {
+        let line = match &e.payload {
+            P::AgentSwitched { to, .. } => format!("[on {}]", to.label()),
+            P::UserMessage { kickoff: true, .. } => continue,
+            P::UserMessage { text, from: Some(_), .. } => text.trim().to_string(),
+            P::UserMessage { text, .. } => format!("User: {}", text.trim()),
+            P::AssistantText { text, .. } if crate::events::has_text(text) => format!("Agent: {}", text.trim()),
+            P::ToolCallStarted { name, tool_type, input, title, .. } => {
+                tools.push(tool_line(name, *tool_type, input, title.as_deref(), &item.cwd));
+                continue;
+            }
+            _ => continue,
+        };
+        if !tools.is_empty() {
+            entries.push(std::mem::take(&mut tools).join("\n"));
+        }
+        entries.push(line);
+    }
+    if !tools.is_empty() {
+        entries.push(tools.join("\n"));
+    }
+
+    let (kept, cut) = head_and_newest_within(&entries, TASK_HANDOVER_HEAD, TASK_HANDOVER_CAP);
+    let conversation = escape(&kept.join("\n\n"), "conversation");
+    let log = crate::store::get_session_path(&item.session_id)
+        .await
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let agent = to.label();
+    let what = match resumed {
+        true => format!("the user moved this task to another agent for a while and has now moved it back to you, {agent}. Below is what happened while you were away"),
+        false => format!("the user just moved this task to you, {agent}, from another agent. You work in the same folder and branch, and the work so far is on disk. Below is the conversation so far"),
+    };
+    let middle = if cut { "Part of the middle is left out, marked […]. " } else { "" };
+    format!(
+        "[Dray: {what}, oldest first: the user's messages and the agent's replies in full, and each tool call as one line with no output, since the files show the result. {middle}The full log, one JSON event per line, is {log}.\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\n{NEW_MESSAGE_CUE}\n\n"
+    )
+}
+
+/// One tool call as a hand-over line: what it did, never what it returned.
+fn tool_line(name: &str, kind: crate::events::ToolType, input: &serde_json::Value, title: Option<&str>, cwd: &str) -> String {
+    use crate::events::ToolType as T;
+    let field = |keys: &[&str]| keys.iter().find_map(|k| input.get(*k).and_then(serde_json::Value::as_str));
+    let path = field(&["file_path", "path", "notebook_path"]).map(|p| {
+        p.strip_prefix(&format!("{cwd}/")).unwrap_or(p)
+    });
+    let what = match kind {
+        T::Shell => field(&["command", "cmd"]).or(title).map(|c| format!("ran {c}")),
+        T::FileEdit => path.map(|p| format!("edited {p}")),
+        T::FileRead => path.map(|p| format!("read {p}")),
+        T::Search => field(&["pattern", "query"]).map(|q| format!("searched for {q}")),
+        T::Web => field(&["url", "query"]).map(|q| format!("looked up {q}")),
+        T::SubagentSpawn => field(&["description"]).map(|d| format!("started a subagent: {d}")),
+        _ => None,
+    };
+    let line = what.unwrap_or_else(|| match title {
+        Some(t) => format!("{name}: {t}"),
+        None => format!("called {name}"),
+    });
+    // A heredoc or a long prompt is one line here, and a short one.
+    let line = format!("- {}", line.split_whitespace().collect::<Vec<_>>().join(" "));
+    match line.char_indices().nth(200) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line,
+    }
+}
+
+/// Every entry where they fit in `cap` bytes; else the oldest up to `head`
+/// bytes, a `[…]` where the middle is left out, and the newest that fit in what
+/// is left. Answers whether any middle was left out. An opening entry larger
+/// than `head` keeps its start, cut off with `…`.
+fn head_and_newest_within(entries: &[String], head: usize, cap: usize) -> (Vec<String>, bool) {
+    if entries.iter().map(String::len).sum::<usize>() <= cap {
+        return (entries.to_vec(), false);
+    }
+    let mut kept = Vec::new();
+    let mut used = 0;
+    for entry in entries {
+        if used + entry.len() > head {
+            break;
+        }
+        used += entry.len();
+        kept.push(entry.clone());
+    }
+    if kept.is_empty() {
+        let mut end = head.min(entries[0].len());
+        while !entries[0].is_char_boundary(end) {
+            end -= 1;
+        }
+        kept.push(format!("{}…", &entries[0][..end]));
+        used = end;
+    }
+    // A brief cut short and everything after it whole leaves out no middle.
+    let (tail, cut) = newest_within(&entries[kept.len()..], cap - used);
+    if cut {
+        kept.push("[…]".into());
+    }
+    kept.extend(tail);
+    (kept, cut)
 }
 
 /// Makes the folder, both files and the list entry. Both files start empty: the
@@ -1342,6 +1608,7 @@ async fn make_bot(name: String, avatar: Option<BotAvatar>, welcome: Option<Strin
     // Before the first commit, so the ignore rule is in it and the pointer never is.
     write_pointer(&dir).await;
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.context("could not make the bot's memory folder")?;
+    tokio::fs::create_dir_all(dir.join(DOCS)).await.ok();
 
     let bot = Bot {
         id,
@@ -1402,14 +1669,20 @@ pub async fn delete_bot(id: String, sink: Sink) -> Result<(), Fail> {
     Ok(())
 }
 
-/// A bot chat's inbox row: its last reply, and the replies since the reader
-/// last wrote.
+/// A bot chat's inbox row: its newest line — the reader's own message, the
+/// bot's reaction to it, or its last reply — and the replies since the reader
+/// last wrote. Worded here so every client draws it as it is.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "events.ts")]
 pub struct BotPreview {
     pub text: Option<String>,
     pub replies: u32,
+    /// `text` is already one plain line, to draw as it is. A server from
+    /// before this sends the raw reply, which the client still cleans.
+    #[serde(default)]
+    #[ts(as = "Option<bool>", optional)]
+    pub plain: bool,
 }
 
 /// Each bot chat's inbox row, keyed by session.
@@ -1419,8 +1692,8 @@ pub async fn bot_previews(
 ) -> Result<std::collections::HashMap<String, BotPreview>, Fail> {
     let mut previews = std::collections::HashMap::new();
     for id in session_ids {
-        let (text, replies) = crate::store::last_reply(&id).await?;
-        previews.insert(id, BotPreview { text, replies });
+        let (text, replies) = crate::store::inbox_line(&id).await?;
+        previews.insert(id, BotPreview { text, replies, plain: true });
     }
     Ok(previews)
 }
@@ -1573,6 +1846,12 @@ pub fn mark_dray_prompt(session_id: &str, prompt: &str) {
     DRAY_PROMPTS.lock().unwrap().push((session_id.to_string(), prompt.to_string()));
 }
 
+/// Whether `prompt` is Dray's own prompt for `session_id`, leaving the mark for
+/// [`take_dray_prompt`]: a prompt queued behind a running turn is logged later.
+pub fn is_dray_prompt(session_id: &str, prompt: &str) -> bool {
+    DRAY_PROMPTS.lock().unwrap().iter().any(|(s, p)| s == session_id && p == prompt)
+}
+
 /// Whether `prompt`, now being logged in `session_id`, is Dray's own, and forgets it.
 pub fn take_dray_prompt(session_id: &str, prompt: &str) -> bool {
     let mut marks = DRAY_PROMPTS.lock().unwrap();
@@ -1610,7 +1889,7 @@ pub async fn start_bot(
     let sent = manager()
         .send_msg(
             &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast,
-            &bot.path, None, false, None, None, true, None, false, Some(&bot.name), None, None, &sink,
+            &bot.path, None, false, None, None, true, None, false, Some(&bot.name), None, None, None, &sink,
         )
         .await;
     // A send that failed before logging the prompt left the mark behind.
@@ -1620,6 +1899,11 @@ pub async fn start_bot(
         .map(|s| s.index_item)
         .ok_or_else(|| anyhow::anyhow!("the bot's chat started but returned no index entry"))?;
     sink.emit(crate::orchestration::SESSION_CREATED, &item).ok();
+    // Here rather than at `create_bot`, which knows no agent yet: New bot
+    // calls the two back to back. A remote reader's app counts it instead.
+    if !crate::analytics::client_counts() {
+        crate::analytics::bot_created(Some(item.harness), "app");
+    }
     Ok(item)
 }
 
@@ -1701,7 +1985,7 @@ pub async fn browser_owner(session_id: &str) -> String {
 }
 
 /// Component-wise, so `bots/bb` is not inside `bots/b`.
-fn holds(dir: &str, path: &str) -> bool {
+pub(crate) fn holds(dir: &str, path: &str) -> bool {
     Path::new(path).starts_with(dir)
 }
 
@@ -1810,6 +2094,20 @@ pub async fn prepare(cwd: &str) {
     }
 }
 
+/// Makes `docs/` where it is missing. A missing one means a bot older than
+/// the rule, and a grok or fx chat resumes on the prompt it started with, so
+/// the bot is told once, whatever its agent.
+async fn ensure_docs(bot: &Bot) {
+    let dir = Path::new(&bot.path);
+    if !dir.join(DOCS).exists() && tokio::fs::create_dir_all(dir.join(DOCS)).await.is_ok() {
+        note_bot(
+            &bot.path,
+            Note::Docs,
+            format!("Your folder now has `{DOCS}/`. Put every document you make for the user to open later there, such as a guide, a summary, a plan or research notes, never on the Desktop, in `/tmp` or in a repo, and give the user its path. Sort them into a folder per category: `{DOCS}/personal/` for the user's personal things, and others you name as needed. Not for task scratch files or memory."),
+        );
+    }
+}
+
 /// What every spawn of a bot needs on disk before its agent reads the folder.
 async fn prepare_folder(bot: &Bot) {
     let dir = Path::new(&bot.path);
@@ -1827,6 +2125,7 @@ async fn prepare_folder(bot: &Bot) {
     // A bot made before memory was a folder has none, and the prompt sends it
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
+    ensure_docs(bot).await;
     learn::ensure_skills(dir).await;
     if let Err(e) = write_user_file(bot).await {
         eprintln!("[user name] {e:#}");
@@ -2103,11 +2402,13 @@ fn turn_message(files: &[&str]) -> String {
 
 /// Runs git in a bot's folder, cut off from the reader's global setup: their
 /// hooks would run against the notes and could fail or hang a commit, their
-/// ignore rules could leave the bot's notes untracked, and a signing key would
-/// prompt on every turn.
+/// ignore rules could leave the bot's notes untracked, a signing key would
+/// prompt on every turn, and Git for Windows' `autocrlf` would hand back a
+/// restored note with CRLF endings it was never written with.
 async fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = tokio::process::Command::new("git")
         .args(["-c", "core.hooksPath=/dev/null", "-c", "core.excludesFile=/dev/null", "-c", "commit.gpgsign=false"])
+        .args(["-c", "core.autocrlf=false"])
         .args(args)
         .current_dir(dir)
         .output()
@@ -2284,6 +2585,7 @@ mod tests {
         assert!(block.contains("/h/bots/b"));
         assert!(block.contains(&format!("`{MEMORY}/`")));
         assert!(block.contains("YYYY-MM-DD-short-title.md"));
+        assert!(block.contains(&format!("`{DOCS}/personal/`")));
         assert!(block.contains("never ask it to report back"));
         assert!(block.contains("dray session settle <id> --delete-worktree"));
         assert!(block.contains("- \"Research\": Reads papers."));
@@ -2392,6 +2694,73 @@ mod tests {
     }
 
     #[test]
+    fn a_task_replay_keeps_its_brief_and_its_latest() {
+        let entries: Vec<String> = (0..10).map(|i| format!("{i}{}", "x".repeat(9))).collect();
+        assert_eq!(head_and_newest_within(&entries, 30, 200), (entries.clone(), false));
+        let (kept, cut) = head_and_newest_within(&entries, 30, 60);
+        assert!(cut);
+        let firsts: Vec<char> = kept.iter().map(|e| e.chars().next().unwrap()).collect();
+        assert_eq!(firsts, ['0', '1', '2', '[', '7', '8', '9']);
+
+        // A brief longer than the whole head keeps its start.
+        let long = vec![format!("User: {}", "é".repeat(40)), "Agent: done".into()];
+        let (kept, cut) = head_and_newest_within(&long, 20, 40);
+        assert!(kept[0].starts_with("User: ") && kept[0].ends_with('…'));
+        assert_eq!(kept.last().unwrap(), "Agent: done");
+        // Nothing between the two is gone, so no `[…]` says so.
+        assert!(!cut && kept.len() == 2, "{kept:?}");
+    }
+
+    /// Claude, then Codex, then Claude with no send, then grok, then back to
+    /// Claude: its conversation ends before Codex, so Codex's part goes too.
+    #[tokio::test]
+    async fn a_resumed_agent_hears_everything_since_it_last_took_part() {
+        use serde_json::json;
+        let on = |h: Harness, payload: serde_json::Value| crate::events::AgentEvent { harness: h, ..event(payload, false) };
+        let say = |text: &str| json!({"type": "user_message", "text": text, "images": [], "issues": [], "kickoff": false});
+        let switch = |from: &str, to: &str| json!({"type": "agent_switched", "from": from, "to": to, "resumed": false});
+        let (c, x, g) = (Harness::ClaudeCode, Harness::Codex, Harness::Grok);
+        let events = vec![
+            on(c, say("one")),
+            on(x, switch("claude_code", "codex")),
+            on(x, say("two")),
+            on(c, switch("codex", "claude_code")),
+            on(g, switch("claude_code", "grok")),
+            on(g, say("three")),
+            on(c, switch("grok", "claude_code")),
+        ];
+        let item = SessionIndexItem::new(
+            "s", c, "/p", "/p", None, None, "one", crate::models::ModelId::new("haiku"), None,
+            crate::events::ApprovalPolicy::Auto, false, None,
+        );
+        let note = task_handover_prompt(&item, &events, true).await;
+        assert!(note.contains("User: two") && note.contains("User: three"), "{note}");
+        assert!(!note.contains("User: one"), "{note}");
+
+        // A switch away drops that replay whole, markers in its chat and all,
+        // and keeps a lead-in queued before it.
+        let id = "drop-a-stale-replay";
+        let note = format!("{note}\n<conversation>\n[Dray: quoted]");
+        lead_in(id, "[Dray: you report to Ops now.]\n\n".into());
+        lead_in(id, note.clone());
+        TASK_REPLAYS.lock().unwrap().push((id.into(), note));
+        drop_task_handover(id);
+        assert_eq!(take_handover(id).as_deref(), Some("[Dray: you report to Ops now.]\n\n"));
+    }
+
+    #[test]
+    fn a_tool_call_replays_as_one_line() {
+        use crate::events::ToolType as T;
+        let edit = serde_json::json!({"file_path": "/w/src/App.css", "old_string": "a"});
+        assert_eq!(tool_line("Edit", T::FileEdit, &edit, None, "/w"), "- edited src/App.css");
+        let run = serde_json::json!({"command": "pnpm test\n  --run"});
+        assert_eq!(tool_line("Bash", T::Shell, &run, None, "/w"), "- ran pnpm test --run");
+        assert_eq!(tool_line("mcp__x", T::Mcp, &serde_json::json!({}), None, "/w"), "- called mcp__x");
+        let long = serde_json::json!({"command": "y".repeat(500)});
+        assert!(tool_line("Bash", T::Shell, &long, None, "/w").ends_with('…'));
+    }
+
+    #[test]
     fn the_block_speaks_of_the_file_only_where_the_bot_must_act() {
         assert!(bot_block(&bot(), "", " \n", &UserName::Unknown, Harness::ClaudeCode).contains("is empty: your job is whatever the user tells you first"));
         let long = "é".repeat(FILE_CAP + 1);
@@ -2423,31 +2792,30 @@ mod tests {
         assert!(!handle.contains("Call the user yogesharc"));
     }
 
-    fn account(name: &str, username: Option<&str>) -> crate::dray_account::DrayUser {
+    fn account(name: &str, github_login: Option<&str>) -> crate::dray_account::DrayUser {
         crate::dray_account::DrayUser {
             id: "u".into(),
             name: name.into(),
             email: None,
-            username: username.map(Into::into),
+            username: Some("sam".into()),
+            github_login: github_login.map(Into::into),
             image: None,
             providers: Vec::new(),
         }
     }
 
     #[test]
-    fn a_real_account_name_is_used_and_a_handle_is_offered_back() {
+    fn the_account_name_is_trusted_unless_it_is_the_github_login() {
         let known = |n: &str| UserName::Known(n.into());
-        let handle = |n: &str| UserName::Handle(n.into());
-        assert_eq!(account_name(&account("Yogesh Dhakal", Some("yogesh"))), known("Yogesh"));
+        assert_eq!(account_name(&account("Yogesh Dhakal", Some("yogesharc"))), known("Yogesh"));
+        assert_eq!(account_name(&account("yogesh dhakal", None)), known("yogesh"));
+        assert_eq!(account_name(&account("yogesh", None)), known("yogesh"));
+        assert_eq!(account_name(&account("YogeshArc", None)), known("YogeshArc"));
+        assert_eq!(account_name(&account("sam", None)), known("sam"));
         assert_eq!(account_name(&account("Anne-Marie O'Neil", None)), known("Anne-Marie"));
-        assert_eq!(account_name(&account("José", None)), known("José"));
         assert_eq!(account_name(&account("李明", None)), known("李明"));
-        // GitHub's login standing in for a missing name, and email sign-up's local part.
-        assert_eq!(account_name(&account("yogesharc", Some("yogesh"))), handle("yogesharc"));
-        assert_eq!(account_name(&account("YogeshArc", None)), handle("YogeshArc"));
-        assert_eq!(account_name(&account("sam_99", Some("sam_99"))), handle("sam_99"));
-        assert_eq!(account_name(&account("Sam", Some("sam"))), handle("Sam"));
-        assert_eq!(account_name(&account("sam@example.com", None)), handle("sam"));
+        // GitHub names the account after the login where the profile has no name.
+        assert_eq!(account_name(&account("yogesharc", Some("YogeshArc"))), UserName::Handle("yogesharc".into()));
         assert_eq!(account_name(&account("  ", None)), UserName::Unknown);
     }
 
@@ -2510,6 +2878,21 @@ mod tests {
         write_pointer(&dir).await;
         assert_eq!(tokio::fs::read_to_string(dir.join(".gitignore")).await.unwrap(), "/CLAUDE.md\n");
         assert_eq!(tokio::fs::read_to_string(dir.join(CLAUDE_POINTER)).await.unwrap(), "mine");
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn an_older_bot_is_told_of_docs_once() {
+        let dir = std::env::temp_dir().join(format!("dray-bot-{}", uuid::Uuid::now_v7()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let bot = Bot { path: dir.to_string_lossy().into_owned(), ..bot() };
+        let told = || NOTES.lock().unwrap().iter().filter(|(p, n)| p == &bot.path && n.contains("`docs/personal/`")).count();
+        ensure_docs(&bot).await;
+        assert!(dir.join(DOCS).is_dir());
+        assert_eq!(told(), 1);
+        NOTES.lock().unwrap().retain(|(p, _)| p != &bot.path);
+        ensure_docs(&bot).await;
+        assert_eq!(told(), 0);
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
 

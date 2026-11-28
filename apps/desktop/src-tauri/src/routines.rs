@@ -381,6 +381,28 @@ pub async fn set_paused(key: &str, bot_id: Option<&str>, paused: bool) -> Result
     .await
 }
 
+/// Renames a routine and rewrites its prompt in place. Schedule, paused state,
+/// check and run history stay, so the next run is the one already due.
+pub async fn update(key: &str, bot_id: Option<&str>, name: &str, prompt: &str) -> Result<Routine> {
+    edit(|list| rewrite(list, key, bot_id, name, prompt)).await
+}
+
+fn rewrite(list: &mut [Routine], key: &str, bot_id: Option<&str>, name: &str, prompt: &str) -> Result<Routine> {
+    let (name, prompt) = (name.trim(), prompt.trim());
+    if name.is_empty() || prompt.is_empty() {
+        anyhow::bail!("a routine needs a name and a prompt");
+    }
+    let r = find(list, key, bot_id)?;
+    let (id, bot) = (r.id.clone(), r.bot_id.clone());
+    if list.iter().any(|o| o.id != id && o.bot_id == bot && o.name.trim().eq_ignore_ascii_case(name)) {
+        anyhow::bail!("this bot already has a routine named {name:?} — pick another name");
+    }
+    let r = list.iter_mut().find(|r| r.id == id).expect("found above");
+    r.name = name.to_string();
+    r.prompt = prompt.to_string();
+    Ok(r.clone())
+}
+
 pub async fn remove(key: &str, bot_id: Option<&str>) -> Result<Routine> {
     edit(|list| {
         let id = find(list, key, bot_id)?.id.clone();
@@ -559,6 +581,9 @@ async fn run_check(check: &str, cwd: &str) -> Result<String, String> {
     // not `sh` alone; the next run would otherwise start another copy beside it.
     #[cfg(unix)]
     cmd.process_group(0);
+    // Kept alive past a timeout so the tree is walked from a live root.
+    #[cfg(windows)]
+    cmd.kill_on_drop(false);
     let child = cmd.spawn().map_err(|e| format!("could not run: {e}"))?;
     let group = child.id();
     let out = match tokio::time::timeout(CHECK_TIMEOUT, child.wait_with_output()).await {
@@ -566,6 +591,10 @@ async fn run_check(check: &str, cwd: &str) -> Result<String, String> {
             #[cfg(unix)]
             if let Some(pid) = group {
                 unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+            }
+            #[cfg(windows)]
+            if let Some(pid) = group {
+                let _ = tokio::task::spawn_blocking(move || crate::platform::kill_tree(pid)).await;
             }
             return Err(format!("timed out after {}s", CHECK_TIMEOUT.as_secs()));
         }
@@ -691,6 +720,9 @@ async fn fire(
         set_run_session(&routine.id, None, false).await;
         return Err(e);
     }
+    // A run is a session started, never a check that found nothing new: a
+    // five-minute check would otherwise report 288 times a day.
+    crate::analytics::feature_used("routine_run");
     let cap = run_cap(&routine.schedule);
     let sink = sink.clone();
     tokio::spawn(async move {
@@ -869,6 +901,13 @@ pub async fn set_routine_paused(id: String, paused: bool, sink: Sink) -> Result<
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn update_routine(id: String, name: String, prompt: String, sink: Sink) -> Result<Routine, Fail> {
+    let r = update(&id, None, &name, &prompt).await?;
+    sink.emit(ROUTINES_CHANGED, ()).ok();
+    Ok(r)
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_routine(id: String, sink: Sink) -> Result<(), Fail> {
     remove(&id, None).await?;
     sink.emit(ROUTINES_CHANGED, ()).ok();
@@ -954,5 +993,39 @@ mod tests {
         .unwrap();
         assert_eq!(r.schedule, Schedule::default());
         assert_eq!(r.schedule.next_after(Local::now()), None);
+    }
+
+    #[test]
+    fn an_edit_keeps_everything_but_name_and_prompt() {
+        let read = |id: &str, name: &str| -> Routine {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "botId": "b", "name": name, "prompt": "old", "schedule": {"everyMinutes": 30},
+                "created": "x", "paused": true, "lastResult": {"outcome": "silent", "at": "y"}, "checkHash": "h",
+            }))
+            .unwrap()
+        };
+        let mut list = vec![read("r1", "PR watch"), read("r2", "Digest")];
+        let r = rewrite(&mut list, "r1", None, " Deploy watch ", "new prompt\n").unwrap();
+        assert_eq!((r.id.as_str(), r.name.as_str(), r.prompt.as_str()), ("r1", "Deploy watch", "new prompt"));
+        assert!(r.paused);
+        assert_eq!(r.schedule.every_minutes, Some(30));
+        assert_eq!(r.last_result.as_ref().map(|l| l.outcome.as_str()), Some("silent"));
+        assert_eq!(r.check_hash.as_deref(), Some("h"));
+        assert_eq!(list[0].name, "Deploy watch");
+        // Its own name in another case is fine; another routine's is not.
+        assert!(rewrite(&mut list, "r1", None, "deploy WATCH", "p").is_ok());
+        assert!(rewrite(&mut list, "r1", None, "digest", "p").unwrap_err().to_string().contains("already"));
+        assert!(rewrite(&mut list, "r1", None, "x", "  ").is_err());
+    }
+
+    /// A run being created, as `fire` marks it before the send, is not its
+    /// bot's chat, so `mark_new_chat` leaves the chat's agent running (#1588).
+    #[test]
+    fn a_run_being_created_is_not_its_bots_chat() {
+        let id = "01a2165d-run-being-created";
+        assert!(bots::opens_chat(id));
+        PENDING.lock().unwrap().insert(id.into(), "r1".into());
+        assert!(!bots::opens_chat(id));
+        PENDING.lock().unwrap().remove(id);
     }
 }

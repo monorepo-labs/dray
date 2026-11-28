@@ -439,8 +439,9 @@ export function MergeCard({
     );
   }
   return (
-    // A half-pixel edge draws it in both schemes, a touch stronger on white.
-    <div className="w-full max-w-lg self-start rounded-2xl border-[0.5px] border-border/50 bg-card p-3.5 light:border-black/15">
+    // The app's `--shadow-raised-card` draws it: a hairline ring, and in
+    // light the card's soft drop under it.
+    <div className="w-full max-w-lg self-start rounded-2xl bg-card p-3.5 shadow-(--shadow-raised-card)">
       <div className="flex items-center gap-2.5">
         <span className="size-7 shrink-0">{face}</span>
         <div className="min-w-0 flex-1">

@@ -9,6 +9,12 @@
 //! such tools, served in process as an SDK MCP server: the CLI sends each
 //! JSON-RPC message as a `control_request`/`mcp_message` and Dray answers on
 //! the same pipe.
+//!
+//! Each tool's result also carries `claude/endTurn`, so the turn ends on it
+//! with no model call after. And the CLI's silent-turn reminder ("The user
+//! hasn't heard from you in a while…"), which rides a tool result after a few
+//! textless model calls, is switched off for bots: obeying it, a bot wrote its
+//! reaction out again as a reply.
 
 use serde_json::{json, Value};
 
@@ -22,6 +28,23 @@ pub const REACT_NAME: &str = "mcp__dray__react";
 pub const TOOL_NAMES: &str = "mcp__dray__no_reply_needed,mcp__dray__react";
 /// The env var that exempts a turn ending on one of [`TOOL_NAMES`] from the nudge.
 pub const TERMINAL_TOOLS_ENV: &str = "CLAUDE_CODE_TERMINAL_MCP_TOOLS";
+/// The env var switching the silent-turn reminder; `0` turns it off for a bot,
+/// whose silence is the point.
+pub const SILENT_TURN_REMINDER_ENV: &str = "CLAUDE_CODE_SILENT_TURN_REMINDER";
+
+/// A tool result's `_meta` that ends the turn on it, with no model call after
+/// (v2.1.322). Without it the model answered the result, and a bot told to
+/// stay silent sometimes narrated its silence or wrote its reaction out again.
+/// Never on an error, which the CLI would not honour and the bot must answer.
+fn end_turn() -> Value {
+    json!({"claude/endTurn": true})
+}
+
+/// Whether `name`, a tool call's name, is one of [`TOOL_NAMES`]: a call that
+/// closes the turn, so the agent has said its last word.
+pub fn is_silent(name: &str) -> bool {
+    name == TOOL_NAME || name == REACT_NAME
+}
 
 /// `--mcp-config` declaring the in-process server.
 pub fn mcp_config() -> String {
@@ -44,7 +67,7 @@ pub fn react_response(request_id: &str, message: &Value, reacted: Result<&str, S
         Ok(emoji) => json!({"content": [{
             "type": "text",
             "text": format!("Reacted {emoji} to the user's message. The turn is closed with no reply; write nothing."),
-        }]}),
+        }], "_meta": end_turn()}),
         Err(why) => json!({"isError": true, "content": [{"type": "text", "text": format!("No reaction: {why}")}]}),
     };
     envelope(request_id, message, Ok(result))
@@ -84,7 +107,7 @@ pub fn response(request_id: &str, message: &Value) -> Value {
         Some("tools/call") => Ok(json!({"content": [{
             "type": "text",
             "text": "Done: the turn is closed with no reply. Do not call this again; write nothing.",
-        }]})),
+        }], "_meta": end_turn()})),
         _ => Err(json!({"code": -32601, "message": "method not found"})),
     };
     envelope(request_id, message, result)
@@ -127,8 +150,8 @@ mod tests {
         assert_eq!(list["result"]["tools"][0]["name"], TOOL);
         assert_eq!(list["result"]["tools"][1]["name"], REACT);
         let offered = &list["result"]["tools"][1]["inputSchema"]["properties"]["emoji"]["enum"];
-        assert_eq!(offered.as_array().map(Vec::len), Some(7));
-        assert_eq!(offered[4], "❤️");
+        assert_eq!(offered.as_array().map(Vec::len), Some(8));
+        assert_eq!(offered[5], "❤️");
         assert_eq!(format!("mcp__{SERVER}__{TOOL}"), TOOL_NAME);
         assert_eq!(format!("mcp__{SERVER}__{REACT}"), REACT_NAME);
         assert_eq!(TOOL_NAMES, format!("{TOOL_NAME},{REACT_NAME}"));
@@ -136,6 +159,8 @@ mod tests {
         let call = reply(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": TOOL, "arguments": {}}}));
         assert_eq!(call["id"], 2);
         assert_eq!(call["result"]["content"][0]["type"], "text");
+        assert_eq!(call["result"]["_meta"]["claude/endTurn"], true);
+        assert!(is_silent(TOOL_NAME) && is_silent(REACT_NAME) && !is_silent(TOOL));
     }
 
     #[test]
@@ -149,7 +174,10 @@ mod tests {
         let done = mcp(Ok("🎉"));
         assert_eq!(done["id"], 4);
         assert!(done["result"]["content"][0]["text"].as_str().unwrap().contains("🎉"));
-        assert_eq!(mcp(Err("no message".into()))["result"]["isError"], true);
+        assert_eq!(done["result"]["_meta"]["claude/endTurn"], true);
+        let refused = mcp(Err("no message".into()));
+        assert_eq!(refused["result"]["isError"], true);
+        assert!(refused["result"].get("_meta").is_none());
     }
 
     #[test]

@@ -18,6 +18,9 @@ pub mod fx;
 #[path = "grok/grok.rs"]
 pub mod grok;
 
+#[path = "opencode/opencode.rs"]
+pub mod opencode;
+
 pub mod rpc;
 
 pub mod acp;
@@ -234,6 +237,7 @@ mod path_tests {
     /// `PATH`, ahead of every other harness's cached dir — so its `env node`
     /// lands on the node it was installed beside.
     #[test]
+    #[cfg(unix)]
     fn the_spawned_binary_dir_leads_the_additions() {
         let bin = std::path::Path::new("/home/u/.fnm/node-versions/v22/installation/bin/pi");
         let inherited: Vec<std::path::PathBuf> =
@@ -277,7 +281,7 @@ mod wire_tests {
     /// recognise — the worse half of this failure, not a lesser one.
     #[test]
     fn an_unknown_name_survives_a_round_trip() {
-        for name in ["some_future_agent", "claude_code", "codex", "pi", "fx"] {
+        for name in ["some_future_agent", "claude_code", "codex", "pi", "fx", "opencode"] {
             let json = format!("\"{name}\"");
             let parsed: Harness = serde_json::from_str(&json).expect("parses");
 
@@ -351,7 +355,7 @@ mod capability_tests {
     /// change on a harness whose wire cannot carry it.
     #[test]
     fn only_harnesses_with_an_effort_request_apply_it_in_place() {
-        const IN_PLACE: [Harness; 4] = [Harness::Codex, Harness::Fx, Harness::Grok, Harness::Pi];
+        const IN_PLACE: [Harness; 5] = [Harness::Codex, Harness::Fx, Harness::Grok, Harness::Pi, Harness::OpenCode];
 
         for harness in Harness::ALL {
             assert_eq!(
@@ -402,9 +406,22 @@ mod install_tests {
     fn every_agent_names_its_own_cure() {
         for harness in Harness::ALL {
             assert!(!harness.label().is_empty());
+            #[cfg(not(windows))]
             assert!(
                 harness.install_command().starts_with("curl -fsSL "),
                 "{:?} has no copyable install command",
+                harness
+            );
+            // PowerShell on Windows, and nothing where the vendor publishes no
+            // installer there; the docs link below is the cure then.
+            #[cfg(windows)]
+            assert!(
+                matches!(harness, Harness::Fx | Harness::OpenCode)
+                    == harness.install_command().is_empty()
+                    && (harness.install_command().is_empty()
+                        || harness.install_command().starts_with("irm https://")
+                            && harness.install_command().ends_with(".ps1 | iex")),
+                "{:?} has the wrong Windows install command",
                 harness
             );
             assert!(
@@ -420,11 +437,13 @@ mod install_tests {
         // Codex's installer and this still passes.
         for (i, a) in Harness::ALL.iter().enumerate() {
             for b in &Harness::ALL[i + 1..] {
-                assert_ne!(
-                    a.install_command(),
-                    b.install_command(),
-                    "{a:?} and {b:?} share an install command"
-                );
+                if !a.install_command().is_empty() {
+                    assert_ne!(
+                        a.install_command(),
+                        b.install_command(),
+                        "{a:?} and {b:?} share an install command"
+                    );
+                }
                 assert_ne!(a.docs_url(), b.docs_url(), "{a:?} and {b:?} share a docs URL");
                 assert_ne!(a.label(), b.label(), "{a:?} and {b:?} share a label");
             }
@@ -442,7 +461,9 @@ mod install_tests {
                 .find(|a| a.id == harness.wire_name())
                 .unwrap_or_else(|| panic!("{harness:?} is missing from dray_proto::AGENTS"));
             assert_eq!(agent.name, harness.label());
-            assert_eq!(agent.install, harness.install_command());
+            let install = if cfg!(windows) { agent.install_windows } else { agent.install };
+            assert_eq!(install, harness.install_command());
+            assert_eq!(agent.docs, harness.docs_url());
             assert_eq!(agent.login, harness.login_command());
         }
     }
@@ -502,6 +523,10 @@ pub enum Harness {
     Pi,
     Fx,
     Grok,
+    /// One word on the wire, as the CLI spells itself — `snake_case` would
+    /// make it `open_code` in the generated TS.
+    #[serde(rename = "opencode")]
+    OpenCode,
     /// A harness some other build named and this one has never heard of, with
     /// its spelling kept so a round trip does not lose it.
     ///
@@ -556,12 +581,13 @@ impl Harness {
     /// [`Harness::Other`] is deliberately absent: it is a value read off disk,
     /// never one to pick, so a picker or an availability read built from this
     /// cannot offer it.
-    pub const ALL: [Harness; 5] = [
+    pub const ALL: [Harness; 6] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::Pi,
         Harness::Fx,
         Harness::Grok,
+        Harness::OpenCode,
     ];
 
     /// How the wire spells it — what `dray new --harness` takes and what an
@@ -582,6 +608,7 @@ impl Harness {
             Harness::Pi => "pi".to_string(),
             Harness::Fx => "fx".to_string(),
             Harness::Grok => "grok".to_string(),
+            Harness::OpenCode => "opencode".to_string(),
             Harness::Other(name) => name.to_string(),
         }
     }
@@ -815,6 +842,25 @@ impl Harness {
                 forkable: true,
                 fork_needs_cli: true,
             },
+            // ACP, and plain ACP. `session/set_config_option` moves model and
+            // effort on a running child, mid-turn included, measured on 1.19.5.
+            // The stance is permission rules read from `OPENCODE_PERMISSION` at
+            // spawn, so it is a respawn. No fast tier.
+            //
+            // Forked by Codex's lazy route: `session/fork` names the parent's
+            // OpenCode id, which the fork's entry takes at the press, and runs
+            // on the first send's own spawn. In place only — OpenCode keeps the
+            // copy in the parent's folder whatever `cwd` it is handed.
+            Harness::OpenCode => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: true,
+                applies_effort_in_place: true,
+                applies_permission_in_place: false,
+                fast_mode: FastMode::Unsupported,
+                expands_at_mentions: false,
+                forkable: true,
+                fork_needs_cli: true,
+            },
             // A session some other build wrote and this one cannot run. `false`
             // throughout: the row still draws, so the reader can see the session
             // is there and read its transcript, and `names_a_cli` is what stops
@@ -842,6 +888,7 @@ impl Harness {
             // xAI's own name for the product, which is what its docs and its
             // installer call it — `grok` alone is the chat assistant.
             Harness::Grok => "Grok Build",
+            Harness::OpenCode => "OpenCode",
             // Its own spelling, the only thing known about it — and the honest
             // thing to put in a sentence, since the name a newer build wrote is
             // the one its reader will recognise.
@@ -849,7 +896,8 @@ impl Harness {
         }
     }
 
-    /// The command that installs it, for a reader to copy into a terminal.
+    /// The command that installs it: run by onboarding's Install, or copied into
+    /// a terminal by the reader.
     ///
     /// Each vendor's own installer, not npm: it is the one route that needs
     /// nothing already on the machine (no Node, no package manager) and it is
@@ -857,10 +905,9 @@ impl Harness {
     /// update`'s pattern for itself — already points at. Both verified live
     /// (`curl -fsSL … | sh -n`, a dry parse, not a run) before landing here.
     ///
-    /// Dray never runs this. Choosing the method for somebody installs a
-    /// second copy beside one they may already have, and a failure inside our
-    /// installer is ours to debug where a failure on the vendor's page is
-    /// theirs to follow.
+    /// Run only for an agent that is not on the machine at all, so it never puts
+    /// a second copy beside one the reader installed some other way.
+    #[cfg(not(windows))]
     pub fn install_command(self) -> &'static str {
         match self {
             Harness::ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",
@@ -872,10 +919,38 @@ impl Harness {
             // Vercel's own installer, off fx.sh/docs/getting-started/installation.
             Harness::Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
             Harness::Grok => "curl -fsSL https://x.ai/cli/install.sh | bash",
+            // OpenCode 2's. `/install` is OpenCode 1's and stays 1's. Both
+            // install to `~/.opencode/bin`, which `binpath` knows.
+            Harness::OpenCode => "curl -fsSL https://opencode.ai/v2/install | bash",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
             Harness::Other(_) => "",
+        }
+    }
+
+    /// On Windows, the PowerShell installer each vendor publishes beside its
+    /// `install.sh`, which Git Bash cannot stand in for: Claude Code's refuses
+    /// MINGW. fx and OpenCode publish none (both 404), so they answer empty and
+    /// the reader is sent to [`docs_url`](Self::docs_url) instead.
+    #[cfg(windows)]
+    pub fn install_command(self) -> &'static str {
+        match self {
+            Harness::ClaudeCode => "irm https://claude.ai/install.ps1 | iex",
+            Harness::Codex => "irm https://chatgpt.com/codex/install.ps1 | iex",
+            Harness::Pi => "irm https://pi.dev/install.ps1 | iex",
+            Harness::Grok => "irm https://x.ai/cli/install.ps1 | iex",
+            Harness::Fx | Harness::OpenCode | Harness::Other(_) => "",
+        }
+    }
+
+    /// "Install it with `…`", or the vendor's page where there is no command
+    /// to give, for a sentence that goes on to say what to do next.
+    pub fn install_advice(self) -> String {
+        match (self.install_command(), self.docs_url()) {
+            ("", "") => format!("Dray can't install {}", self.label()),
+            ("", docs) => format!("Install it from {docs}"),
+            (command, _) => format!("Install it with `{command}`"),
         }
     }
 
@@ -890,6 +965,7 @@ impl Harness {
             Harness::Pi => "https://pi.dev/docs/latest",
             Harness::Fx => "https://fx.sh/docs/getting-started/installation",
             Harness::Grok => "https://docs.x.ai/build/quickstart",
+            Harness::OpenCode => "https://opencode.ai/docs/",
             // Empty, so the notice draws no link rather than a wrong one: the
             // cure here is a newer Dray, not a CLI to install.
             Harness::Other(_) => "",
@@ -918,6 +994,8 @@ impl Harness {
             // A browser flow against `auth.x.ai`, or `--device-auth` where
             // there is no browser to open. The plain form is the one to name.
             Harness::Grok => "grok login",
+            // Asks which provider, then for its key or a browser sign-in.
+            Harness::OpenCode => "opencode auth login",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -938,6 +1016,7 @@ impl Harness {
             Harness::Pi => &[],
             Harness::Fx => &["login"],
             Harness::Grok => &["login"],
+            Harness::OpenCode => &["auth", "login"],
             Harness::Other(_) => &[],
         }
     }
@@ -960,7 +1039,7 @@ impl Harness {
             Harness::Pi => Some("then type /login and pick the provider"),
             // Per provider too, and the command asks which. A working Codex
             // login says nothing about fx: it keeps its own store.
-            Harness::Fx => Some("and pick the provider it asks for"),
+            Harness::Fx | Harness::OpenCode => Some("and pick the provider it asks for"),
             Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::Other(_) => None,
         }
     }
@@ -1004,7 +1083,7 @@ mod login_tests {
     /// tests above cannot cover it.
     #[test]
     fn an_unknown_harness_offers_nothing() {
-        let unknown = Harness::Other("opencode");
+        let unknown = Harness::Other("some_future_agent");
         assert!(unknown.login_command().is_empty());
         assert!(unknown.login_hint().is_none());
     }

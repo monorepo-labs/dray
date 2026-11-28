@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use dray_proto::{BotRef, BotSummary, CreateBot, RenameBot, Request, Response, SendToBot};
 
-use super::{parent_session_id, send, unexpected};
+use super::{parent_session_id, send, unexpected, MACHINE};
 
 #[derive(Subcommand)]
 pub enum BotCommand {
@@ -77,6 +77,14 @@ pub struct BotArg {
     bot: String,
 }
 
+/// Why `--machine` cannot carry `command`, or `None` where it can.
+pub fn machine_refusal(command: &BotCommand) -> Option<String> {
+    match command {
+        BotCommand::Routine(command) => crate::routine::machine_refusal(command),
+        _ => None,
+    }
+}
+
 pub fn run(command: BotCommand) -> Result<(), String> {
     match command {
         BotCommand::New(args) => {
@@ -84,8 +92,9 @@ pub fn run(command: BotCommand) -> Result<(), String> {
             let request = Request::CreateBot(CreateBot { name: args.name, shape: args.shape, hue });
             let bot = answered(send(request)?)?;
             println!("{}", bot.id);
+            let machine = MACHINE.get().map(|m| format!("--machine {m} ")).unwrap_or_default();
             eprintln!(
-                "Made \"{}\". Its chat starts with the first message: `dray bot send \"{}\" \"<message>\"`.",
+                "Made \"{}\". Its chat starts with the first message: `dray {machine}bot send \"{}\" \"<message>\"`.",
                 bot.name, bot.name
             );
             Ok(())
@@ -154,6 +163,12 @@ fn answered(response: Response) -> Result<BotSummary, String> {
     }
 }
 
+/// A project's own name, not the whole path. Either separator, whatever this
+/// machine's: a bot's task can live on a Windows server named from a Mac.
+fn project_name(path: &str) -> &str {
+    path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(path)
+}
+
 /// A colour by name, or a hue in degrees.
 fn hue(colour: &str) -> Result<f64, String> {
     let colour = colour.trim().to_lowercase();
@@ -177,7 +192,7 @@ fn line(bot: &BotSummary) -> String {
 fn details(bot: &BotSummary) -> Vec<String> {
     let mut out = vec![format!("role: {}", bot.role.as_deref().unwrap_or("none written yet"))];
     for task in &bot.tasks {
-        let project = task.project_path.rsplit('/').next().unwrap_or(&task.project_path);
+        let project = project_name(&task.project_path);
         let branch = task.branch.as_deref().map(|b| format!(", {b}")).unwrap_or_default();
         let working = if task.working { ", working" } else { "" };
         out.push(format!("task: \"{}\" ({}) in {project}{branch}{working}", task.title, task.session_id));
@@ -194,5 +209,11 @@ mod tests {
         assert_eq!(hue("Teal"), Ok(185.0));
         assert_eq!(hue("200"), Ok(200.0));
         assert!(hue("mauve").unwrap_err().contains("teal"));
+    }
+
+    #[test]
+    fn a_task_names_its_project_not_its_whole_path() {
+        assert_eq!(project_name(r"C:\work\my repo"), "my repo");
+        assert_eq!(project_name("/work/my repo/"), "my repo");
     }
 }

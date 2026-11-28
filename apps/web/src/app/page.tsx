@@ -29,7 +29,7 @@ const SCHEMA = JSON.stringify({
       "@type": "SoftwareApplication",
       name: "Dray",
       url: SITE,
-      description: "One Mac app for every coding agent: Claude Code, Codex, Grok Build, pi and fx.",
+      description: "One Mac app for every coding agent: Claude Code, Codex, Grok Build, pi, fx and OpenCode.",
       applicationCategory: "DeveloperApplication",
       operatingSystem: "macOS, Linux",
       downloadUrl: DOWNLOAD,

@@ -1,6 +1,7 @@
 import { Suspense, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
+import { DocControls } from "@/components/DocEditing";
 import DotTrack from "@/components/DotTrack";
 import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
@@ -170,7 +171,7 @@ type RightPanelProps = {
   cwd?: string | null;
   /// Drawn at the far end of the top strip, ahead of Open and Refresh. For an
   /// action belonging to whatever the pane is showing rather than to one tab —
-  /// the issues page's "Work on it" is the only one today.
+  /// nothing passes one today.
   actions?: React.ReactNode;
   /// Keys the pane's width, so each session keeps the width it was dragged
   /// to and one never dragged opens at the default. Absent on the issues page,
@@ -435,13 +436,18 @@ export function PanelActions({
   cwd,
   refresh,
   file,
+  docStore,
 }: Pick<RightPanelProps, "actions" | "cwd" | "refresh"> & {
   /// A file to open in place of `cwd`, through the file opener's own pick.
   file?: { path: string; line?: number };
+  /// The docs store holding `file`'s draft, where it is markdown in Files.
+  docStore?: string;
 }) {
   return (
     <>
     {actions}
+
+    {file && docStore && <DocControls store={docStore} path={file.path} />}
 
     {/* Gone entirely on Subagents, which has nothing to re-read. It
         reserved its width back when the keycaps sat to its right and

@@ -1,16 +1,18 @@
 //! Anonymous usage analytics over PostHog.
 //!
-//! Five events — a launch, a day the app was used, a session starting, a
-//! feature being used, and something breaking — carrying no content and no
-//! identity beyond a random id minted on this machine. What they answer is how many people run Dray, on which version,
+//! A launch, a day the app was used, a session starting, a feature being
+//! used, something breaking, a bot made, a routine set up and the sign-in
+//! gate's funnel — carrying no content and no identity beyond a random id
+//! minted on this machine. What they answer is how many people run Dray, on which version,
 //! whether they come back, which of the things built here anybody actually
 //! uses, and whether the build is failing under them in a way nothing else
 //! would ever tell us.
 //!
-//! **`DRAY_NO_ANALYTICS` is the only opt-out.** Settings has no switch, and a
-//! stored `analytics_enabled: false` from a build that had one is ignored. The
-//! install id is minted on first use by [`settings::ensure_install_id`] and
-//! never cleared. A uuid v4 rather than the v7 used for session ids elsewhere:
+//! **Two opt-outs, one answer** ([`enabled`]): Settings' switch, stored as
+//! `analytics_enabled`, and `DRAY_NO_ANALYTICS`, which wins. Both are read on
+//! every send, so the switch takes hold without a restart. The install id is
+//! minted on first use by [`settings::ensure_install_id`] and never cleared, so
+//! turning the switch back on is the same person resuming. A uuid v4 rather than the v7 used for session ids elsewhere:
 //! v7 embeds the moment it was minted, which for an identifier meant to say
 //! nothing is one more thing it says.
 //!
@@ -32,10 +34,12 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use ts_rs::TS;
 
+use crate::dray_account::SignInMethod;
+use crate::harness::Harness;
 use crate::settings;
 use crate::store::SessionIndexItem;
 
@@ -76,10 +80,43 @@ fn api_key() -> Option<&'static str> {
 /// is a task outliving the thing it was reporting about.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Whether the environment has turned reporting off for this run — the only
-/// opt-out there is.
+/// Whether the environment has turned reporting off for this run, whatever
+/// the switch says.
 fn env_opt_out() -> bool {
     std::env::var_os("DRAY_NO_ANALYTICS").is_some()
+}
+
+/// Whether this run reports at all. Read from disk on every ask, since the
+/// app and its server are two processes sharing the one file.
+async fn enabled() -> bool {
+    !env_opt_out() && settings::read().await.analytics_enabled
+}
+
+/// What Settings' analytics switch draws: the effective state, not the stored
+/// one, so a run `DRAY_NO_ANALYTICS` turned off never shows a switch sitting on.
+#[derive(Debug, Clone, Copy, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyticsSetting {
+    pub enabled: bool,
+    /// `DRAY_NO_ANALYTICS` is set, so the switch cannot move.
+    pub locked: bool,
+}
+
+/// The switch's state, for Settings.
+pub async fn analytics_setting() -> AnalyticsSetting {
+    AnalyticsSetting {
+        enabled: enabled().await,
+        locked: env_opt_out(),
+    }
+}
+
+/// Turns reporting on or off, answering the state as it now stands.
+pub async fn set_analytics_enabled(on: bool) -> Result<AnalyticsSetting, String> {
+    settings::update(|s| s.analytics_enabled = on)
+        .await
+        .map_err(|e| format!("{e:#}"))?;
+    Ok(analytics_setting().await)
 }
 
 /// What the webview needs to speak to PostHog for itself.
@@ -111,8 +148,8 @@ pub struct SurveyIdentity {
 /// The SDK on the other side exists for **surveys**, which are drawn by
 /// `posthog-js` and by nothing else — there is no way to render one from here.
 /// It captures no events of its own. `None` on exactly the grounds [`send`]
-/// refuses on — no key compiled in, or `DRAY_NO_ANALYTICS` — plus an install id
-/// that could not be persisted.
+/// refuses on — no key compiled in, or reporting turned off — plus an install
+/// id that could not be persisted.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn analytics_identity() -> Option<SurveyIdentity> {
     // Same order as `send`: no key compiled in is the ordinary case for a local
@@ -120,7 +157,7 @@ pub async fn analytics_identity() -> Option<SurveyIdentity> {
     // reading the settings file to find that out.
     let key = api_key()?;
 
-    if env_opt_out() {
+    if !enabled().await {
         return None;
     }
 
@@ -148,7 +185,7 @@ pub async fn analytics_identity() -> Option<SurveyIdentity> {
     })
 }
 
-/// Enqueues one event, or drops it under `DRAY_NO_ANALYTICS`.
+/// Enqueues one event, or drops it where reporting is off.
 ///
 /// Deliberately **not** `async` and takes no `AppHandle`: an event is
 /// fire-and-forget, and a call that had to be awaited would put a file read and
@@ -242,6 +279,92 @@ pub fn track_active_day() {
     track_daily("active_day", "active_day".into(), json!({}));
 }
 
+/// The events that say whether this machine is signed in to a Dray account,
+/// so a launch or a day of use can be split by it.
+const CARRIES_SIGN_IN: [&str; 2] = ["app_started", "active_day"];
+
+/// `properties` with `signed_in` added where `event` carries it. Read off
+/// `account.json` alone, never the site, and only once the event is sure to
+/// go. A yes or no, never who: the account's id, name and email stay here.
+async fn with_sign_in(event: &'static str, mut properties: Value) -> Value {
+    if CARRIES_SIGN_IN.contains(&event) {
+        if let Value::Object(props) = &mut properties {
+            let signed_in = crate::dray_account::signed_in_user().await.is_some();
+            props.insert("signed_in".into(), signed_in.into());
+        }
+    }
+    properties
+}
+
+/// Why the sign-in gate is up: a reader who never signed in, Settings' Sign
+/// in, sign-in now required (#1590), or a sign-in that went away.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GateReason {
+    FirstLaunch,
+    Settings,
+    Required,
+    SignedOut,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateStep {
+    Shown,
+    Skipped,
+}
+
+/// Reports the sign-in gate coming up or being skipped. Only the webview
+/// knows either, since Skip is kept in its local storage. Both arguments are
+/// enums, so it can send its few words and nothing else.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn track_sign_in_gate(step: GateStep, reason: GateReason) {
+    let event = match step {
+        GateStep::Shown => "sign_in_gate_shown",
+        GateStep::Skipped => "sign_in_skipped",
+    };
+    track(event, json!({ "reason": reason }));
+}
+
+/// A step of a browser sign-in, reported by the server that runs it.
+#[derive(Debug, Clone, Copy)]
+pub enum SignInStep {
+    Started,
+    Completed,
+    Failed(SignInFailure),
+}
+
+/// Why a sign-in ended without one: a closed set, never the error's text,
+/// which can carry the site's answer.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInFailure {
+    /// The site was unreachable, so no browser was opened.
+    Offline,
+    /// Cancel in Dray, or Skip, while the browser was out.
+    Cancelled,
+    /// The browser came back with an error: turned down on the site.
+    Declined,
+    /// Ten minutes with no answer from the browser.
+    TimedOut,
+    /// The browser came back and trading its code failed.
+    Exchange,
+}
+
+/// Reports a sign-in step with the way in the reader picked.
+pub fn sign_in(step: SignInStep, method: SignInMethod) {
+    let (event, props) = sign_in_event(step, method);
+    track(event, props);
+}
+
+fn sign_in_event(step: SignInStep, method: SignInMethod) -> (&'static str, Value) {
+    match step {
+        SignInStep::Started => ("sign_in_started", json!({ "method": method })),
+        SignInStep::Completed => ("sign_in_completed", json!({ "method": method })),
+        SignInStep::Failed(why) => ("sign_in_failed", json!({ "method": method, "error": why })),
+    }
+}
+
 /// Reports a feature being reached for.
 ///
 /// One event carrying the feature as a property, never an event per feature:
@@ -270,9 +393,16 @@ pub fn client_counts() -> bool {
     CLIENT_COUNTS.try_with(|counts| *counts).unwrap_or(false)
 }
 
-/// Reports a session this process just wrote down, on this machine.
+/// Reports a session this process just wrote down, on this machine. Whether
+/// it is a bot's is a few file reads, so it is worked out in the spawned half
+/// rather than in front of the create.
 pub fn session_started(item: &SessionIndexItem) {
-    track("session_started", session_properties(item, None));
+    let item = item.clone();
+    crate::spawn(async move {
+        let bot = crate::bots::bot_at(&item.cwd).await.is_some();
+        let role = BotRole { bot, by_bot: !bot && crate::bots::in_bot_tree(&item).await };
+        send("session_started", None, session_properties(&item, role, None)).await;
+    });
 }
 
 /// Reports a session the reader's app just started on an external server.
@@ -281,15 +411,28 @@ pub fn session_started(item: &SessionIndexItem) {
 /// The app owns this count rather than the server: a Linux `dray-serve`
 /// carries no key and sends nothing, and a remote Mac would count it under
 /// its own install as a local session of somebody else.
-pub fn remote_session_started(item: &SessionIndexItem, os: Option<&str>) {
-    track("session_started", session_properties(item, Some(os)));
+///
+/// `bot` is whether it runs in one of that server's bot folders. The app only
+/// starts a session there from the composer or New bot, neither of which has
+/// a parent, so it is never `by_bot`.
+pub fn remote_session_started(item: &SessionIndexItem, os: Option<&str>, bot: bool) {
+    track("session_started", session_properties(item, BotRole { bot, by_bot: false }, Some(os)));
+}
+
+/// What a session is to bots.
+#[derive(Debug, Clone, Copy, Default)]
+struct BotRole {
+    /// Runs in a bot's folder: its chat, or a routine's run.
+    bot: bool,
+    /// Started under a bot's session, at any depth, as its tasks are.
+    by_bot: bool,
 }
 
 /// `session_started`'s properties. Read off the index entry, which is what was
 /// actually written down; nothing about the prompt, the path or the server,
 /// whose OS goes out only as a closed tag since the welcome is the server's
 /// own text.
-fn session_properties(item: &SessionIndexItem, remote: Option<Option<&str>>) -> Value {
+fn session_properties(item: &SessionIndexItem, role: BotRole, remote: Option<Option<&str>>) -> Value {
     let mut props = json!({
         "harness": item.harness,
         "model": item.model.as_str(),
@@ -298,6 +441,11 @@ fn session_properties(item: &SessionIndexItem, remote: Option<Option<&str>>) -> 
         "fast": item.fast,
         "worktree": item.worktree_name.is_some(),
         "spawned": item.parent_session_id.is_some(),
+        "bot": role.bot,
+        "by_bot": role.by_bot,
+        // A routine's run is a bot's session too; without this, a routine on a
+        // short schedule would drown out the chats people actually open.
+        "routine": item.routine_run.is_some(),
         "location": if remote.is_some() { "remote" } else { "local" },
     });
     if let Some(os) = remote {
@@ -310,6 +458,37 @@ fn session_properties(item: &SessionIndexItem, remote: Option<Option<&str>>) -> 
         .into();
     }
     props
+}
+
+/// Reports a bot made: `via` `app` from New bot (desktop or phone), `cli`
+/// from `dray bot new`. The harness rides only where it is known: a bot made
+/// from the CLI gets its agent at its first message, and that chat's
+/// `session_started` (`bot: true`) says which.
+pub fn bot_created(harness: Option<Harness>, via: &'static str) {
+    let mut props = json!({ "via": via });
+    if let Some(harness) = harness {
+        props["harness"] = json!(harness);
+    }
+    track("bot_created", props);
+}
+
+/// Reports `bot_message` where `session_id` is a bot's chat. Called from the
+/// `send_msg` command alone, which only somebody pressing send reaches; a
+/// bot's message to another bot, a task's report and a routine's prompt all
+/// reach the session manager directly.
+pub fn message_sent(session_id: String) {
+    crate::spawn(async move {
+        let Ok(Some(item)) = crate::store::get_session_index_item(&session_id).await else { return };
+        if item.routine_run.is_none() && crate::bots::bot_at(&item.cwd).await.is_some() {
+            send("feature_used", None, json!({ "feature": "bot_message" })).await;
+        }
+    });
+}
+
+/// Reports a routine a bot just set up: which kind of schedule, never its
+/// times, and whether it has a check.
+pub fn routine_added(every: bool, check: bool) {
+    track("routine_added", json!({ "schedule": if every { "every" } else { "at" }, "check": check }));
 }
 
 /// Reports something that broke, by **where** it broke and never by what it
@@ -407,13 +586,13 @@ fn trim_source_path(file: &str) -> &str {
 async fn send(event: &'static str, daily_key: Option<String>, properties: Value) {
     let Some(key) = api_key() else {
         // A dev build has no key, so this is the only way to see what it would send.
-        if cfg!(debug_assertions) && !env_opt_out() {
-            eprintln!("[analytics] would send {event} {properties}");
+        if cfg!(debug_assertions) && enabled().await {
+            eprintln!("[analytics] would send {event} {}", with_sign_in(event, properties).await);
         }
         return;
     };
 
-    if env_opt_out() {
+    if !enabled().await {
         return;
     }
 
@@ -428,6 +607,7 @@ async fn send(event: &'static str, daily_key: Option<String>, properties: Value)
         }
     }
 
+    let properties = with_sign_in(event, properties).await;
     let mut props = base_properties().clone();
     // PostHog judges bot traffic at query time off this *property*, never the
     // request's User-Agent header, and reads a missing one as automation — so
@@ -522,17 +702,80 @@ mod tests {
     /// The server's OS is its own text, so only closed tags leave the machine.
     #[test]
     fn location_is_closed_tags() {
-        let local = session_properties(&item(), None);
+        let none = BotRole::default();
+        let local = session_properties(&item(), none, None);
         assert_eq!(local["location"], json!("local"));
         assert!(local.get("remote_os").is_none());
         assert_eq!(local["harness"], json!("claude_code"));
 
-        let tag = |os| session_properties(&item(), Some(os))["remote_os"].clone();
+        let tag = |os| session_properties(&item(), none, Some(os))["remote_os"].clone();
         assert_eq!(tag(Some("linux")), json!("linux"));
         assert_eq!(tag(Some("macos")), json!("macos"));
         assert_eq!(tag(Some("my-hostname")), json!("other"));
         assert_eq!(tag(None), json!("unknown"));
-        assert_eq!(session_properties(&item(), Some(None))["location"], json!("remote"));
+        assert_eq!(session_properties(&item(), none, Some(None))["location"], json!("remote"));
+    }
+
+    /// A bot's chat, a routine's run and a bot's task each read apart, and an
+    /// ordinary session reads as none of them.
+    #[test]
+    fn a_session_says_what_it_is_to_bots() {
+        let flags = |props: Value| (props["bot"].clone(), props["by_bot"].clone(), props["routine"].clone());
+        let (no, yes) = (json!(false), json!(true));
+
+        let plain = session_properties(&item(), BotRole::default(), None);
+        assert_eq!(flags(plain), (no.clone(), no.clone(), no.clone()));
+
+        let chat = session_properties(&item(), BotRole { bot: true, by_bot: false }, None);
+        assert_eq!(flags(chat), (yes.clone(), no.clone(), no.clone()));
+
+        let mut run = item();
+        run.routine_run = Some("r1".into());
+        let run = session_properties(&run, BotRole { bot: true, by_bot: false }, None);
+        assert_eq!(flags(run), (yes.clone(), no.clone(), yes.clone()));
+
+        let task = session_properties(&item(), BotRole { bot: false, by_bot: true }, None);
+        assert_eq!(flags(task), (no.clone(), yes.clone(), no.clone()));
+
+        let remote = session_properties(&item(), BotRole { bot: true, by_bot: false }, Some(Some("linux")));
+        assert_eq!(remote["location"], json!("remote"));
+        assert_eq!(flags(remote), (yes, no.clone(), no));
+    }
+
+    /// A sign-in reports the way in and, on failure, a closed kind: nothing a
+    /// site's answer or an account could put there.
+    #[test]
+    fn a_sign_in_carries_its_method_and_a_closed_failure() {
+        assert_eq!(
+            sign_in_event(SignInStep::Started, SignInMethod::Github),
+            ("sign_in_started", json!({ "method": "github" }))
+        );
+        assert_eq!(
+            sign_in_event(SignInStep::Completed, SignInMethod::Email),
+            ("sign_in_completed", json!({ "method": "email" }))
+        );
+        assert_eq!(
+            sign_in_event(SignInStep::Failed(SignInFailure::TimedOut), SignInMethod::Google),
+            ("sign_in_failed", json!({ "method": "google", "error": "timed_out" }))
+        );
+    }
+
+    /// The webview names a reason in the gate's own words, and nothing else
+    /// parses.
+    #[test]
+    fn the_gate_reason_is_a_closed_word() {
+        let reason: GateReason = serde_json::from_value(json!("first_launch")).unwrap();
+        assert_eq!(reason, GateReason::FirstLaunch);
+        assert_eq!(json!(GateReason::SignedOut), json!("signed_out"));
+        assert!(serde_json::from_value::<GateReason>(json!("someone@example.com")).is_err());
+    }
+
+    /// Only a launch and a day of use say whether the machine is signed in.
+    #[tokio::test]
+    async fn only_launch_and_activity_carry_signed_in() {
+        assert!(with_sign_in("app_started", json!({})).await.get("signed_in").is_some());
+        assert!(with_sign_in("active_day", json!({})).await.get("signed_in").is_some());
+        assert!(with_sign_in("feature_used", json!({ "feature": "fork" })).await.get("signed_in").is_none());
     }
 
     /// The kind is what the breakdown is read by, so a call site's own

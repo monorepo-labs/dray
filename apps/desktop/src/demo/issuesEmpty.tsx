@@ -235,7 +235,6 @@ function Demo() {
             }}
             picked={null}
             onPick={() => {}}
-            onWorkOn={() => {}}
           />
         </div>
       </div>

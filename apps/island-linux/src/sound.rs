@@ -1,10 +1,12 @@
 //! The island's sounds, the files the Mac island plays: Dray's own
 //! `notification.wav` for a new waiting card, the island's `send.wav` as a
-//! send or the last answer flashes, and Dray's dictation tones. Each is handed to whichever of PipeWire's,
-//! PulseAudio's or ALSA's players is installed, so the island links no audio
-//! library.
+//! send or the last answer flashes, and Dray's dictation tones. On Linux each
+//! is handed to whichever of PipeWire's, PulseAudio's or ALSA's players is
+//! installed, so the island links no audio library; Windows plays them from
+//! memory with `PlaySound`.
 
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -13,6 +15,7 @@ static SEND: &[u8] = include_bytes!("../../island/Island/send.wav");
 static START: &[u8] = include_bytes!("../../desktop/src/assets/dictate-start.wav");
 static STOP: &[u8] = include_bytes!("../../desktop/src/assets/dictate-stop.wav");
 
+#[cfg(unix)]
 /// Written once per run, under a name of this process's own and only ever
 /// created fresh: `create_new` refuses a path that exists, a planted symlink
 /// included, which matters where there is no `XDG_RUNTIME_DIR` and the file
@@ -36,21 +39,21 @@ static STARTED: OnceLock<Option<PathBuf>> = OnceLock::new();
 static STOPPED: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 pub fn chime() {
-    play(file(&CHIME, "notification", NOTIFICATION));
+    sound(&CHIME, "notification", NOTIFICATION);
 }
 
 pub fn send() {
-    play(file(&SENT, "send", SEND));
+    sound(&SENT, "send", SEND);
 }
 
 /// Dray's own dictation tones, so the island and the app dictate alike: the
 /// microphone opened, and dictated words became a row.
 pub fn dictation_started() {
-    play(file(&STARTED, "dictate-start", START));
+    sound(&STARTED, "dictate-start", START);
 }
 
 pub fn dictation_stopped() {
-    play(file(&STOPPED, "dictate-stop", STOP));
+    sound(&STOPPED, "dictate-stop", STOP);
 }
 
 /// Removes this run's files on the way out, since each run names its own.
@@ -62,7 +65,25 @@ pub fn forget() {
     }
 }
 
+#[cfg(unix)]
+fn sound(cell: &'static OnceLock<Option<PathBuf>>, name: &str, bytes: &[u8]) {
+    play(file(cell, name, bytes));
+}
+
+/// Plays without waiting, cutting off one still playing, as `PlaySound` has
+/// one sound at a time. The bytes are static, which `SND_MEMORY` with
+/// `SND_ASYNC` needs: they are read while it plays.
+#[cfg(windows)]
+fn sound(_: &'static OnceLock<Option<PathBuf>>, _: &str, bytes: &'static [u8]) {
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+    let wav = windows::core::PCWSTR(bytes.as_ptr().cast());
+    unsafe {
+        let _ = PlaySoundW(wav, None, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+    }
+}
+
 /// Plays without waiting; silence where no player is found.
+#[cfg(unix)]
 fn play(path: Option<&'static PathBuf>) {
     let Some(path) = path else { return };
     std::thread::spawn(move || {

@@ -64,6 +64,10 @@ pub enum CommentKind {
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct PrComment {
+    /// GitHub's node id, unique across comments, reviews and review comments.
+    /// What the pull requests page picks rows by: a review's `url` was the
+    /// PR's own until reviews asked for theirs. Absent from an older server.
+    pub id: String,
     pub author: String,
     /// The commenter's picture. `None` for an account that has none, which the
     /// panel draws as their initial rather than as a gap.
@@ -195,9 +199,9 @@ fragment pr on PullRequest{
  number title url state isDraft baseRefName headRefName headRef{name} isCrossRepository mergeable mergeStateStatus reviewDecision updatedAt
  additions deletions changedFiles
  author{login avatarUrl}
- comments(first:50){nodes{author{login avatarUrl} body createdAt url}}
- reviews(first:50){nodes{id author{login avatarUrl} body submittedAt state}}
- reviewThreads(first:30){nodes{isResolved path line comments(first:50){nodes{author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
+ comments(first:50){nodes{id author{login avatarUrl} body createdAt url}}
+ reviews(first:50){nodes{id url author{login avatarUrl} body submittedAt state}}
+ reviewThreads(first:30){nodes{isResolved path line comments(first:50){nodes{id author{login avatarUrl} body createdAt url pullRequestReview{id}}}}}
  commits(last:1){nodes{commit{statusCheckRollup{contexts(first:50){nodes{
    __typename
    ... on StatusContext{context state targetUrl avatarUrl}
@@ -235,6 +239,9 @@ fragment pr on PullRequest{
 /// one. `contexts{totalCount}` without a `first` is measured free: the query
 /// costs 1 point with or without both.
 ///
+/// `$LISTING` is where the open half asks, for the pull requests page alone,
+/// what a row there draws — see [`LISTING`].
+///
 /// `first:100` is a real cap on both halves. A repo with more than a hundred
 /// open pull requests marks the hundred most recently touched; a branch merged
 /// long enough ago to fall past the hundredth loses its mark, which is the
@@ -243,7 +250,7 @@ const QUERY_MARKS: &str = r#"
 query($owner:String!,$repo:String!){
  repository(owner:$owner,name:$repo){
   open: pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-   number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision
+   number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision $LISTING
    commits(last:1){nodes{commit{statusCheckRollup{state contexts{totalCount}}}}}
   }}
   merged: pullRequests(states:MERGED,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
@@ -251,6 +258,16 @@ query($owner:String!,$repo:String!){
   }}
  }}
 "#;
+
+/// What a row on the pull requests page draws — title, author, size, comment
+/// counts, and whether the viewer wrote it or is asked to review it — spliced
+/// into [`QUERY_MARKS`] only while the page lists the repo, since the sidebar's
+/// 30s poll and every phone read would otherwise carry it for nothing. Scalars,
+/// objects and bare `totalCount`s, measured free: the query still costs 1 point
+/// with them. `reviewRequests` is not here, being a connection under a
+/// connection that doubles the cost.
+const LISTING: &str = "title updatedAt additions deletions isCrossRepository viewerDidAuthor \
+viewerLatestReviewRequest{id} author{login avatarUrl} comments{totalCount} reviewThreads{totalCount}";
 
 /// A GraphQL connection. `nodes` is nullable on every one of them, so the
 /// `Option` is load-bearing rather than defensive.
@@ -380,6 +397,8 @@ struct RawApp {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawComment {
+    #[serde(default)]
+    id: String,
     author: Option<RawAuthor>,
     #[serde(default)]
     body: String,
@@ -405,6 +424,10 @@ struct RawReview {
     /// What the threads left under it name it by.
     #[serde(default)]
     id: String,
+    /// `…/pull/7#pullrequestreview-…`. Absent from an answer to the query as
+    /// it was before it asked, which falls back to the PR's own.
+    #[serde(default)]
+    url: String,
     author: Option<RawAuthor>,
     #[serde(default)]
     body: String,
@@ -504,6 +527,7 @@ impl RawComment {
     /// the rest in afterwards; everything else is already complete.
     fn map(self, kind: CommentKind) -> PrComment {
         PrComment {
+            id: self.id,
             author: login(&self.author),
             avatar: avatar(&self.author),
             body: self.body,
@@ -669,14 +693,13 @@ impl RawPr {
             }
 
             Some(PrComment {
+                id: r.id,
                 kind: review_kind(&r.state),
                 author: login(&r.author),
                 avatar: avatar(&r.author),
                 body: r.body,
                 created_at: r.submitted_at,
-                // Reviews carry a node id rather than a URL, so the thread
-                // they belong to is the closest honest link.
-                url: url.clone(),
+                url: if r.url.is_empty() { url.clone() } else { r.url },
                 path: None,
                 resolved: false,
                 replies,
@@ -1027,6 +1050,40 @@ pub async fn recheck_gh() -> bool {
     binpath::gh().await.is_some()
 }
 
+/// Installs `gh` with Homebrew, for onboarding. `Err("no-brew")` where there is
+/// no Homebrew, which the caller answers by opening GitHub's install page; any
+/// other `Err` is brew's own last line.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_gh() -> Result<bool, String> {
+    if binpath::gh().await.is_some() {
+        return Ok(true);
+    }
+    let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        .into_iter()
+        .map(Path::new)
+        .find(|p| p.exists())
+        .ok_or("no-brew")?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        Command::new(brew)
+            .args(["install", "gh"])
+            // Its own update first can take minutes and changes nothing gh needs.
+            .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "GitHub CLI install took too long".to_string())?
+    .map_err(|err| format!("could not run brew: {err}"))?;
+    if !output.status.success() {
+        let text = String::from_utf8_lossy(&output.stderr);
+        let said = text.lines().map(str::trim).filter(|line| !line.is_empty()).last();
+        return Err(said.unwrap_or("GitHub CLI install failed").to_string());
+    }
+    Ok(recheck_gh().await)
+}
+
 /// Maps a raw `gh` failure onto the reason the panel branches on. Split out so
 /// the classifier can be tested without spawning anything.
 pub(crate) fn unavailable(message: String) -> PrUnavailable {
@@ -1117,6 +1174,34 @@ pub struct PrMark {
     /// `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
     /// repo asks for no review, and on the merged half.
     pub review_decision: Option<String>,
+    /// What the pull requests page draws on the row, on the open half alone.
+    /// Absent from a server older than the page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub listing: Option<PrListing>,
+}
+
+/// A pull request as the pull requests page lists it, beside its [`PrMark`].
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PrListing {
+    pub title: String,
+    pub author: String,
+    pub author_avatar: Option<String>,
+    pub updated_at: String,
+    pub additions: u32,
+    pub deletions: u32,
+    /// Conversation comments plus inline threads, the two lists the panel
+    /// draws as one timeline.
+    pub comment_count: u32,
+    /// The head branch lives in someone else's fork, so a session here can
+    /// neither match it by name nor push to it.
+    pub is_cross_repository: bool,
+    pub viewer_did_author: bool,
+    /// A review is asked of the viewer and not yet given. Requests to a team
+    /// the viewer is in are not counted.
+    pub review_requested: bool,
 }
 
 /// What CI on the tip commit has to say, cut to the two things a row can show.
@@ -1186,6 +1271,41 @@ struct RawPrMark {
     mergeable: Option<String>,
     merge_state_status: Option<String>,
     review_decision: Option<String>,
+    /// The listing, asked for on the open half alone. `title` being there is
+    /// what says it was asked.
+    title: Option<String>,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    additions: u32,
+    #[serde(default)]
+    deletions: u32,
+    is_cross_repository: Option<bool>,
+    #[serde(default)]
+    viewer_did_author: bool,
+    viewer_latest_review_request: Option<IgnoredAny>,
+    author: Option<RawAuthor>,
+    comments: Option<Nodes<IgnoredAny>>,
+    review_threads: Option<Nodes<IgnoredAny>>,
+}
+
+impl RawPrMark {
+    fn listing(&mut self) -> Option<PrListing> {
+        let count = |n: &Option<Nodes<IgnoredAny>>| n.as_ref().and_then(|n| n.total_count).unwrap_or(0);
+        Some(PrListing {
+            title: self.title.take()?,
+            author: login(&self.author),
+            author_avatar: avatar(&self.author),
+            updated_at: std::mem::take(&mut self.updated_at),
+            additions: self.additions,
+            deletions: self.deletions,
+            comment_count: count(&self.comments) + count(&self.review_threads),
+            // Unknown reads as a fork, `PullRequest::is_cross_repository`'s rule.
+            is_cross_repository: self.is_cross_repository.unwrap_or(true),
+            viewer_did_author: self.viewer_did_author,
+            review_requested: self.viewer_latest_review_request.is_some(),
+        })
+    }
 }
 
 /// The tip commit's rollup, read into what the row draws.
@@ -1225,13 +1345,16 @@ struct MarksRepository {
 /// rule (a worktree session's is rebuilt from its worktree name), and building
 /// the map here would be a second copy of it. One branch can carry several, so
 /// picking which one a row draws is the caller's too.
+///
+/// `listing` adds each open PR's [`PrListing`], for the pull requests page.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn pr_marks(cwd: String) -> Result<Vec<PrMark>, PrUnavailable> {
-    pr_marks_inner(&cwd).await.map_err(unavailable)
+pub async fn pr_marks(cwd: String, listing: Option<bool>) -> Result<Vec<PrMark>, PrUnavailable> {
+    pr_marks_inner(&cwd, listing.unwrap_or(false)).await.map_err(unavailable)
 }
 
-async fn pr_marks_inner(cwd: &str) -> Result<Vec<PrMark>, String> {
-    read_pr_marks(&graphql(cwd, QUERY_MARKS, None).await?)
+async fn pr_marks_inner(cwd: &str, listing: bool) -> Result<Vec<PrMark>, String> {
+    let query = QUERY_MARKS.replace("$LISTING", if listing { LISTING } else { "" });
+    read_pr_marks(&graphql(cwd, &query, None).await?)
 }
 
 /// Splits parsing off the spawn, like [`read_prs`].
@@ -1245,23 +1368,196 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
         .into_iter()
         .map(|pr| (PrMarkState::Open, pr))
         .chain(merged.into_iter().map(|pr| (PrMarkState::Merged, pr)))
-        .map(|(state, pr)| {
-            let (checks_state, check_count) = read_checks(pr.commits);
-            PrMark {
-                number: pr.number,
-                url: pr.url,
-                checks_state,
-                check_count,
-                head_ref_name: pr.head_ref_name,
-                head_oid: pr.head_ref_oid.filter(|o| !o.is_empty()),
-                is_draft: pr.is_draft,
-                state,
-                mergeable: pr.mergeable,
-                merge_state_status: pr.merge_state_status,
-                review_decision: pr.review_decision.filter(|d| !d.is_empty()),
-            }
-        })
+        .map(|(state, pr)| mark_of(state, pr))
         .collect())
+}
+
+fn mark_of(state: PrMarkState, mut pr: RawPrMark) -> PrMark {
+    let listing = pr.listing();
+    let (checks_state, check_count) = read_checks(pr.commits);
+    PrMark {
+        number: pr.number,
+        url: pr.url,
+        checks_state,
+        check_count,
+        head_ref_name: pr.head_ref_name,
+        head_oid: pr.head_ref_oid.filter(|o| !o.is_empty()),
+        is_draft: pr.is_draft,
+        state,
+        mergeable: pr.mergeable,
+        merge_state_status: pr.merge_state_status,
+        review_decision: pr.review_decision.filter(|d| !d.is_empty()),
+        listing,
+    }
+}
+
+/// The pull requests page's list across every repository the reader can see:
+/// one GitHub search, `is:pr is:open involves:@me`, narrowed to an owner when
+/// one is picked. Each answer carries what a marks read with its listing does,
+/// plus the repo, so the page needs no checkout to list a PR.
+///
+/// Measured at 1 point with `rateLimit{cost}`, a hundred PRs across any number
+/// of repos, where reading those repos one by one is a point each. The search
+/// index lags a write by a few seconds, which a list polled on a minute does
+/// not notice. `viewer` and its organizations ride along free, for the owner
+/// menu.
+const QUERY_SEARCH: &str = r#"
+query($q:String!){
+ viewer{login organizations(first:50){nodes{login}}}
+ search(query:$q,type:ISSUE,first:100){nodes{... on PullRequest{
+  number url headRefName headRefOid isDraft mergeable mergeStateStatus reviewDecision $LISTING
+  repository{nameWithOwner owner{__typename}}
+  commits(last:1){nodes{commit{statusCheckRollup{state contexts{totalCount}}}}}
+ }}}
+}"#;
+
+/// What the pull requests page lists: the reader's open pull requests across
+/// GitHub, and the owners they can narrow it to.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PrSearch {
+    /// The reader's own login, first among the owners.
+    pub viewer: String,
+    /// The organizations the reader belongs to, as GitHub lists them.
+    pub orgs: Vec<String>,
+    pub prs: Vec<SearchedPr>,
+}
+
+/// One pull request the search found, with the repo it lives in.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct SearchedPr {
+    /// `owner/name`, the slug `github:` keys and `gh --repo` take.
+    pub repo: String,
+    /// The repo's owner is an organization, not a person: what the Owner menu
+    /// searches it by (`org:` or `user:`), membership or not.
+    pub owner_is_org: bool,
+    pub mark: PrMark,
+}
+
+#[derive(Deserialize)]
+struct RawSearchData {
+    viewer: Option<RawViewer>,
+    search: Option<Nodes<serde_json::Value>>,
+}
+
+#[derive(Deserialize)]
+struct RawViewer {
+    #[serde(default)]
+    login: String,
+    organizations: Option<Nodes<RawAuthor>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawSearched {
+    #[serde(flatten)]
+    pr: RawPrMark,
+    repository: Option<RawNamed>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawNamed {
+    #[serde(default)]
+    name_with_owner: String,
+    owner: Option<RawOwner>,
+}
+
+#[derive(Deserialize)]
+struct RawOwner {
+    #[serde(rename = "__typename", default)]
+    typename: String,
+}
+
+/// The reader's open pull requests across GitHub, as `filter` picks them:
+/// those involving the reader (the default), authored by them, or awaiting
+/// their review. `owner` narrows them to one organization (`org:`) or to a
+/// person's account (`user:`); `org` says which the owner is, read off an
+/// earlier answer — GitHub's search drops every PR when the qualifier names
+/// the wrong kind. Without it, only the reader's own login reads as a person.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pr_search(
+    owner: Option<String>,
+    org: Option<bool>,
+    filter: Option<PrSearchFilter>,
+) -> Result<PrSearch, PrUnavailable> {
+    pr_search_inner(owner.as_deref(), org, filter.unwrap_or_default()).await.map_err(unavailable)
+}
+
+/// Which of the reader's pull requests a search asks for.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrSearchFilter {
+    #[default]
+    Involves,
+    Author,
+    ReviewRequested,
+}
+
+impl PrSearchFilter {
+    fn qualifier(self) -> &'static str {
+        match self {
+            Self::Involves => "involves:@me",
+            Self::Author => "author:@me",
+            Self::ReviewRequested => "review-requested:@me",
+        }
+    }
+}
+
+async fn pr_search_inner(owner: Option<&str>, org: Option<bool>, filter: PrSearchFilter) -> Result<PrSearch, String> {
+    let home = std::env::home_dir().ok_or("no home directory")?;
+    let home = home.to_str().ok_or("home directory is not UTF-8")?;
+    // A login is letters, digits and dashes; anything else is no owner GitHub
+    // has, and would be search syntax smuggled into the query.
+    let owner = owner.filter(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    let is_org = match (owner, org) {
+        (Some(_), Some(org)) => org,
+        (Some(o), None) => !gh(home, &["api", "user", "--jq", ".login"]).await?.trim().eq_ignore_ascii_case(o),
+        (None, _) => false,
+    };
+    let scope = match owner {
+        Some(o) if is_org => format!(" org:{o}"),
+        Some(o) => format!(" user:{o}"),
+        None => String::new(),
+    };
+    let q = format!("q=is:pr is:open {} archived:false sort:updated-desc{scope}", filter.qualifier());
+    let query = format!("query={}", QUERY_SEARCH.replace("$LISTING", LISTING));
+    read_pr_search(&gh(home, &["api", "graphql", "-f", &q, "-f", &query]).await?)
+}
+
+/// Splits parsing off the spawn, like [`read_prs`].
+fn read_pr_search(out: &str) -> Result<PrSearch, String> {
+    #[derive(Deserialize)]
+    struct Answer {
+        data: Option<RawSearchData>,
+        #[serde(default)]
+        errors: Vec<GraphQlError>,
+    }
+    let answer: Answer = serde_json::from_str(out).map_err(|e| format!("could not read GitHub's answer: {e}"))?;
+    if let Some(first) = answer.errors.first() {
+        return Err(first.message.clone());
+    }
+    let data = answer.data.ok_or("GitHub answered with nothing")?;
+    let viewer = data.viewer.unwrap_or(RawViewer { login: String::new(), organizations: None });
+    let prs = Nodes::take(data.search)
+        .into_iter()
+        // A node the fragment did not match — never a PR — arrives empty.
+        .filter_map(|node| serde_json::from_value::<RawSearched>(node).ok())
+        .filter_map(|found| {
+            let named = found.repository?;
+            let owner_is_org = named.owner.is_some_and(|o| o.typename == "Organization");
+            let repo = named.name_with_owner;
+            (!repo.is_empty()).then(|| SearchedPr { repo, owner_is_org, mark: mark_of(PrMarkState::Open, found.pr) })
+        })
+        .collect();
+    Ok(PrSearch {
+        viewer: viewer.login,
+        orgs: Nodes::take(viewer.organizations).into_iter().map(|o| o.login).filter(|l| !l.is_empty()).collect(),
+        prs,
+    })
 }
 
 /// Merges the PR. Returns once `gh` has, so the caller can refetch and show
@@ -1432,6 +1728,169 @@ pub async fn reopen_pr(cwd: String, number: u64) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mark_pr_ready(cwd: String, number: u64) -> Result<(), String> {
     gh(&cwd, &["pr", "ready", &number.to_string()]).await.map(|_| ())
+}
+
+/// What the pull requests page's details pane draws beyond the panel's read:
+/// one PR's own words, labels and reviewers, by number.
+///
+/// **Its own query, not more fields on [`QUERY`].** That one sits at 2 points
+/// and even `labels(first:5)` on its fragment tips it to 3, on a read every PR
+/// tab polls; this one is measured at 1 and runs only when a PR is opened on
+/// the page or moves.
+const QUERY_DETAIL: &str = r#"
+query($owner:String!,$repo:String!,$number:Int!){
+ repository(owner:$owner,name:$repo){pullRequest(number:$number){
+  body createdAt author{login avatarUrl}
+  labels(first:20){nodes{name color}}
+  reviewRequests(first:20){nodes{requestedReviewer{__typename
+   ... on User{login avatarUrl} ... on Bot{login avatarUrl} ... on Mannequin{login avatarUrl} ... on Team{name avatarUrl}}}}
+  latestReviews(first:20){nodes{state author{login avatarUrl}}}
+ }}}
+"#;
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PrDetail {
+    /// The description as GitHub stores it: markdown, images as links.
+    pub body: String,
+    pub created_at: String,
+    pub author_avatar: Option<String>,
+    pub labels: Vec<crate::issues::IssueLabel>,
+    /// Asked and answered, one entry per person or team.
+    pub reviewers: Vec<PrReviewer>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct PrReviewer {
+    /// A login, or a team's name.
+    pub name: String,
+    pub avatar: Option<String>,
+    pub state: ReviewerState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewerState {
+    /// Asked and not yet answered, or asked again after answering.
+    Requested,
+    Approved,
+    ChangesRequested,
+    Commented,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetailRepository {
+    pull_request: Option<RawDetail>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDetail {
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    created_at: String,
+    author: Option<RawAuthor>,
+    labels: Option<Nodes<RawLabel>>,
+    review_requests: Option<Nodes<RawReviewRequest>>,
+    latest_reviews: Option<Nodes<RawLatestReview>>,
+}
+
+#[derive(Deserialize)]
+struct RawLabel {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    color: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawReviewRequest {
+    requested_reviewer: Option<RawRequested>,
+}
+
+/// A user, bot and mannequin carry a login; a team carries a name. Both
+/// optional so one shape reads all four.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawRequested {
+    login: Option<String>,
+    name: Option<String>,
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawLatestReview {
+    #[serde(default)]
+    state: String,
+    author: Option<RawAuthor>,
+}
+
+/// One pull request's description, labels and reviewers — see [`QUERY_DETAIL`].
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn pr_detail(cwd: String, number: u64) -> Result<PrDetail, PrUnavailable> {
+    pr_detail_inner(&cwd, number).await.map_err(unavailable)
+}
+
+async fn pr_detail_inner(cwd: &str, number: u64) -> Result<PrDetail, String> {
+    let (owner, repo) = repo_slug(cwd).await?;
+    let (owner, repo) = (format!("owner={owner}"), format!("repo={repo}"));
+    let query = format!("query={QUERY_DETAIL}");
+    // `-F`, not `-f`: the variable is an `Int!` and `-f` sends a string.
+    let number = format!("number={number}");
+    let args = ["api", "graphql", "-f", &owner, "-f", &repo, "-f", &query, "-F", &number];
+    read_pr_detail(&gh(cwd, &args).await?)
+}
+
+/// Splits parsing off the spawn, like [`read_prs`].
+fn read_pr_detail(out: &str) -> Result<PrDetail, String> {
+    let raw = Response::<DetailRepository>::repository(out)?
+        .and_then(|r| r.pull_request)
+        .ok_or("GitHub did not find this pull request.")?;
+
+    // Answered first, then asked: a request standing beside a review is a
+    // re-request, which is the newer fact, so it replaces the verdict.
+    let mut reviewers: Vec<PrReviewer> = Nodes::take(raw.latest_reviews)
+        .into_iter()
+        .filter_map(|r| {
+            let state = match r.state.as_str() {
+                "APPROVED" => ReviewerState::Approved,
+                "CHANGES_REQUESTED" => ReviewerState::ChangesRequested,
+                "COMMENTED" => ReviewerState::Commented,
+                // Pending is the viewer's own unsent draft; dismissed is no
+                // longer a verdict.
+                _ => return None,
+            };
+            Some(PrReviewer { name: login(&r.author), avatar: avatar(&r.author), state })
+        })
+        .collect();
+    for request in Nodes::take(raw.review_requests) {
+        let Some(who) = request.requested_reviewer else { continue };
+        let Some(name) = who.login.or(who.name).filter(|n| !n.is_empty()) else { continue };
+        let asked = PrReviewer { name, avatar: who.avatar_url, state: ReviewerState::Requested };
+        match reviewers.iter_mut().find(|r| r.name == asked.name) {
+            Some(existing) => *existing = asked,
+            None => reviewers.push(asked),
+        }
+    }
+
+    Ok(PrDetail {
+        body: raw.body,
+        created_at: raw.created_at,
+        author_avatar: avatar(&raw.author),
+        labels: Nodes::take(raw.labels)
+            .into_iter()
+            // GitHub's colour is bare hex; the issues page's labels carry `#`.
+            .map(|l| crate::issues::IssueLabel { name: l.name, color: format!("#{}", l.color) })
+            .collect(),
+        reviewers,
+    })
 }
 
 #[cfg(test)]
@@ -1751,6 +2210,41 @@ mod tests {
         assert!(err.contains("fork"), "{err}");
     }
 
+    #[test]
+    fn pr_detail_reads_labels_and_reviewers() {
+        // A real capture: two labels, a review request whose reviewer GitHub
+        // hides from this viewer (null), one to a person, and a bot's review.
+        let detail = read_pr_detail(include_str!("fixtures/pr_detail.json")).expect("parses");
+        assert!(!detail.body.is_empty());
+        assert_eq!(detail.created_at, "2026-11-20T01:54:00Z");
+        assert!(detail.author_avatar.is_some());
+        let labels: Vec<_> = detail.labels.iter().map(|l| (l.name.as_str(), l.color.as_str())).collect();
+        assert_eq!(labels, [("external", "#2700AF"), ("ready-for-review", "#39d965")]);
+        let reviewers: Vec<_> = detail.reviewers.iter().map(|r| (r.name.as_str(), r.state)).collect();
+        assert_eq!(
+            reviewers,
+            [("copilot-pull-request-reviewer", ReviewerState::Commented), ("sergiou87", ReviewerState::Requested)]
+        );
+    }
+
+    #[test]
+    fn a_re_request_replaces_the_earlier_verdict() {
+        let out = r#"{"data":{"repository":{"pullRequest":{"body":"","createdAt":"",
+            "reviewRequests":{"nodes":[{"requestedReviewer":{"__typename":"Team","name":"core","avatarUrl":null}},
+                                       {"requestedReviewer":{"__typename":"User","login":"ann","avatarUrl":null}}]},
+            "latestReviews":{"nodes":[{"state":"APPROVED","author":{"login":"ann"}},
+                                      {"state":"DISMISSED","author":{"login":"bob"}},
+                                      {"state":"PENDING","author":{"login":"cy"}}]}}}}}"#;
+        let detail = read_pr_detail(out).expect("parses");
+        let reviewers: Vec<_> = detail.reviewers.iter().map(|r| (r.name.as_str(), r.state)).collect();
+        assert_eq!(reviewers, [("ann", ReviewerState::Requested), ("core", ReviewerState::Requested)]);
+    }
+
+    #[test]
+    fn a_missing_pr_detail_is_an_error() {
+        assert!(read_pr_detail(r#"{"data":{"repository":{"pullRequest":null}}}"#).is_err());
+    }
+
     /// Both halves fail closed. An answer we could not parse, or one missing
     /// the flag, must not reach a delete — this is the one irreversible thing
     /// on the pane, and "we could not tell" is not permission.
@@ -1833,6 +2327,101 @@ mod tests {
         assert_eq!(prs[0].merge_state_status.as_deref(), Some("CLEAN"));
         assert_eq!(prs[1].mergeable, None);
         assert_eq!(prs[1].merge_state_status, None);
+    }
+
+    /// The search reads each PR as the marks do, with its repo; an empty node
+    /// is skipped, and the viewer's orgs come along.
+    #[test]
+    fn a_search_lists_prs_across_repos() {
+        let out = r#"{"data":{"viewer":{"login":"me","organizations":{"nodes":[{"login":"acme"}]}},
+            "search":{"nodes":[
+              {"number":9,"url":"https://github.com/acme/app/pull/9","headRefName":"fix","isDraft":false,
+               "title":"Fix","updatedAt":"2026-11-20T11:04:51Z","isCrossRepository":false,"viewerDidAuthor":true,
+               "author":{"login":"me"},"repository":{"nameWithOwner":"acme/app"},
+               "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE","contexts":{"totalCount":2}}}}]}},
+              {}]}}}"#;
+        let found = read_pr_search(out).expect("parses");
+        assert_eq!(found.viewer, "me");
+        assert_eq!(found.orgs, ["acme"]);
+        assert_eq!(found.prs.len(), 1);
+        assert_eq!(found.prs[0].repo, "acme/app");
+        assert!(!found.prs[0].owner_is_org, "no owner type read as a person");
+        assert_eq!(found.prs[0].mark.listing.as_ref().map(|l| l.title.as_str()), Some("Fix"));
+        assert!(matches!(found.prs[0].mark.checks_state, PrChecksState::Failing));
+        assert!(read_pr_search(r#"{"errors":[{"message":"bad"}]}"#).is_err());
+    }
+
+    /// The listing is spliced into the open half and nowhere else, and only
+    /// when asked: a placeholder left in or doubled is a query GitHub refuses.
+    #[test]
+    fn the_listing_rides_the_marks_query_only_when_asked() {
+        assert_eq!(QUERY_MARKS.matches("$LISTING").count(), 1);
+        let open_half = QUERY_MARKS.split("merged:").next().unwrap();
+        assert!(open_half.contains("$LISTING"));
+        let without = QUERY_MARKS.replace("$LISTING", "");
+        assert!(!without.contains("viewerDidAuthor") && !without.contains("title"));
+        assert!(QUERY_MARKS.replace("$LISTING", LISTING).contains("viewerLatestReviewRequest{id}"));
+    }
+
+    /// The pull requests page's row rides the open half; the merged half and
+    /// an answer from before the page carry none.
+    #[test]
+    fn open_pr_marks_carry_a_listing() {
+        let out = r#"{"data":{"repository":{
+            "open":{"nodes":[
+              {"number":9,"headRefName":"fix/live","isDraft":false,"title":"Fix it",
+               "updatedAt":"2026-11-20T11:04:51Z","additions":12,"deletions":3,
+               "isCrossRepository":false,"viewerDidAuthor":true,
+               "viewerLatestReviewRequest":{"id":"RR_1"},
+               "author":{"login":"ada","avatarUrl":"https://a/ada.png"},
+               "comments":{"totalCount":2},"reviewThreads":{"totalCount":3}},
+              {"number":8,"headRefName":"fork","isDraft":false,"title":"From a fork",
+               "viewerLatestReviewRequest":null,"author":null}]},
+            "merged":{"nodes":[{"number":4,"headRefName":"fix/landed","isDraft":false}]}}}}"#;
+        let prs = read_pr_marks(out).expect("pr marks parse");
+
+        let listing = prs[0].listing.as_ref().expect("open half lists");
+        assert_eq!(listing.title, "Fix it");
+        assert_eq!(listing.author, "ada");
+        assert_eq!(listing.author_avatar.as_deref(), Some("https://a/ada.png"));
+        assert_eq!((listing.additions, listing.deletions), (12, 3));
+        assert_eq!(listing.comment_count, 5);
+        assert!(!listing.is_cross_repository);
+        assert!(listing.viewer_did_author && listing.review_requested);
+
+        let fork = prs[1].listing.as_ref().expect("open half lists");
+        assert!(fork.is_cross_repository, "unknown reads as a fork");
+        assert!(!fork.review_requested && !fork.viewer_did_author);
+        assert_eq!(fork.comment_count, 0);
+
+        assert!(prs[2].listing.is_none());
+    }
+
+    /// Every timeline row carries its node id, and a review links to itself
+    /// rather than to the PR — the page picks rows by one and quotes the other.
+    #[test]
+    fn comments_carry_ids_and_reviews_their_own_url() {
+        let out = r#"{"data":{"repository":{"open":{"nodes":[{"number":7,"url":"https://github.com/o/r/pull/7",
+            "comments":{"nodes":[{"id":"IC_1","author":{"login":"a"},"body":"hi","createdAt":"1",
+              "url":"https://github.com/o/r/pull/7#issuecomment-1"}]},
+            "reviews":{"nodes":[
+              {"id":"PRR_1","url":"https://github.com/o/r/pull/7#pullrequestreview-1","author":{"login":"b"},
+               "body":"looks off","submittedAt":"2","state":"CHANGES_REQUESTED"},
+              {"id":"PRR_2","author":{"login":"c"},"body":"old server","submittedAt":"3","state":"COMMENTED"}]},
+            "reviewThreads":{"nodes":[{"isResolved":false,"path":"a.rs","line":4,"comments":{"nodes":[
+              {"id":"PRRC_1","author":{"login":"b"},"body":"here","createdAt":"2",
+               "url":"https://github.com/o/r/pull/7#discussion_r1","pullRequestReview":{"id":"PRR_1"}},
+              {"id":"PRRC_2","author":{"login":"a"},"body":"done","createdAt":"4",
+               "url":"https://github.com/o/r/pull/7#discussion_r2","pullRequestReview":{"id":"PRR_9"}}]}}]}}]}}}}"#;
+        let pr = read_prs(out).expect("parses").pop().expect("one PR");
+        let ids: Vec<&str> = pr.comments.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["IC_1", "PRR_1", "PRR_2"]);
+
+        let review = &pr.comments[1];
+        assert_eq!(review.url, "https://github.com/o/r/pull/7#pullrequestreview-1");
+        assert_eq!(review.replies[0].id, "PRRC_1");
+        assert_eq!(review.replies[0].replies[0].id, "PRRC_2");
+        assert_eq!(pr.comments[2].url, "https://github.com/o/r/pull/7", "no url falls back to the PR's");
     }
 
     /// State comes from which connection answered, not from a field — see

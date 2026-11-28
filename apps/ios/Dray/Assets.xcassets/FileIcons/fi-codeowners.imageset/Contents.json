@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "filename": "codeowners.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}
