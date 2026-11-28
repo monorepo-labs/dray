@@ -20,7 +20,7 @@ import {
 import Orb from "@/components/Orb";
 import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
-import { botAt, greetingOf, previewLine, type BotEntry } from "@/lib/bots";
+import { botAt, greetingOf, moveBot, previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
@@ -58,6 +58,7 @@ import { draftTitle, type Draft } from "@/hooks/useDrafts";
 import { useHoverPrefetch } from "@/hooks/useHoverPrefetch";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
+import { useDragReorder } from "@/hooks/useDragReorder";
 import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
@@ -1492,26 +1493,18 @@ export default function Sidebar({
       {/* Above the project filter: a bot belongs to no project, it hands work
           to any of them. No heading — the face on a row is what says it is a
           bot. New bot sits in the strip above, beside the other ways in. */}
-      {bots.length > 0 && <div data-rail-keep className="mt-4 flex flex-col gap-px px-2">
-        {bots.map(({ bot, session, preview }) => {
-          const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
-          return <BotRow
-            key={bot.id}
-            bot={bot}
-            preview={preview}
-            sessionId={session?.sessionId}
-            modified={session?.modified}
-            status={status}
-            unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
-            asking={!!session && askingSessions.has(session.sessionId)}
-            active={(!!session && session.sessionId === selectedSessionId) || bot.id === newBotId}
-            onOpen={() => onOpenBot?.(bot)}
-            onDelete={() => onDeleteBot?.(bot)}
-            onEdit={() => onEditBot?.(bot)}
-            iconOnly={iconOnly}
-          />;
-        })}
-      </div>}
+      {bots.length > 0 && <BotList
+        bots={bots}
+        statusBySession={statusBySession}
+        unreadWorking={unreadWorking}
+        askingSessions={askingSessions}
+        selectedSessionId={selectedSessionId}
+        newBotId={newBotId}
+        onOpenBot={onOpenBot}
+        onDeleteBot={onDeleteBot}
+        onEditBot={onEditBot}
+        iconOnly={iconOnly}
+      />}
 
       {/* The rail draws the same runs as the list, one icon per row: no
           headings and no lineage, the break between runs is the grouping. */}
@@ -2072,6 +2065,70 @@ function cutout(width: number, height: number, face = 40, gap = 2): string {
 const DOT_CUTOUT = cutout(10, 10, 32);
 const COUNT_CUTOUT = cutout(16, 16, 32);
 
+/// How long a bot row is pressed before it can be dragged: a press that moves
+/// sooner is a click, the way the row has always opened its chat.
+const BOT_HOLD_MS = 250;
+
+/// The bots, in the order the reader dragged them into.
+function BotList({
+  bots,
+  statusBySession,
+  unreadWorking,
+  askingSessions,
+  selectedSessionId,
+  newBotId,
+  onOpenBot,
+  onDeleteBot,
+  onEditBot,
+  iconOnly,
+}: {
+  bots: BotEntry[];
+  statusBySession: Record<string, SessionStatus>;
+  unreadWorking: ReadonlySet<string>;
+  askingSessions: ReadonlySet<string>;
+  selectedSessionId: string | null | undefined;
+  newBotId?: string | null;
+  onOpenBot?: (bot: Bot) => void;
+  onDeleteBot?: (bot: Bot) => void;
+  onEditBot?: (bot: Bot) => void;
+  iconOnly: boolean;
+}) {
+  const { list, shown, drag, start, offset } = useDragReorder(
+    bots,
+    (b) => b.bot.id,
+    (b, _delta, to) => moveBot(b.bot, to),
+    "y",
+    undefined,
+    BOT_HOLD_MS,
+  );
+  return (
+    <div ref={list} data-rail-keep className="mt-4 flex flex-col gap-px px-2">
+      {shown.map(({ bot, session, preview }, i) => {
+        const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
+        return <BotRow
+          key={bot.id}
+          bot={bot}
+          preview={preview}
+          sessionId={session?.sessionId}
+          modified={session?.modified}
+          status={status}
+          unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
+          asking={!!session && askingSessions.has(session.sessionId)}
+          active={(!!session && session.sessionId === selectedSessionId) || bot.id === newBotId}
+          onOpen={() => onOpenBot?.(bot)}
+          onDelete={() => onDeleteBot?.(bot)}
+          onEdit={() => onEditBot?.(bot)}
+          iconOnly={iconOnly}
+          onDragStart={(e) => start(e, i)}
+          transform={offset(i)}
+          held={drag?.from === i}
+          gliding={!!drag && drag.from !== i}
+        />;
+      })}
+    </div>
+  );
+}
+
 function BotRow({
   bot,
   preview,
@@ -2085,10 +2142,21 @@ function BotRow({
   onDelete,
   onEdit,
   iconOnly = false,
+  onDragStart,
+  transform,
+  held = false,
+  gliding = false,
 }: {
   bot: Bot;
   /// The rail: the face alone, the name in a tooltip.
   iconOnly?: boolean;
+  /// The list's reorder: a press held in place, then dragged.
+  onDragStart?: (e: React.PointerEvent<HTMLElement>) => void;
+  transform?: string;
+  /// The row in hand, lifted over the rest.
+  held?: boolean;
+  /// A row sliding aside for the one in hand.
+  gliding?: boolean;
   /// The chat's newest line — the reader's own, the bot's reaction, or its
   /// reply — and the replies since the reader last wrote.
   preview?: BotPreview;
@@ -2135,10 +2203,14 @@ function BotRow({
             setHovered(false);
             prefetch.onPointerLeave();
           }}
-          onPointerDown={prefetch.onPointerDown}
+          onPointerDown={(e) => {
+            prefetch.onPointerDown();
+            onDragStart?.(e);
+          }}
+          style={transform ? { transform } : undefined}
           aria-label={iconOnly ? bot.name : undefined}
           className={cn(
-            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md text-left",
+            "group relative flex w-full cursor-pointer touch-none items-center gap-2 rounded-md text-left",
             // One height both ways, so a snap never moves the rows under it.
             "h-11", iconOnly ? "justify-center px-1" : "pr-[5px] pl-1",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
@@ -2146,6 +2218,10 @@ function BotRow({
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
               : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
             offline && "opacity-50",
+            // Only the rows making room glide; the one in hand tracks the pointer.
+            gliding && "transition-[color,background-color,transform] duration-150 ease-out",
+            // Filled while held, or it draws its text over the rows it passes.
+            held && "z-10 cursor-grabbing bg-sidebar-accent shadow-(--shadow-button) hover:bg-sidebar-accent",
           )}
         >
           <span className="relative shrink-0">

@@ -49,6 +49,12 @@ pub struct Bot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub greeting: Vec<String>,
+    /// Where the reader dragged it in their bot list, which spans servers, so
+    /// every client sorts all its servers' bots by this. Kept on the bot's own
+    /// server so a phone reads the order the desktop wrote (#1670). `None`
+    /// sorts after every placed bot, in the order it was listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<i64>,
 }
 
 /// A Blobatar face: which silhouette and which hue. Strings and degrees rather
@@ -1401,6 +1407,35 @@ pub async fn edit_bot(id: String, name: String, avatar: BotAvatar, sink: Sink) -
     Ok(bot)
 }
 
+/// The sidebar's drag: each named bot's place in the reader's whole list. A
+/// bot this server does not hold is skipped, since the desktop sends each
+/// server only its own.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_bot_order(places: std::collections::HashMap<String, i64>, sink: Sink) -> Result<(), Fail> {
+    {
+        let _guard = BOTS_LOCK.lock().await;
+        let mut bots = read_list().await?;
+        if !place_bots(&mut bots, &places) {
+            return Ok(());
+        }
+        save_list(&bots).await?;
+    }
+    // What tells a phone showing the list to read it again.
+    sink.emit(BOTS_CHANGED, ()).ok();
+    Ok(())
+}
+
+/// Writes `places` onto `bots`, answering whether any moved.
+fn place_bots(bots: &mut [Bot], places: &std::collections::HashMap<String, i64>) -> bool {
+    let mut moved = false;
+    for bot in bots {
+        if let Some(&at) = places.get(&bot.id) {
+            moved |= bot.order.replace(at) != Some(at);
+        }
+    }
+    moved
+}
+
 /// Renames the bot `key` names and, given one, changes its face. A rename
 /// reaches its open chat's title, and the bot itself before its next prompt.
 async fn update_bot(key: &str, name: &str, avatar: Option<BotAvatar>, sink: &Sink) -> Result<Bot> {
@@ -1618,6 +1653,7 @@ async fn make_bot(name: String, avatar: Option<BotAvatar>, welcome: Option<Strin
         avatar,
         welcome,
         greeting: Vec::new(),
+        order: None,
     };
     let mut bots = read_list().await?;
     bots.push(bot.clone());
@@ -2470,7 +2506,7 @@ mod tests {
     use super::*;
 
     fn bot() -> Bot {
-        Bot { id: "b".into(), name: "Ops".into(), path: "/h/bots/b".into(), created: String::new(), avatar: None, welcome: None, greeting: Vec::new() }
+        Bot { id: "b".into(), name: "Ops".into(), path: "/h/bots/b".into(), created: String::new(), avatar: None, welcome: None, greeting: Vec::new(), order: None }
     }
 
     /// The real file passes over a log in memory, at chunk sizes that cut
@@ -2610,6 +2646,24 @@ mod tests {
 
     fn named_bot(id: &str, name: &str) -> Bot {
         Bot { id: id.into(), name: name.into(), ..bot() }
+    }
+
+    #[test]
+    fn places_only_the_bots_named_and_says_when_one_moved() {
+        let mut bots = vec![named_bot("a", "A"), named_bot("b", "B")];
+        let places = std::collections::HashMap::from([("b".to_string(), 0), ("elsewhere".to_string(), 1)]);
+        assert!(place_bots(&mut bots, &places));
+        assert_eq!(bots.iter().map(|b| b.order).collect::<Vec<_>>(), [None, Some(0)]);
+        assert!(!place_bots(&mut bots, &places));
+    }
+
+    #[test]
+    fn an_unplaced_bot_writes_no_order_and_an_old_list_reads() {
+        assert!(!serde_json::to_string(&bot()).unwrap().contains("order"));
+        let old: Bot = serde_json::from_str(r#"{"id":"b","name":"Ops","path":"/p","created":""}"#).unwrap();
+        assert_eq!(old.order, None);
+        let placed = Bot { order: Some(3), ..bot() };
+        assert!(serde_json::to_string(&placed).unwrap().contains(r#""order":3"#));
     }
 
     #[test]

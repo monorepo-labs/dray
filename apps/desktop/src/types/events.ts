@@ -701,7 +701,14 @@ welcome?: string | null,
  * and never saved: the welcome in today's words, then the question for
  * the user's name while no bot knows it. Empty with no welcome.
  */
-greeting?: Array<string>, };
+greeting?: Array<string>, 
+/**
+ * Where the reader dragged it in their bot list, which spans servers, so
+ * every client sorts all its servers' bots by this. Kept on the bot's own
+ * server so a phone reads the order the desktop wrote (#1670). `None`
+ * sorts after every placed bot, in the order it was listed.
+ */
+order?: number | null, };
 
 /**
  * A Blobatar face: which silhouette and which hue. Strings and degrees rather

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botBrowser, botChat, botNamed, botSession, greetingOf, inBotTree, previewLine } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botNamed, botSession, greetingOf, inBotTree, inOrder, placesAfterMove, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -120,5 +120,20 @@ describe("botChat", () => {
       item("elsewhere", { cwd: "/repo" }),
     ];
     expect(botChat(items, bot).map((i) => i.sessionId)).toEqual(["claude", "codex"]);
+  });
+});
+
+describe("inOrder", () => {
+  const bot = (id: string, order?: number): Bot => ({ id, name: id, path: `/b/${id}`, created: "", order });
+
+  it("puts placed bots first by place, then the rest as listed", () => {
+    const list = [bot("new"), bot("b", 1), bot("old"), bot("a", 0)];
+    expect(inOrder(list).map((b) => b.id)).toEqual(["a", "b", "new", "old"]);
+  });
+
+  it("gives every bot its place after a move", () => {
+    const list = [bot("a"), bot("b"), bot("c")];
+    expect([...placesAfterMove(list, list[2], 0)]).toEqual([["c", 0], ["a", 1], ["b", 2]]);
+    expect([...placesAfterMove(list, list[0], 2)]).toEqual([["b", 0], ["c", 1], ["a", 2]]);
   });
 });

@@ -20,9 +20,9 @@ export type Leave<T> = {
   drop: (item: T) => void;
 };
 
-/// Drag-to-reorder for one list: the Spaces settings rows, and the browser and
-/// Files tab strips. The item follows the pointer and the ones it passes slide
-/// aside by transform, so nothing re-lays out mid-drag and the drop point is
+/// Drag-to-reorder for one list: the Spaces settings rows, the browser and
+/// Files tab strips, and the sidebar's bots. The item follows the pointer and
+/// the ones it passes slide aside by transform, so nothing re-lays out mid-drag and the drop point is
 /// judged against where items sat when the drag began. One move is written on
 /// release, however far the item travelled.
 ///
@@ -41,6 +41,10 @@ export function useDragReorder<T>(
   onMove: (item: T, delta: number, to: number) => Promise<unknown> | void,
   axis: "x" | "y" = "y",
   leave?: Leave<T>,
+  /// Milliseconds a press must stay put before it can drag, for items whose
+  /// press is also a click: the sidebar's bot rows. Moving sooner leaves it a
+  /// click, and a drag once held swallows the click its release would fire.
+  hold?: number,
 ) {
   // The order after a drop, held until the write answers so the items do not
   // snap back for the frame it takes.
@@ -62,8 +66,10 @@ export function useDragReorder<T>(
     // delta, so one measured against an unconfirmed order lands wrong if that
     // write fails.
     if (e.button !== 0 || !list.current || pending.current) return;
-    // The item's own controls and fields answer their own presses.
-    if ((e.target as Element).closest("button:not([data-grip]), input, textarea")) return;
+    // The item's own controls and fields answer their own presses. An item
+    // that is itself a button is the thing being dragged.
+    const control = (e.target as Element).closest("button:not([data-grip]), input, textarea");
+    if (control && control !== e.currentTarget) return;
     // Keeps the press from starting a text selection across the items.
     e.preventDefault();
     const el = e.currentTarget;
@@ -99,7 +105,21 @@ export function useDragReorder<T>(
     // Whether a release now would drop the item off the list.
     let out = false;
     const dragged = shown[from];
-    el.setPointerCapture(e.pointerId);
+    const { pointerId } = e;
+    // A held item takes the pointer only once the hold is up: captured from
+    // the press, a release over another row still clicked this one. Until
+    // then the window hears the press, wherever it ends.
+    const host: Window | HTMLElement = hold ? window : el;
+    let armed = !hold;
+    if (armed) el.setPointerCapture(pointerId);
+    // Lifted in place once the hold is up, so the reader sees it can move.
+    const timer = hold
+      ? setTimeout(() => {
+          armed = true;
+          el.setPointerCapture(pointerId);
+          setDrag({ from, to: from, d: 0, step });
+        }, hold)
+      : undefined;
 
     const tick = () => {
       const v = pointer < edges[lo] + EDGE ? -SPEED : pointer > edges[hi] - EDGE ? SPEED : 0;
@@ -111,6 +131,7 @@ export function useDragReorder<T>(
     };
 
     const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       pointer = at(ev);
       if (leave) {
         const past = axis === "x" ? ev.clientY > edges.bottom + LEAVE : ev.clientX > edges.right + LEAVE;
@@ -123,6 +144,10 @@ export function useDragReorder<T>(
         }
       }
       if (!moved && Math.abs(pointer - origin) < DEAD_ZONE) return;
+      if (!armed) {
+        detach();
+        return;
+      }
       if (!moved) {
         document.body.classList.add("session-drag");
         if (scrollable) frame = requestAnimationFrame(tick);
@@ -145,13 +170,25 @@ export function useDragReorder<T>(
       setDrag({ from, to, d, step });
     };
 
+    const detach = () => {
+      clearTimeout(timer);
+      host.removeEventListener("pointermove", move as EventListener);
+      host.removeEventListener("pointerup", end as EventListener);
+      host.removeEventListener("pointercancel", end as EventListener);
+    };
+
     const end = (ev: PointerEvent) => {
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerup", end);
-      el.removeEventListener("pointercancel", end);
+      if (ev.pointerId !== pointerId) return;
+      detach();
       cancelAnimationFrame(frame);
       document.body.classList.remove("session-drag");
       setDrag(null);
+      if (hold && moved) {
+        // Retired on the next task, so a later real click is not eaten.
+        const swallow = (c: Event) => c.stopPropagation();
+        el.addEventListener("click", swallow, { capture: true });
+        setTimeout(() => el.removeEventListener("click", swallow, { capture: true }), 0);
+      }
       if (leave) {
         leave.over(dragged, null);
         if (out && ev.type === "pointerup") {
@@ -166,9 +203,9 @@ export function useDragReorder<T>(
       commit(from, to);
     };
 
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", end);
-    el.addEventListener("pointercancel", end);
+    host.addEventListener("pointermove", move as EventListener);
+    host.addEventListener("pointerup", end as EventListener);
+    host.addEventListener("pointercancel", end as EventListener);
   };
 
   /// Draws the move at once and writes it. Both the drag and the keyboard come
