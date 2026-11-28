@@ -55,8 +55,9 @@ pub mod login;
 /// v25 added `detach_session`, which an older app reads as a broken CLI, and
 /// v26 `attach_session`, v27 `issue_card`, v28 the secret verbs. v29 added
 /// `permission_mode` on a create or a draft: an older app ignores it and runs
-/// the session on its parent's stance, which answers like success.
-pub const PROTOCOL_VERSION: u32 = 29;
+/// the session on its parent's stance, which answers like success. v30 added
+/// `cancel_secret`, which an older app reads as a broken CLI.
+pub const PROTOCOL_VERSION: u32 = 30;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -156,6 +157,7 @@ impl Request {
             Request::AttachSession(_) => 26,
             Request::IssueCard(_) => 27,
             Request::RequestSecret(_) | Request::SecretPath(_) | Request::ListSecrets => 28,
+            Request::CancelSecret(_) => 30,
         }
     }
 }
@@ -218,6 +220,7 @@ pub enum Request {
     RequestSecret(RequestSecret),
     SecretPath(SecretName),
     ListSecrets,
+    CancelSecret(CancelSecret),
 }
 
 /// `dray session attach`: the task, and the bot by id or name.
@@ -371,6 +374,16 @@ pub struct RequestSecret {
     /// Where the user makes or finds one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+}
+
+/// An agent withdrawing its own open secret card in `session_id`'s chat, by
+/// name: asking again replaces a card, so a name has at most one open there.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelSecret {
+    /// The calling session: only its own cards are found.
+    pub session_id: String,
+    pub name: String,
 }
 
 /// A secret saved on this machine, by name.
@@ -1182,6 +1195,9 @@ pub enum Response {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         bot: bool,
     },
+    /// `withdrawn` is false where no card for `name` was open in that chat:
+    /// answered, declined, withdrawn already, or never asked there.
+    SecretCancelled { name: String, withdrawn: bool },
     /// Where a saved secret's file is on this machine.
     SecretPath { name: String, path: String },
     Secrets { secrets: Vec<SecretSummary> },
@@ -1658,6 +1674,8 @@ mod tests {
         for request in &secrets {
             assert_eq!(Envelope::new(request.clone()).v, 28, "{request:?}");
         }
+        let cancel = Request::CancelSecret(Default::default());
+        assert_eq!(Envelope::new(cancel.clone()).v, 30);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1673,6 +1691,7 @@ mod tests {
             .chain([&ask, &detach, &attach, &issues])
             .chain(&secrets)
             .chain(&stanced)
+            .chain([&cancel])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

@@ -612,6 +612,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::MergeCard(r) => Some(&r.session_id),
         Request::IssueCard(r) => Some(&r.session_id),
         Request::RequestSecret(r) => Some(&r.session_id),
+        Request::CancelSecret(r) => Some(&r.session_id),
         Request::SetNeed(r) => Some(&r.session_id),
         Request::React(r) => Some(&r.session_id),
         Request::SetModel(r) => Some(&r.session_id),
@@ -1269,6 +1270,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::RequestSecret(ask) => crate::secrets::request(ask, app).await,
         Request::SecretPath(secret) => crate::secrets::path_of(&secret.name).await,
         Request::ListSecrets => crate::secrets::list().await,
+        Request::CancelSecret(cancel) => crate::secrets::cancel(cancel, app).await,
         Request::React(react) => {
             let chat = store::get_session_index_item(&react.session_id)
                 .await?

@@ -2166,7 +2166,7 @@ ownerIsOrg: boolean, mark: PrMark, };
  * How a secret card closed. `Other` reads an outcome a later build adds, so
  * the line still parses and the card still closes.
  */
-export type SecretOutcome = "saved" | "declined" | "replaced" | "used" | "other";
+export type SecretOutcome = "saved" | "declined" | "replaced" | "used" | "withdrawn" | "other";
 
 /**
  * The task on another machine a bot's secret card answers.

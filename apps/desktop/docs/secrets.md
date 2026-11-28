@@ -38,6 +38,12 @@ A permission card is answered to the child that asked, so it dies with the child
 
 Asking again for a name whose card is still open in that session closes the old one as `replaced`, which draws no row.
 
+## Taking a card back
+
+**`dray secret cancel NAME` closes the calling session's open card for NAME as `withdrawn`** (#1705), so an agent that found another way in never leaves a card for the user to decline. By name, since asking again replaces a card and a name has at most one open per chat. It logs `secret_answered` with `withdrawn` and drops the card from `pending.json`, so every client closes it the way it closes any answered card, and nothing is sent to the agent. `withdrawn` draws no row, like `replaced`: the agent says why in its own reply, and the phones, which draw only `saved`, `declined` and `used`, needed no change. A session finds only its own cards, never another session's, and never a card relayed into a bot's chat from a task: that one is the task's to take back. None open answers `withdrawn: false`, which the CLI says in words and exits 0, since the card is gone either way.
+
+A bot's task on another machine takes back its ask the same way, on its own server. The bot's server learns of it at its next collect (`withdraw_relayed`, every 10s): a card it relayed from that machine whose ask the answer no longer lists is closed as `withdrawn` too. The answer lists every open ask under the tasks it was asked about, and a card the reader answers from here closes under the lock its answer is sent under, so by the time the check holds that lock, a card still open with its ask missing is one the task took back.
+
 ## Masking is a safety net
 
 `secrets::mask` blanks any value saved here (6 characters or more) out of each event before it is emitted and before it is logged, matching the raw and the JSON-escaped form. A value split across deltas, encoded or reformatted gets through, and the model has already seen whatever a command printed. Nothing relies on it.
