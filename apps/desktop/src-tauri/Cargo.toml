@@ -102,6 +102,14 @@ sha2 = "0.11"
 # Public addresses for Remote access and shared dev servers (tunnel.rs). TLS
 # ends in this process, so the relay sees no plaintext, and the address is kept.
 opentunnel = "0.7.0"
+# Dray's own relay in place of opentunnel, while one is configured (relay.rs,
+# #1669). Its wire, then what ends TLS here: every crate below is already in
+# the tree under opentunnel.
+dray-relay = { path = "../../../crates/dray-relay" }
+ring = "0.17"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+x509-parser = "0.18"
 # The Host-rewriting proxy in front of a shared dev server. Both already in the
 # tree under `reqwest`.
 hyper = { version = "1", features = ["http1", "server", "client"] }
@@ -332,6 +340,7 @@ path = "src/bin/dray_helper.rs"
 required-features = ["cef"]
 
 [dev-dependencies]
+time = "0.3"
 # Paused-clock tests for the engine's idle unload; a real ten-minute sleep is untestable.
 tokio = { version = "1", features = ["test-util"] }
 

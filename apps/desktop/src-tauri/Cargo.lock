@@ -1406,6 +1406,7 @@ dependencies = [
  "chrono",
  "cpal",
  "dray-proto",
+ "dray-relay",
  "dunce",
  "earshot",
  "fff-search",
@@ -1427,7 +1428,9 @@ dependencies = [
  "opentunnel",
  "png",
  "qrcode",
+ "rcgen",
  "reqwest",
+ "ring",
  "rubato",
  "rustls",
  "semver",
@@ -1442,7 +1445,9 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "time",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "transcribe-cpp",
  "ts-rs",
@@ -1451,6 +1456,7 @@ dependencies = [
  "windows",
  "windows-sys 0.61.2",
  "x11",
+ "x509-parser",
  "zbus 5.19.0",
  "zip",
 ]
@@ -1462,6 +1468,18 @@ dependencies = [
  "serde",
  "serde_json",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "dray-relay"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tokio",
 ]
 
 [[package]]

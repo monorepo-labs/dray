@@ -1,5 +1,6 @@
 //! Remote access: this machine as a Dray server, reached through an
-//! OpenTunnel address that stays the same across restarts ([`crate::tunnel`]).
+//! OpenTunnel address that stays the same across restarts ([`crate::tunnel`]),
+//! or through Dray's own relay where one is configured ([`crate::relay`]).
 //! On a Mac the server runs a listener of its own for it, apart from the
 //! app's, so a remote Mac is never handed the host calls; `dray-serve` fronts
 //! the listener it already has ([`fronts`]). See TUNNEL-PLAN.md.
@@ -128,6 +129,7 @@ async fn switch(sink: &Sink, on: bool) {
         let _ = task.await;
     }
     tunnel::withdraw(tunnel::REMOTE, ROUTE, None).await;
+    crate::relay::withdraw().await;
     WRITTEN.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Ok(file) = tunnel_file().await {
         let _ = tokio::fs::remove_file(file).await;
@@ -173,7 +175,14 @@ async fn serve_and_tunnel(sink: Sink) {
     let tunnel = async {
         let mut backoff = Duration::from_secs(2);
         loop {
-            match tunnel::expose(tunnel::REMOTE, ROUTE, format!("127.0.0.1:{port}")).await {
+            let target = format!("127.0.0.1:{port}");
+            // Read each try, so writing `relay-url` takes effect on the next.
+            let relay = crate::relay::configured().await;
+            let exposed = match &relay {
+                Some(base) => crate::relay::expose(base.clone(), target).await,
+                None => tunnel::expose(tunnel::REMOTE, ROUTE, target).await,
+            };
+            match exposed {
                 Ok(url) => {
                     let _ = store::write_atomic(&file, format!("{url}\n")).await;
                     *WRITTEN.lock().unwrap_or_else(|e| e.into_inner()) = Some(file.clone());
@@ -183,10 +192,14 @@ async fn serve_and_tunnel(sink: Sink) {
                         crate::analytics::feature_used("remote_access");
                     }
                     backoff = Duration::from_secs(2);
-                    follow(&sink, &address).await;
+                    match relay {
+                        Some(_) => follow_relay(&sink, &address).await,
+                        None => follow(&sink, &address).await,
+                    }
                 }
                 Err(e) => {
-                    tunnel::log(tunnel::REMOTE, &format!("could not open, trying again in {}s: {e:#}", backoff.as_secs()));
+                    let profile = if relay.is_some() { "relay" } else { tunnel::REMOTE };
+                    tunnel::log(profile, &format!("could not open, trying again in {}s: {e:#}", backoff.as_secs()));
                     set(&sink, None, Some(format!("{e:#}")));
                 }
             }
@@ -222,6 +235,33 @@ async fn follow(sink: &Sink, address: &str) {
                     return set(sink, None, Some(format!("The tunnel stopped: {why}. Starting it again.")));
                 }
                 _ => {
+                    let why = now.last_error.map(|e| format!(": {e}")).unwrap_or_default();
+                    set(sink, Some(address.into()), Some(format!("Reconnecting to the relay{why}")));
+                }
+            }
+        }
+        if status.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+/// [`follow`] for the relay's bridge, which also reconnects on its own
+/// under the same address.
+async fn follow_relay(sink: &Sink, address: &str) {
+    use crate::relay::State;
+    let Some(mut status) = crate::relay::status().await else { return };
+    let mut drawn = None;
+    loop {
+        let now = status.borrow_and_update().clone();
+        if drawn.replace(now.state.clone()) != Some(now.state.clone()) {
+            match now.state {
+                State::Connected => set(sink, Some(address.into()), None),
+                State::Stopped => {
+                    let why = now.last_error.unwrap_or_default();
+                    return set(sink, None, Some(format!("The relay stopped: {why}. Starting it again.")));
+                }
+                State::Connecting | State::Reconnecting => {
                     let why = now.last_error.map(|e| format!(": {e}")).unwrap_or_default();
                     set(sink, Some(address.into()), Some(format!("Reconnecting to the relay{why}")));
                 }

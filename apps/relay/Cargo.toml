@@ -1,0 +1,34 @@
+[package]
+name = "dray-relay-server"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Blind relay in front of dray-serve: Remote access without opentunnel."
+publish = false
+
+[[bin]]
+name = "dray-relay"
+path = "src/main.rs"
+
+[dependencies]
+dray-relay = { path = "../../crates/dray-relay" }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bytes = "1"
+ring = "0.17"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
+x509-parser = "0.18"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# ring, not aws-lc-rs: no C toolchain beyond cc in the image.
+instant-acme = { version = "0.8.5", default-features = false, features = ["ring", "hyper-rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+time = "0.3"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
