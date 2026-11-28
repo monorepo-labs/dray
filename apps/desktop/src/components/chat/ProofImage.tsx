@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 
-import { GalleryPicture, useGallerySlot } from "@/components/chat/ImageGallery";
+import { GalleryPicture, useInImageRow, useMessageMedia } from "@/components/chat/ImageGallery";
 import ImageLightbox from "@/components/chat/ImageLightbox";
 import { basename } from "@/lib/format";
 import { fileSrc, invoke } from "@/lib/transport";
@@ -10,14 +10,15 @@ import type { FileBody } from "@/types/events";
 type Read = { path: string; src: string | null; failed: boolean };
 
 /// An image file the agent named in its reply — a screenshot path or a markdown
-/// image — drawn where it is named and opened full size on click. A span, since
-/// it sits inside the paragraph that names it.
+/// image — drawn where it is named and opened full size on click. Phrasing
+/// content, since it sits inside the paragraph that names it.
 ///
 /// `path` is qualified for the session's server. It loads through `fileSrc`
 /// first, which serves attachments and recordings alone, then through
 /// `read_file`'s `data:` URL, the Files view's own route to any other file.
 ///
-/// Inside an `ImageGallery` it is one tile of the row and opens the row's viewer.
+/// Inside a `MessageMedia` it opens the message's viewer, and inside an
+/// `ImageGallery` it is one tile of the row.
 export default function ProofImage({
   path,
   alt = "",
@@ -33,7 +34,8 @@ export default function ProofImage({
   const reading = read?.path === path ? read : null;
 
   const src = reading?.failed ? null : reading ? reading.src : fileSrc(path);
-  const openInGallery = useGallerySlot(src ? { src, name: basename(path) } : null);
+  const slot = useMessageMedia(src ? { src, name: basename(path) } : null);
+  const inRow = useInImageRow();
 
   if (reading?.failed) return <>{fallback}</>;
   if (!src) return null;
@@ -53,27 +55,37 @@ export default function ProofImage({
     );
   };
 
-  if (openInGallery) {
-    return <GalleryPicture src={src} alt={alt} onOpen={openInGallery} onError={onError} />;
+  if (slot && inRow) {
+    return <GalleryPicture src={src} alt={alt} slot={slot} onError={onError} />;
   }
 
   return (
-    <span className="mt-1.5 block w-fit max-w-full overflow-hidden rounded-xl border border-border">
-      <img
-        src={src}
-        alt={alt}
-        loading="lazy"
-        decoding="async"
-        onClick={() => setOpen(true)}
-        onError={onError}
-        className="block max-h-72 max-w-full cursor-zoom-in"
-      />
-      <ImageLightbox
-        images={[{ src, name: basename(path) }]}
-        index={open ? 0 : null}
-        onIndex={() => {}}
-        onClose={() => setOpen(false)}
-      />
-    </span>
+    <>
+      {/* A button so focus has somewhere to come back to when the viewer closes. */}
+      <button
+        ref={slot?.ref}
+        type="button"
+        onClick={(e) => (slot ? slot.open(e.currentTarget) : setOpen(true))}
+        className="mt-1.5 block w-fit max-w-full cursor-zoom-in overflow-hidden rounded-xl border border-border"
+      >
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          decoding="async"
+          onError={onError}
+          className="block max-h-72 max-w-full"
+        />
+      </button>
+      {/* Outside the button, since a click in the portal bubbles to it. */}
+      {!slot && (
+        <ImageLightbox
+          images={[{ src, name: basename(path) }]}
+          index={open ? 0 : null}
+          onIndex={() => {}}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
   );
 }

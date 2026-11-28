@@ -240,7 +240,7 @@ export default function ImageLightbox({
                       }
                       type="button"
                       onClick={() => onIndex(i)}
-                      aria-label={`Show image ${i + 1}`}
+                      aria-label={`Show ${image.video ? "video" : "image"} ${i + 1}`}
                       aria-current={i === at}
                       className={cn(
                         "size-12 shrink-0 overflow-hidden rounded-md transition-opacity",
