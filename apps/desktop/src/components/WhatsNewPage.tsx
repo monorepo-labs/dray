@@ -27,8 +27,10 @@ export default function WhatsNewPage({
   actionFor: (target: string) => (() => void) | null;
   onClose: () => void;
 }) {
-  const count = highlights.length;
-  const heading = count === 1 ? "New in Dray." : `${count} new things in Dray.`;
+  // A required card is something to do, not something new: the heading counts
+  // features alone, and so does Continue's place in the grid.
+  const features = highlights.filter((h) => !h.item.highlight?.required).length;
+  const heading = features <= 1 ? "New in Dray." : `${features} new things in Dray.`;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent
@@ -62,7 +64,7 @@ export default function WhatsNewPage({
                 ),
               )}
               {/* A required card spans the row, so only feature cards decide where Continue falls. */}
-              <Continue row={highlights.filter((h) => !h.item.highlight?.required).length % 2 === 0} onClose={onClose} />
+              <Continue row={features % 2 === 0} onClose={onClose} />
             </div>
           </div>
         </main>

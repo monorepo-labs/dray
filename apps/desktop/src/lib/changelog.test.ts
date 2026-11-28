@@ -5,6 +5,7 @@ import {
   compareVersions,
   desktopHighlights,
   forChannel,
+  settle,
   type ChangelogApp,
   type ChangelogItem,
   type Release,
@@ -108,6 +109,34 @@ describe("highlights", () => {
     const withMust = [feed[0], withItems("0.29.0", true, [item("Older", ["desktop"]), must]), feed[2]];
     const titles = announcement(withMust, "0.30.0", "0.28.0").highlights.map((h) => h.item.title);
     expect(titles).toEqual(["Pair again", "Big", "Older"]);
+  });
+
+  it("settles a conditional highlight by the reader's Remote access", () => {
+    const relay: ChangelogItem = {
+      title: "Reconnect your phone and other Macs. Remote access is now more reliable and faster",
+      body: "",
+      media: [],
+      highlight: {
+        apps: ["desktop"],
+        action: { label: "Open Servers settings", target: "settings/servers" },
+        required: "remote-access",
+        otherwise: "Remote access is now more reliable and faster",
+      },
+    };
+    const withRelay = [withItems("0.30.0", true, [item("Big", ["desktop"]), relay])];
+
+    const on = announcement(withRelay, "0.30.0", "0.29.0", { remoteAccess: true }).highlights;
+    expect(on.map((h) => h.item.title?.slice(0, 9))).toEqual(["Reconnect", "Big"]);
+    expect(on[0].item.highlight).toMatchObject({ required: true, action: { target: "settings/servers" } });
+
+    const off = announcement(withRelay, "0.30.0", "0.29.0", { remoteAccess: false }).highlights;
+    expect(off.map((h) => h.item.title)).toEqual(["Big", "Remote access is now more reliable and faster"]);
+    expect(off[1].item.highlight).toMatchObject({ required: false, action: null });
+  });
+
+  it("reads a condition this build does not know as not holding", () => {
+    const h = { version: "0.30.0", item: { ...item("X", ["desktop"]), highlight: { apps: ["desktop" as const], action: null, required: "on-a-boat", otherwise: "Y" } } };
+    expect(settle(h, { remoteAccess: true }).item).toMatchObject({ title: "Y", highlight: { required: false } });
   });
 
   it("reads a feed built before highlights existed", () => {

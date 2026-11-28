@@ -541,74 +541,6 @@ function IPhoneQuestion() {
   );
 }
 
-/// A QR code's look without being one: the three finder squares and modules
-/// from a fixed seed, so the picture pairs with nothing when scanned.
-function PairBlock({ size }: { size: number }) {
-  const n = 25;
-  let seed = 1669;
-  const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
-  const inFinder = (x: number, y: number) => (x < 8 || x >= n - 8) && (y < 8 || (y >= n - 8 && x < 8)) && !(x >= n - 8 && y >= 8);
-  const finderOn = (x: number, y: number) => {
-    const fx = x < 8 ? x : x - (n - 7);
-    const fy = y < 8 ? y : y - (n - 7);
-    if (fx < 0 || fy < 0 || fx > 6 || fy > 6) return false;
-    return fx === 0 || fx === 6 || fy === 0 || fy === 6 || (fx >= 2 && fx <= 4 && fy >= 2 && fy <= 4);
-  };
-  let d = "";
-  for (let y = 0; y < n; y++) {
-    for (let x = 0; x < n; x++) {
-      if (inFinder(x, y) ? finderOn(x, y) : next() < 0.48) d += `M${x + 2} ${y + 2}h1v1h-1z`;
-    }
-  }
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${n + 4} ${n + 4}`} shapeRendering="crispEdges" className="shrink-0">
-      <rect width={n + 4} height={n + 4} fill="#FFFFFF" />
-      <path d={d} fill="#0A0A0A" />
-    </svg>
-  );
-}
-
-/// A server after the switch to the relay (#1669): its card with Remote
-/// access on and the new address, beside its pairing code, which phones and
-/// other Macs scan once to reconnect. Drawn the way `HarnessComposer` is:
-/// square cards 2px apart on the panel, mono labels, blue on the one thing to
-/// do.
-function RelayPair() {
-  const light = WHITE;
-  const card = light ? "bg-white shadow-[0_0_0_1px_#0000001A]" : "bg-[#141414]";
-  const dim = light ? "text-[#71717A]" : "text-[#8A8A8A]";
-  const ink = light ? "text-[#0A0A0A]" : "text-white";
-  const row = (label: string, value: ReactNode) => (
-    <div className="flex items-center justify-between gap-3">
-      <span className={cn(MONO, "text-[9px] leading-3", dim)}>{label}</span>
-      {value}
-    </div>
-  );
-  return (
-    <div aria-hidden className={cn("flex w-[300px] gap-[2px] p-2", PANEL(light))}>
-      <div className={cn("flex min-w-0 flex-1 flex-col justify-between gap-3 p-3", card)}>
-        <div className="flex flex-col gap-1">
-          <span className={cn(MONO, "text-[9px] leading-3", dim)}>Server</span>
-          <span className={cn(MONO, "text-[13px] leading-4", ink)}>MacBook Pro</span>
-        </div>
-        <div className="flex flex-col gap-2">
-          {row("Remote access", <span className={cn(MONO, "text-[9px] leading-3", ink)}>On</span>)}
-          {row("Address", <span className={cn(MONO, "text-[9px] leading-3", dim)}>New</span>)}
-          <div className={cn("flex h-6 items-center border px-2", light ? "border-[#0000001A]" : "border-[#333333]")}>
-            <span className={cn(MONO, "truncate text-[9px] leading-3", ink)}>r7f2c.relay.drayhq.com</span>
-          </div>
-        </div>
-      </div>
-      <div className={cn("flex w-[124px] shrink-0 flex-col items-center gap-2.5 p-3", card)}>
-        <PairBlock size={94} />
-        <span className={`${MONO} flex h-5 w-full items-center justify-center text-[9px] leading-3 whitespace-nowrap text-white`} style={{ background: BLUE }}>
-          Scan to reconnect
-        </span>
-      </div>
-    </div>
-  );
-}
-
 /// The colours every relay take shares: a white card on the pale panel, or
 /// a dark one on the black.
 function relayInk() {
@@ -643,7 +575,7 @@ function DeviceBlock({ name, kind }: { name: string; kind: "laptop" | "phone" })
   );
 }
 
-/// A: the link itself. The server and the phone, the old link broken in
+/// The link itself. The server and the phone, the old link broken in
 /// grey and the new one, through the relay, in blue: the one thing that
 /// changed, and what reconnecting makes.
 function RelayLink() {
@@ -672,82 +604,11 @@ function RelayLink() {
   );
 }
 
-/// B: the server's devices after the switch, each disconnected, the first
-/// with Reconnect in blue: a list the reader recognises as theirs to fix.
-function RelayDevices() {
-  const { light, card, dim, ink, line } = relayInk();
-  const rows = ["iPhone 16 Pro", "Mac mini", "iPad"];
-  return (
-    <div aria-hidden className={cn("flex w-[300px] flex-col gap-[2px] p-2", PANEL(light))}>
-      <div className={cn("flex items-center justify-between px-3 py-2.5", card)}>
-        <span className={cn(MONO, "text-[11px] leading-[14px]", ink)}>MacBook Pro</span>
-        <span className={cn(MONO, "text-[9px] leading-3", dim)}>New address</span>
-      </div>
-      {rows.map((name, i) => (
-        <div key={name} className={cn("flex h-[38px] items-center gap-2.5 px-3", card)}>
-          <span className="size-1.5 shrink-0" style={{ background: line }} />
-          <span className={cn(MONO, "text-[11px] leading-[14px]", ink)}>{name}</span>
-          <span className={cn(MONO, "text-[9px] leading-3", dim)}>Disconnected</span>
-          {i === 0 ? (
-            <span className={`${MONO} ml-auto flex h-5 items-center px-2 text-[9px] leading-3 text-white`} style={{ background: BLUE }}>
-              Reconnect
-            </span>
-          ) : (
-            <span className={cn(MONO, "ml-auto flex h-5 items-center border px-2 text-[9px] leading-3", dim)} style={{ borderColor: line }}>
-              Reconnect
-            </span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/// C: the whole job in three squares, 2px apart: open Servers, scan the
-/// code, connected, the last in blue as where it ends.
-function RelaySteps() {
-  const { light, card, dim, ink } = relayInk();
-  const step = (n: number, label: string, body: ReactNode, done = false) => (
-    <div className={cn("flex w-[94px] shrink-0 flex-col gap-2 p-2.5", done ? "text-white" : card)} style={done ? { background: BLUE } : undefined}>
-      <span className={cn(MONO, "text-[9px] leading-3", done ? "text-white/70" : dim)}>{n}</span>
-      <div className="flex h-[62px] items-center justify-center">{body}</div>
-      <span className={cn(MONO, "text-[10px] leading-3", done ? "text-white" : ink)}>{label}</span>
-    </div>
-  );
-  return (
-    <div aria-hidden className={cn("flex gap-[2px] p-2", PANEL(light))}>
-      {step(
-        1,
-        "Open Servers",
-        <div className="flex w-full flex-col gap-1">
-          {["Servers", "This Mac", "Pair"].map((t, i) => (
-            <span key={t} className={cn(MONO, "px-1.5 py-0.5 text-[8px] leading-[10px]", i === 0 ? cn(ink, light ? "bg-[#F4F4F5]" : "bg-[#262626]") : dim)}>
-              {t}
-            </span>
-          ))}
-        </div>,
-      )}
-      {step(2, "Scan the code", <PairBlock size={58} />)}
-      {step(
-        3,
-        "Connected",
-        <svg width="34" height="34" viewBox="0 0 24 24" aria-hidden>
-          <path d="M4 12.5 9.5 18 20 6.5" fill="none" stroke="#FFFFFF" strokeWidth="2.5" strokeLinecap="square" />
-        </svg>,
-        true,
-      )}
-    </div>
-  );
-}
-
 const ROWS: { title: string; takes: Record<string, { name: string; Art: () => ReactNode }> }[] = [
   {
     title: "Reconnect your servers (the relay)",
     takes: {
-      "relay-link": { name: "A · The link, broken and made again", Art: RelayLink },
-      "relay-devices": { name: "B · Devices to reconnect", Art: RelayDevices },
-      "relay-steps": { name: "C · Three steps", Art: RelaySteps },
-      "relay-pair": { name: "D · The server and its code (first take)", Art: RelayPair },
+      "relay-link": { name: "The link, broken and made again", Art: RelayLink },
     },
   },
   {

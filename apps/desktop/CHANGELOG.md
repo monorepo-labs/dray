@@ -25,7 +25,11 @@ reads:
   Add `· action: Label → target` for a button on its page, where target is
   `new-task`, `new-bot`, `settings/<tab>` or an `https://` link. Add
   `· required` for something the reader must do, such as pairing again: the
-  desktop draws it first, across the page, marked Action needed. Keep the text
+  desktop draws it first, across the page, marked Action needed, and leaves it
+  out of the heading's count. `· required if remote-access · otherwise: Title`
+  asks it only of a reader whose machine has Remote access on, read off its
+  own server as the page opens; anyone else gets a plain card under that
+  title, with no action. Keep the text
   to a line or two. A release with no highlights for an app gets the small
   card there instead, when it carries `notify`.
 

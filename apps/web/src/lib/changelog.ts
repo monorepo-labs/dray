@@ -17,9 +17,19 @@ export type App = "desktop" | "ios" | "android";
 /// `target` is the app's to read — `new-task`, `settings/<tab>`, an `https:`
 /// URL — and one an app does not know draws no button there, so a newer
 /// target never breaks an older build. `required` is a highlight the reader
-/// must act on, drawn first and set apart; absent rather than false, so the
-/// feed only grows where it is used.
-export type Highlight = { apps: App[]; action: { label: string; target: string } | null; required?: true };
+/// must act on, drawn first and set apart: always, or only where the app finds
+/// a condition holds, the app showing `otherwise` as a plain title elsewhere.
+/// Both absent rather than empty, so the feed only grows where they are used.
+export type Highlight = {
+  apps: App[];
+  action: { label: string; target: string } | null;
+  required?: true | Condition;
+  otherwise?: string;
+};
+/// What an app can find out about its reader: `remote-access`, Remote access
+/// on for this machine.
+export type Condition = "remote-access";
+const CONDITIONS: readonly string[] = ["remote-access"];
 export type SectionKind = "new" | "improved" | "fixed";
 export type Section = { kind: SectionKind; items: Item[] };
 export type Release = {
@@ -50,7 +60,8 @@ const APPS: readonly string[] = ["desktop", "ios", "android"];
 const TARGET = /^(https:\/\/\S+|[a-z][a-z0-9-]*(\/[a-z0-9-]+)*)$/;
 
 /// What follows `highlight` in `<!-- highlight: desktop, ios · required ·
-/// action: Label → target -->`. Throws on anything it cannot read, which fails the site's
+/// action: Label → target -->`, `required` also as `required if <condition> ·
+/// otherwise: Title`. Throws on anything it cannot read, which fails the site's
 /// build: a highlight dropped quietly is an announcement nobody sees.
 export function parseHighlight(spec: string, where: string): Highlight {
   const fail = (why: string): never => {
@@ -58,10 +69,23 @@ export function parseHighlight(spec: string, where: string): Highlight {
   };
   const apps: App[] = [];
   let action: Highlight["action"] = null;
-  let required = false;
+  let required: Highlight["required"];
+  let otherwise: string | undefined;
   for (const part of spec.replace(/^\s*:/, "").split("·").map((p) => p.trim())) {
     if (part === "required") {
       required = true;
+      continue;
+    }
+    const when = /^required\s+if\s+(\S+)$/.exec(part);
+    if (when) {
+      if (!CONDITIONS.includes(when[1])) fail(`unknown condition "${when[1]}"`);
+      required = when[1] as Condition;
+      continue;
+    }
+    const plain = /^otherwise\s*:\s*(.+)$/.exec(part);
+    if (plain) {
+      // As an item's bold title is read: its closing stop dropped.
+      otherwise = plain[1].replace(/[.!?]$/, "");
       continue;
     }
     if (/^action\b/.test(part)) {
@@ -77,7 +101,13 @@ export function parseHighlight(spec: string, where: string): Highlight {
     }
   }
   if (apps.length === 0) fail("no app named");
-  return required ? { apps, action, required: true } : { apps, action };
+  if (otherwise && typeof required !== "string") fail("`otherwise` goes with `required if`");
+  return {
+    apps,
+    action,
+    ...(required && { required }),
+    ...(otherwise && { otherwise }),
+  };
 }
 
 function toItem(lines: string[], media: Media[], highlight: Highlight | null): Item {

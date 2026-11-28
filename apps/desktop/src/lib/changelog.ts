@@ -1,6 +1,7 @@
 import { version as APP_VERSION } from "../../src-tauri/tauri.conf.json";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { invoke, LOCAL } from "@/lib/transport";
 import type { UpdateChannel } from "@/types/events";
 
 /// What drayhq.com/changelog.json answers, parsed from CHANGELOG.md by the
@@ -11,9 +12,18 @@ export type ChangelogApp = "desktop" | "ios" | "android";
 export type ChangelogHighlight = {
   apps: ChangelogApp[];
   action: { label: string; target: string } | null;
-  /// The reader must act on it: listed first and drawn apart.
-  required?: boolean;
+  /// The reader must act on it: listed first and drawn apart. A condition
+  /// name makes it so only where [`settle`] finds the condition holds.
+  required?: boolean | ChangelogCondition;
+  /// The plain title shown where a conditional `required` does not hold.
+  otherwise?: string;
 };
+/// What the app can find out about its reader. A name this build does not
+/// know reads as not holding.
+export type ChangelogCondition = "remote-access" | (string & {});
+/// What `settle` reads a condition off, asked of the local server.
+export type ReaderFacts = { remoteAccess: boolean };
+export const NO_FACTS: ReaderFacts = { remoteAccess: false };
 /// `highlight` is absent in a feed built before highlights existed.
 export type ChangelogItem = {
   title: string | null;
@@ -112,6 +122,7 @@ export function announcement(
   releases: Release[],
   running: string,
   seen: string | null,
+  facts: ReaderFacts = NO_FACTS,
 ): { release: Release | null; highlights: Highlight[]; seen: string | null } {
   const runnable = releases
     .filter((r) => compareVersions(r.version, running) <= 0)
@@ -120,7 +131,7 @@ export function announcement(
   if (!newest) return { release: null, highlights: [], seen };
   const fresh = runnable.filter((r) => compareVersions(r.version, seen ?? "0.0.0") > 0);
   const release = fresh.find((r) => r.notify) ?? null;
-  const all = (seen ? fresh : fresh.slice(0, 1)).flatMap(desktopHighlights);
+  const all = (seen ? fresh : fresh.slice(0, 1)).flatMap(desktopHighlights).map((h) => settle(h, facts));
   // Stable: required ones lead, each group keeping its newest-first order.
   const highlights = [...all.filter((h) => h.item.highlight?.required), ...all.filter((h) => !h.item.highlight?.required)];
   return {
@@ -128,6 +139,40 @@ export function announcement(
     highlights,
     seen: seen && compareVersions(seen, newest) >= 0 ? seen : newest,
   };
+}
+
+/// A highlight whose `required` names a condition, decided for this reader:
+/// the action card where the condition holds, else a plain card under its
+/// `otherwise` title with no action, since there is nothing for them to do.
+/// One with no condition passes through.
+export function settle(h: Highlight, facts: ReaderFacts): Highlight {
+  const hl = h.item.highlight;
+  if (!hl || typeof hl.required !== "string") return h;
+  const holds = hl.required === "remote-access" && facts.remoteAccess;
+  if (holds) return { ...h, item: { ...h.item, highlight: { ...hl, required: true } } };
+  return {
+    ...h,
+    item: { ...h.item, title: hl.otherwise ?? h.item.title, highlight: { ...hl, required: false, action: null } },
+  };
+}
+
+/// Whether any desktop highlight in the feed waits on a condition, so the
+/// local server is asked only when an answer matters.
+function needsFacts(releases: Release[]): boolean {
+  return releases.some((r) => desktopHighlights(r).some((h) => typeof h.item.highlight?.required === "string"));
+}
+
+/// This machine's Remote access switch, as its own server holds it at the
+/// moment the page is about to open. A server that cannot be asked reads as
+/// on: telling someone to reconnect who need not costs less than leaving
+/// someone who must with phones that no longer reach them.
+async function readFacts(): Promise<ReaderFacts> {
+  try {
+    const now = await invoke<{ on: boolean }>("get_remote_access", {}, LOCAL);
+    return { remoteAccess: now.on };
+  } catch {
+    return { remoteAccess: true };
+  }
 }
 
 export type Announcement =
@@ -142,7 +187,8 @@ export async function checkChangelog(): Promise<Announcement | null> {
   const channel = readLocalStorage<UpdateChannel>("ade.updateChannel", "stable");
   const all = forChannel(await fetchChangelog(), channel);
   const seen = readLocalStorage<string | null>(SEEN_KEY, null);
-  const next = announcement(all, APP_VERSION, seen);
+  const facts = needsFacts(all) ? await readFacts() : NO_FACTS;
+  const next = announcement(all, APP_VERSION, seen, facts);
   if (next.seen && next.highlights.length)
     return { kind: "highlights", highlights: next.highlights, seen: next.seen };
   if (next.seen && next.release) return { kind: "card", release: next.release, seen: next.seen };

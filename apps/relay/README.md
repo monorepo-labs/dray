@@ -125,17 +125,18 @@ the file until then, since the site publishes whatever is there):
   Each server has a new address. Scan its pairing code again on your phone,
   and add it again on your other Macs.
   ![](changelog/relay-reconnect.png)
-  <!-- highlight: desktop · required · action: Open Servers settings → settings/servers -->
+  <!-- highlight: desktop · required if remote-access · otherwise: Remote access is now more reliable and faster · action: Open Servers settings → settings/servers -->
 ```
 
-`required` puts it first on What's New, across the page, marked Action
-needed, so it reads as something to do before a word is read. The title leads
-with the action, since the page shows the title and the action alone. The
-picture is one of three takes in
+A reader whose machine has Remote access on gets it first on What's New,
+across the page, marked Action needed, so it reads as something to do before a
+word is read. Anyone else, with nothing to reconnect, gets a plain card titled
+"Remote access is now more reliable and faster" and no action. The app reads
+that off its own server's switch as the page opens (`settle` in
+apps/desktop/src/lib/changelog.ts). Copy
+`apps/desktop/demo/whats-new/relay-link-white.png`, drawn in
 [whatsNewIllustrations.tsx](../desktop/src/demo/whatsNewIllustrations.tsx)
-(`?art=relay-link`, `relay-devices`, `relay-steps`, with `&tile=white`), not yet
-picked: copy the picked `apps/desktop/demo/whats-new/<take>-white.png` to
-`apps/web/public/changelog/relay-reconnect.png`.
+(`?art=relay-link&tile=white`), to `apps/web/public/changelog/relay-reconnect.png`.
 
 ## Deploy on Railway
 
