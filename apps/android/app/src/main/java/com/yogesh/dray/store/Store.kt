@@ -1,9 +1,6 @@
 package com.yogesh.dray.store
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -21,6 +18,8 @@ import com.yogesh.dray.model.sessionBranch
 import com.yogesh.dray.model.stageRuns
 import com.yogesh.dray.net.ConnState
 import com.yogesh.dray.net.Connection
+import com.yogesh.dray.net.Network
+import com.yogesh.dray.net.connectionFailure
 import com.yogesh.dray.net.socketUrl
 import com.yogesh.dray.wire.AgentEvent
 import com.yogesh.dray.wire.BackgroundTask
@@ -132,10 +131,17 @@ class Store(private val context: Context) {
     val marks = mutableStateMapOf<ProjectKey, Map<String, PrMark>>()
     /** Each session's unsent reply, kept across leaving the screen. */
     val drafts = mutableStateMapOf<SessionKey, String>()
-    var lastError by mutableStateOf<String?>(null)
-    /** False while the device has no network at all, which every server shares. */
+    private var shownError by mutableStateOf<String?>(null)
+    /** An action's failure, for the toast. One being offline explains is left out: the offline line says it already. */
+    var lastError: String?
+        get() = shownError
+        set(value) {
+            if (value == null || online || !connectionFailure(value)) shownError = value
+        }
+    /** False while the phone reaches no internet, captive portal included, which every server shares. */
     var online by mutableStateOf(true)
         private set
+    private lateinit var network: Network
     /** A server that connected and then failed to read its sessions. */
     val loadErrors = mutableStateMapOf<String, String>()
     /** A transcript that could not be read with nothing of it held yet. */
@@ -219,19 +225,13 @@ class Store(private val context: Context) {
     }
 
     private fun watchNetwork() {
-        val cm = context.getSystemService(ConnectivityManager::class.java)
-        online = cm.activeNetwork?.let { cm.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) } ?: false
-        cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                scope.launch {
-                    // The network coming back retries every server at once, rather than each sitting out its backoff.
-                    if (!online) { online = true; resume(now = true) }
-                }
-            }
-            override fun onLost(network: Network) {
-                scope.launch { online = cm.activeNetwork != null }
-            }
-        })
+        network = Network(context, scope) { up, wake ->
+            online = up
+            if (!up && shownError?.let(::connectionFailure) == true) shownError = null
+            // The network coming back retries every server at once, rather than each sitting out its backoff.
+            if (wake) resume(now = true)
+        }
+        online = network.online
     }
 
     // Servers
@@ -454,6 +454,8 @@ class Store(private val context: Context) {
         c.onState = { state ->
             serverState[s.id] = state
             track(s.id, state)
+            // A server that stopped answering may be this phone's network, not the server.
+            if (state is ConnState.Waiting && ::network.isInitialized) network.suspect()
             if (state == ConnState.Connected) scope.launch { connected(s.id) }
         }
         c.onEvent = { name, frame -> handle(s.id, name, frame) }

@@ -45,6 +45,16 @@ reads and drives it over the same WebSocket the desktop and iOS use
   relay answers pings itself for the machine behind it. The reconnect re-reads
   the index and every open transcript. Test it behind iOS's
   `scripts/freeze_proxy.py` with `adb reverse` to the proxy's port.
+- **Offline is a probe's verdict** (`net/Network.kt`, #1704, the desktop's
+  #1703). The default-network callback says when something moved; an HTTPS
+  `HEAD` to drayhq.com and github.com decides, so a captive portal or a link
+  carrying nothing reads as "You're offline" rather than blaming a server. A
+  server going to Waiting asks again, at most once per 30s while the network
+  proves fine. While offline, toasts for connection failures are dropped, and
+  the network coming back retries every server at once. Test it with
+  `iptables -I OUTPUT -o wlan0 -j DROP` (and `eth0`) under `adb root`; `svc wifi
+  disable` only covers a network that is gone, and `adb reverse` keeps the
+  socket up through both.
 - **Reply dock**: a message field (text first, as Android chat is, with
   Dray's own dictation on the mic), the session's model and effort under it
   opening **This task** (model, effort, fast mode, stance, each locked mid-turn
