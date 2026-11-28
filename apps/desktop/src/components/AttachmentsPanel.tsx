@@ -125,11 +125,13 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
         )}
       </div>
 
-      <div className="flex flex-col gap-0.5 px-1 pb-2">
+      {/* Inset like the routine cards below, each row holding its thumbnail
+          the same 6px from every edge, its corner that far from the thumb's. */}
+      <div className="flex flex-col gap-0.5 px-2 pb-2">
         {visible.length === 0 && (
           // With older history unread, "none" would be a claim about the whole
           // chat that Load more could disprove.
-          <p className="px-2 py-1 text-ui text-muted-foreground">
+          <p className="px-1.5 py-1 text-ui text-muted-foreground">
             {hasMore ? "None in recent messages." : "None yet."}
           </p>
         )}
@@ -139,7 +141,7 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
             type="button"
             onClick={() => setOpenSrc(item.src)}
             aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
-            className="flex cursor-default items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors hover:bg-sidebar-accent/50"
+            className="flex cursor-default items-center gap-2 rounded-[10px] p-1.5 text-left transition-colors hover:bg-sidebar-accent/50"
           >
             <Thumb item={item} small className="size-6 shrink-0 overflow-hidden rounded ring-[0.5px] ring-border" />
             <span className="min-w-0 flex-1 truncate text-ui text-sidebar-foreground">{item.name}</span>
@@ -155,7 +157,7 @@ export default function AttachmentList({ logs }: { logs: HeldLog[] }) {
             type="button"
             onClick={() => void loadMore()}
             disabled={loading}
-            className="flex cursor-default items-center gap-2 rounded-lg px-2 py-1 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
+            className="flex cursor-default items-center gap-2 rounded-[10px] p-1.5 text-left text-ui text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground disabled:hover:bg-transparent"
           >
             {/* A tile where a row's thumbnail sits, so its words line up with the names above. */}
             <span className="flex size-6 shrink-0 items-center justify-center rounded ring-[0.5px] ring-border dark:bg-card">
